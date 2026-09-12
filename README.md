@@ -169,7 +169,8 @@ docs/              # 要件・設計・運用
 npm install
 npm run dev
 
-# インフラ（CDK）※差分の確認まで
+# インフラ（CDK）※差分の確認まで。ルート側の install も要る
+# （Lambda のバンドルがルートの node_modules から esbuild と @kakeibo/core を引く）
 cd infra
 npm install
 AWS_PROFILE=sakekasu-builder npx cdk diff -c env=dev
@@ -186,7 +187,7 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 手元から打つのは、最初の 1 回だけ。
 
 ```bash
-cd infra
+npm ci && cd infra && npm ci
 npx cdk bootstrap  # このアカウントで CDK 初回のときだけ
 npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ```
