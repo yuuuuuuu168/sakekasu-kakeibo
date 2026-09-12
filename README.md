@@ -179,14 +179,16 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 
 ## デプロイ
 
-初回は手元から入れる。証明書とドメインの段取りが DNS の置き場所で変わるので、[docs/operations.md](docs/operations.md) の手順を見ること。
+初回は手元から入れる。手順は [docs/operations.md](docs/operations.md) にある。
 
 ```bash
 cd infra
 npx cdk deploy --all -c env=dev
 ```
 
-スタックは 4 つ（`-auth` `-data` `-api` `-site`）。ドメインを Route53 で扱う場合は us-east-1 に `-cert` が増える。
+スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。
+
+`sakekasu-builder.com` のゾーンは Route53 にあり、ゾーン ID を `infra/cdk.json` の context に書いてある。証明書の発行、DNS 検証、`kakeibo.sakekasu-builder.com` のエイリアスレコードまで CDK がやるので、DNS の手作業は無い。
 
 2 回目以降は `.github/workflows/deploy.yml` を手で起動する。使う前にリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に、GitHub OIDC で引き受けられるロールの ARN を入れておく。sakekasu-builder にも同じ仕組みのスタックがあるが、あちらのロールは信頼ポリシーが `yuuuuuuu168/sakekasu-builder` に絞られているので、このリポジトリからは引き受けられない。
 
