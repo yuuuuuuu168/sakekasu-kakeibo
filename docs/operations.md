@@ -83,12 +83,35 @@ npx cdk deploy --all -c env=dev -c domainName=
 DNS 検証つきの証明書を、ゾーンも ARN も渡さずに CDK に作らせてはいけない。検証レコードが入るまで
 `cdk deploy` が待ち続けて、止まったように見える。context の 2 つはそれを避けるためにある。
 
-### 2. スタックを入れる
+### 2. 依存を入れる
+
+**ルートと `infra` の両方で入れる。** Lambda のバンドルはリポジトリのルートで走り、
+そこの `node_modules` から `esbuild` と `@kakeibo/core` を引くため、ルート側を飛ばすと
+バンドルの段階で落ちる（症状は下の「よくある詰まり」にある）。
+
+```sh
+npm ci            # リポジトリのルートで
+cd infra && npm ci
+```
+
+### 3. スタックを入れる
+
+初回はロールを作るところだけ手で打ち、あとは Actions に任せる（下の
+「GitHub Actions からデプロイする」に詳細がある）。
 
 ```sh
 cd infra
-npm ci
 npx cdk bootstrap  # このアカウントで初めて CDK を使う場合だけ
+npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
+```
+
+このコマンドは Lambda をバンドルしない（`-c github-oidc=true` のときはアプリ本体の
+スタックを合成しないため）。ルートの `npm ci` を忘れていても、ここだけは通る。
+
+ロールができたら main へマージするか、Actions の画面から deploy を手で起動する。
+手元から全部入れることもできる。こちらはバンドルが走るので、ルートの `npm ci` が要る。
+
+```sh
 npx cdk deploy --all -c env=dev
 ```
 
@@ -97,7 +120,7 @@ CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョ�
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
-### 3. 自分のユーザーを 1 つ作る
+### 4. 自分のユーザーを 1 つ作る
 
 セルフサインアップは閉じてある。
 
@@ -112,7 +135,7 @@ aws cognito-idp admin-create-user \
 仮パスワードがメールで届く。最初のサインインで新しいパスワードを求められるので、画面の
 指示どおりに設定する。認証アプリの MFA は Cognito 側で任意にしてある。
 
-### 4. フロントを置く
+### 5. フロントを置く
 
 ```sh
 prefix=sakekasu-kakeibo-dev
@@ -135,17 +158,97 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 
 ## GitHub Actions からデプロイする
 
-`.github/workflows/deploy.yml` を手で起動する形にしてある。テストは `.github/workflows/test.yml` が PR とマージのたびに走る。使う前に 1 つ用意が要る。
+デプロイは main へのマージ経由にする。手元からの `cdk deploy` は、下に挙げる 2 つの例外を除いて
+打たない。誰がいつ何を出したかが Actions のログに揃うほうが、後から追える。
 
-GitHub OIDC で引き受けられるロールを作り、その ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に入れる。
-sakekasu-builder には同じ仕組みのスタック（`infra/lib/github-oidc-stack.ts`）があるが、
-あちらのロールは `repository: 'yuuuuuuu168/sakekasu-builder'` に絞った信頼ポリシーなので、
-このリポジトリからは引き受けられない。sakekasu-kakeibo 用の信頼条件を足すか、別にロールを作る。
+`.github/workflows/deploy.yml` が main への push で走る。対象は `infra/**` `src/**` `packages/**`
+と設定ファイル。手で起動することもできる（Actions の画面から環境を選ぶ）。
 
-ロールに要る権限は、4 スタックのリソース（Cognito、DynamoDB、S3、Lambda、API Gateway、
-CloudFront、EventBridge、IAM ロール、Logs）の作成と更新、CDK のブートストラップ用バケットへの
-書き込み、それに配信用バケットへの `s3:PutObject` と CloudFront の
-`cloudfront:CreateInvalidation`。
+### ジョブを 2 つに分けている理由
+
+`infra` ジョブが `cdk deploy --all` を打ち、スタックの出力（API の URL、UserPool の ID、
+配信先のバケットとディストリビューション）をジョブの出力に載せる。`site` ジョブがそれを受けて
+フロントをビルドし、S3 へ同期して `index.html` を無効化する。
+
+分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。`npm ci` と
+`npm test` も認証情報を入れる前に済ませている。npm のライフサイクルスクリプトと Vite の
+プラグインはどちらも依存のコードで、認証後に走らせると、依存が 1 つ乗っ取られただけで
+`AWS_SESSION_TOKEN` を読んで `cdk-hnb659fds-*` ロールへ入れてしまう。`--ignore-scripts` も
+付けて二重に塞いでいる。この考え方は sakekasu-builder の `deploy.yml` から持ってきた。
+
+### 一度だけ手で入れるもの
+
+デプロイに使うロールは `sakekasu-kakeibo-github-oidc` スタックが作る。Actions 自身に
+自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、`--all` から外して
+フラグ付きの手動デプロイ専用にしてある。
+
+```sh
+npm ci && cd infra && npm ci
+npx cdk bootstrap  # このアカウントで CDK 初回のときだけ
+npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
+```
+
+このフラグを立てると、アプリ本体のスタックは合成されない。`cdk deploy --all -c github-oidc=true`
+でロールまで巻き込めてしまうのを避けるため、フラグの有無でどちらか一方だけを作るようにしている。
+
+ロールの作りは 3 点。
+
+- 引き受けられるのは `repo:yuuuuuuu168/sakekasu-kakeibo:ref:refs/heads/main` のときだけ。
+  PR からも、ほかのブランチからも、ほかのリポジトリからも入れない
+- 作成・変更の権限そのものは持たせず、CDK bootstrap が作った `cdk-hnb659fds-*` ロールへの
+  `sts:AssumeRole` だけを許す。実際の権限は bootstrap 側に委ねる
+- これに加えて、配信のための最小限（スタック出力の読み取り、配信用バケットへの同期、
+  `cloudfront:CreateInvalidation`）だけを直接持つ
+
+OIDC プロバイダー自体は作らない。1 つの AWS アカウントに同じ URL のプロバイダーは 1 つしか
+置けず、`token.actions.githubusercontent.com` のものは sakekasu-builder の
+`sakekasu-github-oidc` スタックが既に持っている。作ろうとすると `EntityAlreadyExists` で落ちる。
+
+### 手元から打ってよい例外
+
+1. 上の `sakekasu-kakeibo-github-oidc`（Actions に自分のロールを触らせないため）
+2. `npx cdk bootstrap`（ロールを作る前に必要）
+
+それ以外は main へマージする。急ぎで確かめたいときは `cdk diff` までにとどめる。
+
+```sh
+cd infra
+npx cdk diff -c env=dev --profile sakekasu-builder
+```
+
+## よくある詰まり
+
+### `npx canceled due to missing packages` で `Failed to bundle asset`
+
+```
+npm error npx canceled due to missing packages and no YES option: ["esbuild@0.28.2"]
+[«FailedToBundleAsset» Failed to bundle asset sakekasu-kakeibo-dev-api/ApiFunction/Code/Stage
+ ... npx --no-install esbuild --bundle ... run in directory <リポジトリのルート>
+```
+
+ルートの `npm ci` を打っていない。Lambda のバンドルは `infra` ではなくリポジトリの
+ルートで走る（`NodejsFunction` の `depsLockFilePath` にルートの `package-lock.json` を
+渡しているため）。`esbuild` はルートの devDependencies にあり、`@kakeibo/core` も
+ルートの `node_modules` のワークスペースリンク経由で解決される。
+
+```sh
+npm ci   # リポジトリのルートで
+```
+
+### `-c github-oidc=true` を付けたのにアプリ本体のスタックが合成される
+
+そのフラグを見る分岐が手元のコードに入っていない。`infra/bin/app.ts` に
+`github-oidc` の文字列があるかを見る。
+
+```sh
+grep -c github-oidc infra/bin/app.ts   # 0 なら古い
+git pull origin main
+```
+
+### `The config profile (verify) could not be found`
+
+`verify` はクラウドセッション専用のプロファイル。手元では自分のプロファイルを使う。
+`scripts/aws-sso-login.sh` が「Local session detected」で止まるのも同じ理由。
 
 ## 月次レポートを手で作り直す
 
