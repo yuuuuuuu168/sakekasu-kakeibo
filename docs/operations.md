@@ -116,8 +116,10 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 npx cdk deploy --all -c env=dev
 ```
 
-スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが
-CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
+スタックは 4 つ。`-auth` `-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
+
+`cdk.json` に `domainName` を書き戻すと 5 つになり、証明書の `-cert` だけが CloudFront の
+制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
@@ -125,16 +127,30 @@ CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョ�
 
 セルフサインアップは閉じてある。
 
+**`--username` にメールアドレスは渡せない。** UserPool はメールアドレスをエイリアスに
+してある（`signInAliases: { email: true, username: true }`）ので、username 自体が
+メール形式だと Cognito が弾く。
+
+```
+InvalidParameterException: Username cannot be of email format,
+since user pool is configured for email alias
+```
+
+username は記号なしの短い名前にして、メールアドレスは属性で渡す。
+
 ```sh
 aws cognito-idp admin-create-user \
   --user-pool-id <UserPoolId> \
-  --username <メールアドレス> \
+  --username <メールを含まない名前> \
   --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
+  --desired-delivery-mediums EMAIL \
   --region ap-northeast-1
 ```
 
 仮パスワードがメールで届く。最初のサインインで新しいパスワードを求められるので、画面の
 指示どおりに設定する。認証アプリの MFA は Cognito 側で任意にしてある。
+
+サインインはメールアドレスでもこの username でも通る。エイリアスにしてあるのはそのため。
 
 ### 5. API の CORS に配信元を入れる
 
@@ -155,6 +171,11 @@ npx cdk deploy sakekasu-kakeibo-dev-api -c env=dev -c siteOrigin="$site"
 
 `infra/cdk.json` の context に `"siteOrigin": "https://xxxxxxxx.cloudfront.net"` と書いておけば、
 以後の Actions からのデプロイでも維持される。独自ドメインを付けたら要らなくなる。
+
+dev については済んでいる。2026-09-12 の初回デプロイで出たディストリビューションの
+ドメイン（`https://d6f8ub6380j2a.cloudfront.net`）が `cdk.json` に入っているので、
+作り直さない限りこの手順を踏む必要はない。配信スタックを消して作り直したときは
+ドメインが変わるため、書き換える。
 
 ### 6. フロントを置く
 
@@ -347,6 +368,46 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 
 `verify` はクラウドセッション専用のプロファイル。手元では自分のプロファイルを使う。
 `scripts/aws-sso-login.sh` が「Local session detected」で止まるのも同じ理由。
+
+### 仮パスワードのメールが届かない
+
+`admin-create-user` は通って `UserStatus` が `FORCE_CHANGE_PASSWORD` になっているのに、
+メールが来ない。
+
+**まず迷惑メールフォルダを見る。** 初回はここに入っていた。UserPool に SES を繋いでいないので
+送信元は Cognito 既定の `no-reply@verificationemail.com` になり、こちらのドメインで
+認証されていないため迷惑メール扱いされやすい。
+
+そこにも無ければ、宛先に受信の用意が無い可能性がある。ドメインを持っているだけでは
+受け取れず、MX レコードをメールのサービスに向ける必要がある。このリポジトリはそこまで
+面倒を見ていないので、`dig MX <ドメイン>` で確かめる。
+
+いずれにしても、利用者は本人ひとりなのでメールを待つ必要は無い。パスワードを直接入れる。
+
+```sh
+read -rs "?パスワード: " pw; echo   # bash なら read -rsp "パスワード: " pw; echo
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <UserPoolId> \
+  --username <ユーザー名> \
+  --password "$pw" \
+  --permanent \
+  --region ap-northeast-1
+unset pw
+```
+
+`--permanent` を付けると `UserStatus` が `CONFIRMED` になり、初回のパスワード変更を
+求められなくなる。付けなければ仮パスワード扱いになり、画面の変更フローに入る（対応済み）。
+
+パスワードを忘れたときの復旧はメールだけに設定してある（`accountRecovery: EMAIL_ONLY`）。
+受け取れないアドレスを入れたままだと復旧できないので、届くアドレスに直しておく。
+
+```sh
+aws cognito-idp admin-update-user-attributes \
+  --user-pool-id <UserPoolId> \
+  --username <ユーザー名> \
+  --user-attributes Name=email,Value=<届くアドレス> Name=email_verified,Value=true \
+  --region ap-northeast-1
+```
 
 ## 月次レポートを手で作り直す
 
