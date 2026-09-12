@@ -196,7 +196,7 @@ Actions に自分のロールを触らせると、更新ミスで自分を締め
 
 スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。
 
-`sakekasu-builder.com` のゾーンは Route53 にあり、ゾーン ID を `infra/cdk.json` の context に書いてある。証明書の発行、DNS 検証、`kakeibo.sakekasu-builder.com` のエイリアスレコードまで CDK がやるので、DNS の手作業は無い。
+ドメインはまだ付けていない。CloudFront の既定ドメインで配信している。`sakekasu-builder.com` の委任先ゾーンがデプロイ先のアカウントに無く、そのままでは証明書の DNS 検証が通らないため。経緯と、付けるときの手順（サブドメインの委任）は [docs/operations.md](docs/operations.md) にある。
 
 2 回目以降は `.github/workflows/deploy.yml` を手で起動する。使う前にリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に、GitHub OIDC で引き受けられるロールの ARN を入れておく。sakekasu-builder にも同じ仕組みのスタックがあるが、あちらのロールは信頼ポリシーが `yuuuuuuu168/sakekasu-builder` に絞られているので、このリポジトリからは引き受けられない。
 
