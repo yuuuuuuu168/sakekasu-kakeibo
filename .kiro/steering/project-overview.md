@@ -74,7 +74,11 @@ docs/              # 要件・設計・運用
   分割関数だけで、API の Lambda でも保存前に同じ検査をしている
 - 叱りの文面は固定テンプレートから組む。LLM に書かせない（毎月言うことが変わると比較できない）
 - カスタムリソース（`Custom::*`）を作る CDK の機能は使わない。CloudFormation から
-  IMPORT できず退路を塞ぐため（`BucketDeployment` と `logRetention` が該当）
+  IMPORT できず退路を塞ぐため（`BucketDeployment` と `logRetention` が該当）。
+  例外は証明書のクロスリージョン参照（`crossRegionReferences`）だけで、これは
+  `Custom::CrossRegionExportWriter` と `Custom::CrossRegionExportReader` を 1 つずつ作る。
+  避けるには証明書の ARN を手で context に貼る運用になり、その手間を毎回の環境構築で
+  払い続けることになる。上の 2 つと違って代わりが無いので、ここだけ通した
 - 日本語 UI を基本とする
 
 ## デザインテーマ
