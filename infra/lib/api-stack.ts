@@ -173,9 +173,26 @@ export class ApiStack extends cdk.Stack {
       integration: new HttpLambdaIntegration('OcrIntegration', ocrFunction),
     });
 
+    /*
+     * メソッドを並べて書くのは、OPTIONS をこのルートに含めないため。
+     *
+     * ANY は OPTIONS も拾う。するとブラウザの preflight がこのルートに入り、
+     * defaultAuthorizer の JWT 検証に掛かる。preflight に Authorization ヘッダは
+     * 付かないので 401 になり、ブラウザは本体のリクエストを投げずに諦める
+     * （画面には「Failed to fetch」と出る）。CORS の設定とは無関係に失敗するので
+     * 分かりにくい。実際 allowOrigins を直した後もこれで止まっていた。
+     *
+     * OPTIONS を持たせなければ、CORS を設定した API Gateway が preflight に
+     * 直接 204 を返す。認証は通らない。
+     */
     this.httpApi.addRoutes({
       path: '/{proxy+}',
-      methods: [apigwv2.HttpMethod.ANY],
+      methods: [
+        apigwv2.HttpMethod.GET,
+        apigwv2.HttpMethod.POST,
+        apigwv2.HttpMethod.PUT,
+        apigwv2.HttpMethod.DELETE,
+      ],
       integration: new HttpLambdaIntegration('ApiIntegration', apiFunction),
     });
 
