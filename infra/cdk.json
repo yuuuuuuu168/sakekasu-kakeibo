@@ -1,0 +1,12 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["node_modules", "cdk.out", "__tests__", "**/*.test.ts"]
+  },
+  "context": {
+    "env": "dev",
+    "@aws-cdk/core:defaultCrossStackReferences": "strong",
+    "domainName": "kakeibo.sakekasu-builder.com"
+  }
+}

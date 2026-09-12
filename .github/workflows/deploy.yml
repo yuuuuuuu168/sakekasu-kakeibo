@@ -1,0 +1,92 @@
+name: Deploy
+
+# 手で起動する。初回のデプロイは operations.md の手順で手元から行う。
+# このワークフローを使うには、GitHub OIDC で引き受けられるロールの ARN を
+# リポジトリ変数 AWS_DEPLOY_ROLE_ARN に入れておく。
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: デプロイ先の環境
+        type: choice
+        options: [dev, prod]
+        default: dev
+      target:
+        description: 対象
+        type: choice
+        options: [all, infra, site]
+        default: all
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: ロールの設定を確かめる
+        run: |
+          if [ -z "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]; then
+            echo "リポジトリ変数 AWS_DEPLOY_ROLE_ARN が未設定です。docs/operations.md を見てください。" >&2
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+
+      - name: CDK デプロイ
+        if: inputs.target == 'all' || inputs.target == 'infra'
+        working-directory: infra
+        run: npx cdk deploy --all --require-approval never -c env=${{ inputs.env }}
+
+      - name: スタックの出力を読む
+        id: outputs
+        run: |
+          prefix="sakekasu-kakeibo-${{ inputs.env }}"
+          api=$(aws cloudformation describe-stacks --stack-name "$prefix-api" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+          pool=$(aws cloudformation describe-stacks --stack-name "$prefix-auth" \
+            --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+          client=$(aws cloudformation describe-stacks --stack-name "$prefix-auth" \
+            --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text)
+          bucket=$(aws cloudformation describe-stacks --stack-name "$prefix-site" \
+            --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text)
+          distribution=$(aws cloudformation describe-stacks --stack-name "$prefix-site" \
+            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)
+          {
+            echo "api=$api"
+            echo "pool=$pool"
+            echo "client=$client"
+            echo "bucket=$bucket"
+            echo "distribution=$distribution"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: フロントをビルドして置く
+        if: inputs.target == 'all' || inputs.target == 'site'
+        env:
+          VITE_API_URL: ${{ steps.outputs.outputs.api }}
+          VITE_USER_POOL_ID: ${{ steps.outputs.outputs.pool }}
+          VITE_USER_POOL_CLIENT_ID: ${{ steps.outputs.outputs.client }}
+        run: |
+          npx vite build
+          # ハッシュ付きの資産は長く、index.html は都度読み直させる
+          aws s3 sync dist/ "s3://${{ steps.outputs.outputs.bucket }}/" \
+            --delete --exclude index.html --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/index.html "s3://${{ steps.outputs.outputs.bucket }}/index.html" \
+            --cache-control "no-cache"
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.outputs.outputs.distribution }}" --paths "/index.html"
