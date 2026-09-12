@@ -4,6 +4,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { ApiStack } from '../lib/api-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { DataStack } from '../lib/data-stack';
+import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
 
 const env = { account: '123456789012', region: 'ap-northeast-1' };
@@ -149,6 +150,33 @@ describe('ApiStack', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
     template.resourceCountIs('AWS::Logs::LogGroup', 3);
+  });
+});
+
+describe('DnsStack', () => {
+  function dns() {
+    return new DnsStack(new cdk.App(), 'test-dns', { zoneName: 'kakeibo.sakekasu-builder.com', env });
+  }
+
+  it('渡した名前の公開ゾーンを 1 つ作る', () => {
+    const template = Template.fromStack(dns());
+    template.resourceCountIs('AWS::Route53::HostedZone', 1);
+    template.hasResourceProperties('AWS::Route53::HostedZone', {
+      Name: 'kakeibo.sakekasu-builder.com.',
+    });
+  });
+
+  /*
+   * 作り直すと NS が変わり、親のゾーン側の委任も入れ直しになる。それは別アカウントでの
+   * 手作業なので、消えない設定であることを見張る。
+   */
+  it('ゾーンを消えない設定にする', () => {
+    Template.fromStack(dns()).hasResource('AWS::Route53::HostedZone', { DeletionPolicy: 'Retain' });
+  });
+
+  it('ゾーン ID と NS を出力する', () => {
+    const outputs = Template.fromStack(dns()).findOutputs('*');
+    expect(Object.keys(outputs).sort()).toEqual(['HostedZoneId', 'NameServers']);
   });
 });
 

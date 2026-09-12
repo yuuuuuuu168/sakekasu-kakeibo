@@ -5,6 +5,7 @@ import { AuthStack } from '../lib/auth-stack';
 import { GithubOidcStack } from '../lib/github-oidc-stack';
 import { CertStack } from '../lib/cert-stack';
 import { DataStack } from '../lib/data-stack';
+import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
 
 const app = new cdk.App();
@@ -54,6 +55,21 @@ function buildApplicationStacks(): void {
   const hostedZoneId = app.node.tryGetContext('hostedZoneId') as string | undefined;
   const zoneName = (app.node.tryGetContext('zoneName') as string | undefined) ?? domainName?.split('.').slice(1).join('.');
   let certificateArn = app.node.tryGetContext('certificateArn') as string | undefined;
+
+  /*
+   * 配信に使うサブドメインのゾーン。context の dnsZone を渡したときだけ作る。
+   *
+   * 親の sakekasu-builder.com のゾーンは別のアカウントにあり、CloudFormation は
+   * そこにレコードを書けない。そこでサブドメインのゾーンをこちらに置いて委任してもらう。
+   *
+   * domainName とは別の鍵にしてある。ゾーンを作ってから親側に NS を入れるまでの間に
+   * domainName が有効になると、証明書の DNS 検証が通らず deploy が終わらない。
+   * 順番は docs/operations.md にある。
+   */
+  const dnsZone = app.node.tryGetContext('dnsZone') as string | undefined;
+  if (dnsZone) {
+    new DnsStack(app, `${prefix}-dns`, { zoneName: dnsZone, env });
+  }
 
   const authStack = new AuthStack(app, `${prefix}-auth`, { envName, env });
 
