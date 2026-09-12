@@ -156,6 +156,11 @@ npx cdk deploy sakekasu-kakeibo-dev-api -c env=dev -c siteOrigin="$site"
 `infra/cdk.json` の context に `"siteOrigin": "https://xxxxxxxx.cloudfront.net"` と書いておけば、
 以後の Actions からのデプロイでも維持される。独自ドメインを付けたら要らなくなる。
 
+dev については済んでいる。2026-09-12 の初回デプロイで出たディストリビューションの
+ドメイン（`https://d6f8ub6380j2a.cloudfront.net`）が `cdk.json` に入っているので、
+作り直さない限りこの手順を踏む必要はない。配信スタックを消して作り直したときは
+ドメインが変わるため、書き換える。
+
 ### 6. フロントを置く
 
 ```sh
