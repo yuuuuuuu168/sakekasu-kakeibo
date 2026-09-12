@@ -126,6 +126,19 @@ describe('ApiStack', () => {
     });
   });
 
+  /*
+   * preflight が認証に掛かると、CORS が正しくてもブラウザは本体のリクエストを
+   * 投げない。ANY を書くと OPTIONS まで拾ってしまうので、そうなっていないことを見る。
+   */
+  it('OPTIONS をルートに持たせない（preflight を API Gateway に任せる）', () => {
+    const routes = Template.fromStack(stacks().api).findResources('AWS::ApiGatewayV2::Route');
+    const keys = Object.values(routes).map((route) => route.Properties.RouteKey as string);
+
+    expect(keys).toContain('GET /{proxy+}');
+    expect(keys).toContain('POST /receipts/analyze');
+    expect(keys.filter((key) => key.startsWith('OPTIONS ') || key.startsWith('ANY '))).toEqual([]);
+  });
+
   it('毎月 1 日にレポートを作る', () => {
     Template.fromStack(stacks().api).hasResourceProperties('AWS::Events::Rule', {
       ScheduleExpression: 'cron(0 0 1 * ? *)',
