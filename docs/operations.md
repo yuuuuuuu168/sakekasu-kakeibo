@@ -116,8 +116,10 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 npx cdk deploy --all -c env=dev
 ```
 
-スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが
-CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
+スタックは 4 つ。`-auth` `-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
+
+`cdk.json` に `domainName` を書き戻すと 5 つになり、証明書の `-cert` だけが CloudFront の
+制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
@@ -125,16 +127,30 @@ CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョ�
 
 セルフサインアップは閉じてある。
 
+**`--username` にメールアドレスは渡せない。** UserPool はメールアドレスをエイリアスに
+してある（`signInAliases: { email: true, username: true }`）ので、username 自体が
+メール形式だと Cognito が弾く。
+
+```
+InvalidParameterException: Username cannot be of email format,
+since user pool is configured for email alias
+```
+
+username は記号なしの短い名前にして、メールアドレスは属性で渡す。
+
 ```sh
 aws cognito-idp admin-create-user \
   --user-pool-id <UserPoolId> \
-  --username <メールアドレス> \
+  --username <メールを含まない名前> \
   --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
+  --desired-delivery-mediums EMAIL \
   --region ap-northeast-1
 ```
 
 仮パスワードがメールで届く。最初のサインインで新しいパスワードを求められるので、画面の
 指示どおりに設定する。認証アプリの MFA は Cognito 側で任意にしてある。
+
+サインインはメールアドレスでもこの username でも通る。エイリアスにしてあるのはそのため。
 
 ### 5. API の CORS に配信元を入れる
 
