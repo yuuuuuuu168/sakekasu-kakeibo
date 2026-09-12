@@ -22,7 +22,7 @@ describe('GithubOidcStack', () => {
     expect(Object.keys(template().findResources('AWS::IAM::OIDCProvider'))).toHaveLength(0);
   });
 
-  it('main への push からしか引き受けられない', () => {
+  it('audience を固定し、sub は 2 つの形式を許す', () => {
     template().hasResourceProperties('AWS::IAM::Role', {
       RoleName: 'sakekasu-kakeibo-github-actions-deploy',
       AssumeRolePolicyDocument: {
@@ -30,9 +30,12 @@ describe('GithubOidcStack', () => {
           Match.objectLike({
             Action: 'sts:AssumeRoleWithWebIdentity',
             Condition: {
-              StringEquals: {
-                'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-                'token.actions.githubusercontent.com:sub': `repo:${REPOSITORY}:ref:refs/heads/main`,
+              StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
+              StringLike: {
+                'token.actions.githubusercontent.com:sub': [
+                  `repo:${REPOSITORY.replace('/', '@*/')}@*:ref:refs/heads/main`,
+                  `repo:${REPOSITORY}:ref:refs/heads/main`,
+                ],
               },
             },
           }),
@@ -41,14 +44,49 @@ describe('GithubOidcStack', () => {
     });
   });
 
-  it('別のリポジトリや別のブランチを信頼しない', () => {
-    const trust = JSON.stringify(
-      Object.values(template().findResources('AWS::IAM::Role'))[0].Properties.AssumeRolePolicyDocument,
-    );
-    expect(trust).toContain('repo:yuuuuuuu168/sakekasu-kakeibo:ref:refs/heads/main');
-    expect(trust).not.toContain('sakekasu-builder');
-    expect(trust).not.toContain('pull_request');
-    expect(trust).not.toContain('ref:refs/heads/*');
+  /**
+   * 実測した sub（2026-09-12、main への push）が通ることを、IAM と同じ
+   * ワイルドカードの解釈で確かめる。旧形式だけを決め打ちしていたために
+   * assume が延々と Not authorized で落ちたので、ここを回帰として残す。
+   */
+  describe('sub の照合', () => {
+    const OBSERVED = 'repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:ref:refs/heads/main';
+    const LEGACY = 'repo:yuuuuuuu168/sakekasu-kakeibo:ref:refs/heads/main';
+
+    function patterns(): string[] {
+      const role = Object.values(template().findResources('AWS::IAM::Role'))[0];
+      return role.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringLike[
+        'token.actions.githubusercontent.com:sub'
+      ] as string[];
+    }
+
+    /** IAM のワイルドカードは * が任意の文字列、? が 1 文字 */
+    function matchesAny(subject: string): boolean {
+      return patterns().some((pattern) => {
+        const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`^${escaped.replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+        return regex.test(subject);
+      });
+    }
+
+    it('数値 ID 付きの実測値が通る', () => {
+      expect(matchesAny(OBSERVED)).toBe(true);
+    });
+
+    it('ID の付かない旧形式も通る', () => {
+      expect(matchesAny(LEGACY)).toBe(true);
+    });
+
+    it.each([
+      ['別のブランチ', 'repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:ref:refs/heads/develop'],
+      ['プルリクエスト', 'repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:pull_request'],
+      ['別のリポジトリ', 'repo:yuuuuuuu168@173623628/sakekasu-builder@999:ref:refs/heads/main'],
+      ['似た名前のオーナー', 'repo:yuuuuuuu1689@999/sakekasu-kakeibo@1367094471:ref:refs/heads/main'],
+      ['別のオーナー', 'repo:someone@1/sakekasu-kakeibo@2:ref:refs/heads/main'],
+      ['環境経由', 'repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:environment:dev'],
+    ])('%s は通らない', (_label, subject) => {
+      expect(matchesAny(subject)).toBe(false);
+    });
   });
 
   it('作成・変更の権限は持たず、bootstrap ロールへの AssumeRole だけを許す', () => {
