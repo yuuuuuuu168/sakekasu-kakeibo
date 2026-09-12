@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: フロント（lint / 型 / テスト / ビルド）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+
+  infra:
+    name: インフラ（型 / テスト / synth）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Lambda のバンドルが packages/core を辿るので、ルートの依存も入れる
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+      - run: npx tsc --noEmit
+        working-directory: infra
+      - run: npm test
+        working-directory: infra
+      - run: npx cdk synth -q
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'
