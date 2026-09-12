@@ -204,6 +204,9 @@ OIDC プロバイダー自体は作らない。1 つの AWS アカウントに�
 置けず、`token.actions.githubusercontent.com` のものは sakekasu-builder の
 `sakekasu-github-oidc` スタックが既に持っている。作ろうとすると `EntityAlreadyExists` で落ちる。
 
+信頼ポリシー（`github-oidc-stack.ts`）を変えたときは、同じコマンドを打ち直してロールを
+作り直す。Actions の `--all` には入っていないので、マージしただけでは反映されない。
+
 ### 手元から打ってよい例外
 
 1. 上の `sakekasu-kakeibo-github-oidc`（Actions に自分のロールを触らせないため）
@@ -243,6 +246,53 @@ npm ci   # リポジトリのルートで
 ```sh
 grep -c github-oidc infra/bin/app.ts   # 0 なら古い
 git pull origin main
+```
+
+### `Not authorized to perform sts:AssumeRoleWithWebIdentity`
+
+Actions の `configure-aws-credentials` が 12 回リトライして落ちる場合。ロールの信頼ポリシーが
+トークンの `sub` と噛み合っていない。**AWS はロールが存在しないときにも同じエラーを返す**ので、
+名前や ARN の綴りも一緒に疑うことになる。
+
+GitHub が発行する `sub` には 2 つの形式がある。実測（2026-09-12、main への push）はこちら。
+
+```
+repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:ref:refs/heads/main
+```
+
+オーナー名とリポジトリ名のうしろに数値 ID が付く。名前を変えても同一性が保たれるようにする
+新しい形式で、`173623628` がオーナー ID、`1367094471` がリポジトリ ID。旧形式は ID が付かない。
+
+```
+repo:yuuuuuuu168/sakekasu-kakeibo:ref:refs/heads/main
+```
+
+`infra/lib/github-oidc-stack.ts` は `StringLike` で両方を許している。ID の部分はワイルドカードで、
+`@` の前のオーナー名とリポジトリ名は厳密に一致する必要がある（どちらも `@` を含められない）。
+
+実際の `sub` を確かめたいときは、トークンの claims を出すステップを一時的に足す。
+トークン本体は出さないこと。
+
+```yaml
+      - name: OIDC の claims を確認（一時）
+        run: |
+          set -euo pipefail
+          response=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          payload=$(printf '%s' "$response" | jq -r '.value' | cut -d. -f2 | tr '_-' '/+')
+          case $(( ${#payload} % 4 )) in
+            2) payload="${payload}==" ;;
+            3) payload="${payload}=" ;;
+          esac
+          printf '%s' "$payload" | base64 -d | jq '{iss, aud, sub, ref, event_name}'
+```
+
+信頼ポリシーを直したら、ロールを作り直す必要がある。このスタックは Actions のデプロイ対象に
+入っていないので、手元から打つ。
+
+```sh
+cd infra
+npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ```
 
 ### `The config profile (verify) could not be found`
