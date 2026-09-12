@@ -1,0 +1,74 @@
+# フロントとインフラのテストを PR とマージ時に走らせる。
+#
+# ジョブを 2 つに分けているのは、片方が落ちてももう片方の結果が残るようにするため。
+# インフラ側は CDK の synth（esbuild のバンドル込み）を通すので 20 秒ほどかかる。
+name: test
+
+# paths にワークフロー自身を入れているのは、この関門を外す変更そのものを
+# 無検査で通さないため。ブランチ保護が使えないので、走ったという事実だけが手がかりになる。
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'eslint.config.js'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'eslint.config.js'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: フロント（lint / 型 / テスト / ビルド）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+
+  infra:
+    name: インフラ（型 / テスト / synth）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Lambda のバンドルが packages/core を辿るので、ルートの依存も入れる
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+      - run: npx tsc --noEmit
+        working-directory: infra
+      - run: npm test
+        working-directory: infra
+      # AWS の認証は要らない。アカウント ID はダミーで synth だけ通す
+      - run: npx cdk synth -q
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'

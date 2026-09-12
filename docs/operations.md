@@ -113,7 +113,7 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 
 ## GitHub Actions からデプロイする
 
-`.github/workflows/deploy.yml` を手で起動する形にしてある。使う前に 1 つ用意が要る。
+`.github/workflows/deploy.yml` を手で起動する形にしてある。テストは `.github/workflows/test.yml` が PR とマージのたびに走る。使う前に 1 つ用意が要る。
 
 GitHub OIDC で引き受けられるロールを作り、その ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に入れる。
 sakekasu-builder には同じ仕組みのスタック（`infra/lib/github-oidc-stack.ts`）があるが、
