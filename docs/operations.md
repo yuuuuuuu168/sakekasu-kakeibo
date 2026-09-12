@@ -369,6 +369,41 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 `verify` はクラウドセッション専用のプロファイル。手元では自分のプロファイルを使う。
 `scripts/aws-sso-login.sh` が「Local session detected」で止まるのも同じ理由。
 
+### 画面が「Failed to fetch」のまま。CORS を直しても消えない
+
+CORS の設定が正しく入っていても、preflight（ブラウザが本体の前に投げる OPTIONS）が
+認証に掛かっていると同じ症状になる。切り分けはブラウザを介さず curl で見るのが早い。
+
+```sh
+api=$(aws cloudformation describe-stacks --stack-name sakekasu-kakeibo-dev-api \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+site=$(aws cloudformation describe-stacks --stack-name sakekasu-kakeibo-dev-site \
+  --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" --output text)
+
+curl -s -i -X OPTIONS "$api/snapshot" \
+  -H "Origin: $site" \
+  -H "Access-Control-Request-Method: GET" \
+  -H "Access-Control-Request-Headers: authorization"
+```
+
+`204` が返れば preflight は通っている。`401` なら OPTIONS がオーソライザ付きのルートに
+入っている。preflight に `Authorization` ヘッダは付かないので、通るはずがない。
+
+```
+HTTP/2 401
+access-control-allow-origin: https://xxxxxxxx.cloudfront.net   ← CORS 自体は入っている
+www-authenticate: Bearer
+{"message":"Unauthorized"}
+```
+
+CORS のヘッダは付いたまま 401 になるのが分かりにくいところ。`AllowOrigins` を見ても
+正しいので、設定を疑い続けると抜け出せない。
+
+原因は `addRoutes` の `methods` に `ANY` を書くこと。`ANY` は OPTIONS も拾う。
+メソッドを並べて書いて OPTIONS を含めなければ、CORS を設定した API Gateway が
+preflight に直接応える。`infra/__tests__/stacks.test.ts` にルートキーを見る
+テストを置いてある。
+
 ### 仮パスワードのメールが届かない
 
 `admin-create-user` は通って `UserStatus` が `FORCE_CHANGE_PASSWORD` になっているのに、
