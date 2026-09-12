@@ -7,6 +7,9 @@
   "context": {
     "env": "dev",
     "dnsZone": "kakeibo.sakekasu-builder.com",
+    "domainName": "kakeibo.sakekasu-builder.com",
+    "hostedZoneId": "Z0667100181MY4RPHVIRO",
+    "zoneName": "kakeibo.sakekasu-builder.com",
     "siteOrigin": "https://d6f8ub6380j2a.cloudfront.net",
     "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }
