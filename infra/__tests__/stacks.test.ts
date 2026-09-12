@@ -226,6 +226,38 @@ describe('SiteStack', () => {
    * `sakekasu-builder.com` の委任先ゾーンが別アカウントにあることが分かるまで、
    * この状態で運用する。詳細は docs/operations.md にある。
    */
+  /*
+   * サブドメイン委任なので、ゾーン名は配信するドメインそのもの。CDK は recordName が
+   * ゾーン名で終わっていれば足さないが、二重になると kakeibo.kakeibo.… になって
+   * 気づきにくいので見張る。
+   */
+  it('ドメインを渡せば別名とエイリアスレコードを付ける', () => {
+    const app = new cdk.App();
+    const site = new SiteStack(app, 'test-site-domain', {
+      envName: 'test',
+      env,
+      domainName: 'kakeibo.sakekasu-builder.com',
+      certificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/abc',
+      hostedZoneId: 'Z0123456789ABCDEFGHIJ',
+      zoneName: 'kakeibo.sakekasu-builder.com',
+      apiUrl: 'https://example.execute-api.ap-northeast-1.amazonaws.com',
+      receiptBucketDomain: 'bucket.s3.ap-northeast-1.amazonaws.com',
+      cognitoRegion: 'ap-northeast-1',
+    });
+    const template = Template.fromStack(site);
+
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({ Aliases: ['kakeibo.sakekasu-builder.com'] }),
+    });
+
+    const records = Object.values(template.findResources('AWS::Route53::RecordSet'));
+    expect(records.map((record) => record.Properties.Type).sort()).toEqual(['A', 'AAAA']);
+    for (const record of records) {
+      expect(record.Properties.Name).toBe('kakeibo.sakekasu-builder.com.');
+      expect(record.Properties.HostedZoneId).toBe('Z0123456789ABCDEFGHIJ');
+    }
+  });
+
   it('ドメインを渡さなければ別名も証明書も付けず、Route53 も触らない', () => {
     const template = Template.fromStack(stacks().site);
     const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
