@@ -6,8 +6,6 @@
   },
   "context": {
     "env": "dev",
-    "@aws-cdk/core:defaultCrossStackReferences": "strong",
-    "domainName": "kakeibo.sakekasu-builder.com",
-    "hostedZoneId": "Z04931052NZ9UUTMOMG57"
+    "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }
 }
