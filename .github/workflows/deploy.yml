@@ -1,9 +1,25 @@
-name: Deploy
+# main へのマージでリソースをデプロイする。
+# 認証はアクセスキーではなく GitHub OIDC（sakekasu-kakeibo-github-oidc スタックの
+# deploy ロール）を使う。リポジトリにアクセスキーは置かない。
+#
+# ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。
+# ビルドにはスタックの出力（API の URL、UserPool の ID）が要るので、infra ジョブの
+# 出力として受け渡し、ビルドが終わってから配信用の認証情報を入れる。
+name: deploy
 
-# 手で起動する。初回のデプロイは operations.md の手順で手元から行う。
-# このワークフローを使うには、GitHub OIDC で引き受けられるロールの ARN を
-# リポジトリ変数 AWS_DEPLOY_ROLE_ARN に入れておく。
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'packages/**'
+      - 'src/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
       env:
@@ -11,82 +27,122 @@ on:
         type: choice
         options: [dev, prod]
         default: dev
-      target:
-        description: 対象
-        type: choice
-        options: [all, infra, site]
-        default: all
 
 permissions:
   id-token: write
   contents: read
 
+# デプロイの同時実行を防ぐ。後続を打ち切らないのは、最後の main の状態を必ず
+# 反映させるため（キャンセルすると古い状態のまま止まる恐れがある）
+concurrency:
+  group: deploy-${{ inputs.env || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  DEPLOY_ROLE: arn:aws:iam::<アプリのアカウント ID>:role/sakekasu-kakeibo-github-actions-deploy
+  TARGET_ENV: ${{ inputs.env || 'dev' }}
+
 jobs:
-  deploy:
+  infra:
+    name: CDK デプロイ
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env }}
+    outputs:
+      apiUrl: ${{ steps.outputs.outputs.apiUrl }}
+      userPoolId: ${{ steps.outputs.outputs.userPoolId }}
+      userPoolClientId: ${{ steps.outputs.outputs.userPoolClientId }}
+      siteBucket: ${{ steps.outputs.outputs.siteBucket }}
+      distributionId: ${{ steps.outputs.outputs.distributionId }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
-      - name: ロールの設定を確かめる
-        run: |
-          if [ -z "${{ vars.AWS_DEPLOY_ROLE_ARN }}" ]; then
-            echo "リポジトリ変数 AWS_DEPLOY_ROLE_ARN が未設定です。docs/operations.md を見てください。" >&2
-            exit 1
-          fi
+      # 依存の取得とテストは AWS の認証情報を入れる前に済ませる。
+      #
+      # npm のライフサイクルスクリプトはインストール時に任意のコードを実行できる。
+      # 認証後に npm ci を走らせると、依存のどれか 1 つが乗っ取られただけで、
+      # そのスクリプトが AWS_SESSION_TOKEN を読んで cdk-hnb659fds-* ロールへ
+      # assume できてしまう（このロールは CloudFormation を自由に操作できる）。
+      # 認証前に済ませておけば、スクリプトが走っても掴めるものが無い。
+      # そのうえで --ignore-scripts も付ける（多層で塞ぐ）。
+      #
+      # ルート側も入れるのは、Lambda のバンドルが packages/core を辿るため
+      - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts
+        working-directory: infra
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # デプロイ直前の最後の関門。test ワークフローと重なるが、そちらは paths 条件や
+      # マージの経路によっては走らないことがある。出す手前で必ず 1 回通す
+      - run: npm test
+        working-directory: infra
+
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ap-northeast-1
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - run: npm ci
-      - run: npm ci
+      - name: cdk deploy
         working-directory: infra
-
-      - name: CDK デプロイ
-        if: inputs.target == 'all' || inputs.target == 'infra'
-        working-directory: infra
-        run: npx cdk deploy --all --require-approval never -c env=${{ inputs.env }}
+        run: npx cdk deploy --all --require-approval never -c env=${{ env.TARGET_ENV }}
 
       - name: スタックの出力を読む
         id: outputs
         run: |
-          prefix="sakekasu-kakeibo-${{ inputs.env }}"
-          api=$(aws cloudformation describe-stacks --stack-name "$prefix-api" \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
-          pool=$(aws cloudformation describe-stacks --stack-name "$prefix-auth" \
-            --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
-          client=$(aws cloudformation describe-stacks --stack-name "$prefix-auth" \
-            --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text)
-          bucket=$(aws cloudformation describe-stacks --stack-name "$prefix-site" \
-            --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text)
-          distribution=$(aws cloudformation describe-stacks --stack-name "$prefix-site" \
-            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" --output text)
+          set -euo pipefail
+          prefix="sakekasu-kakeibo-${TARGET_ENV}"
+          read_output() {
+            aws cloudformation describe-stacks --stack-name "$1" \
+              --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
+          }
           {
-            echo "api=$api"
-            echo "pool=$pool"
-            echo "client=$client"
-            echo "bucket=$bucket"
-            echo "distribution=$distribution"
+            echo "apiUrl=$(read_output "$prefix-api" ApiUrl)"
+            echo "userPoolId=$(read_output "$prefix-auth" UserPoolId)"
+            echo "userPoolClientId=$(read_output "$prefix-auth" UserPoolClientId)"
+            echo "siteBucket=$(read_output "$prefix-site" SiteBucketName)"
+            echo "distributionId=$(read_output "$prefix-site" DistributionId)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: フロントをビルドして置く
-        if: inputs.target == 'all' || inputs.target == 'site'
+  site:
+    name: フロントの配信
+    needs: infra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # ビルドはまだ認証情報を入れない状態で走らせる。Vite のプラグインも
+      # 依存のコードなので、掴めるものを置かない
+      - name: ビルド
         env:
-          VITE_API_URL: ${{ steps.outputs.outputs.api }}
-          VITE_USER_POOL_ID: ${{ steps.outputs.outputs.pool }}
-          VITE_USER_POOL_CLIENT_ID: ${{ steps.outputs.outputs.client }}
+          VITE_API_URL: ${{ needs.infra.outputs.apiUrl }}
+          VITE_USER_POOL_ID: ${{ needs.infra.outputs.userPoolId }}
+          VITE_USER_POOL_CLIENT_ID: ${{ needs.infra.outputs.userPoolClientId }}
         run: |
+          set -euo pipefail
+          test -n "$VITE_API_URL" || { echo "API の URL が取れていません" >&2; exit 1; }
           npx vite build
-          # ハッシュ付きの資産は長く、index.html は都度読み直させる
-          aws s3 sync dist/ "s3://${{ steps.outputs.outputs.bucket }}/" \
-            --delete --exclude index.html --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp dist/index.html "s3://${{ steps.outputs.outputs.bucket }}/index.html" \
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ハッシュ付きの資産は長く持たせ、index.html だけ都度読み直させる
+      - name: S3 へ同期して無効化
+        run: |
+          set -euo pipefail
+          aws s3 sync dist/ "s3://${{ needs.infra.outputs.siteBucket }}/" \
+            --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/index.html "s3://${{ needs.infra.outputs.siteBucket }}/index.html" \
             --cache-control "no-cache"
           aws cloudfront create-invalidation \
-            --distribution-id "${{ steps.outputs.outputs.distribution }}" --paths "/index.html"
+            --distribution-id "${{ needs.infra.outputs.distributionId }}" --paths "/index.html"
