@@ -64,7 +64,21 @@ function buildApplicationStacks(): void {
     receiptRetentionDays: 90,
   });
 
-  const allowedOrigins = [...(domainName ? [`https://${domainName}`] : []), 'http://localhost:5173'];
+  /*
+   * API の CORS で許す配信元。
+   *
+   * 独自ドメインを使っているときはそれを入れる。使っていないとき（CloudFront の
+   * 既定ドメインで配信しているとき）は、その URL を context の siteOrigin で渡す。
+   * 配信スタックを作る前にはディストリビューションのドメインが決まらないため、
+   * 初回は API → 配信の順に作ってから siteOrigin を入れて 2 回目を打つ形になる。
+   * この手順は docs/operations.md にある。
+   */
+  const siteOrigin = app.node.tryGetContext('siteOrigin') as string | undefined;
+  const allowedOrigins = [
+    ...(domainName ? [`https://${domainName}`] : []),
+    ...(siteOrigin ? [siteOrigin] : []),
+    'http://localhost:5173',
+  ];
 
   const apiStack = new ApiStack(app, `${prefix}-api`, {
     envName,

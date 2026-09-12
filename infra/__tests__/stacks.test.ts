@@ -117,6 +117,15 @@ describe('ApiStack', () => {
     });
   });
 
+  it('CORS は渡した配信元だけを許す', () => {
+    Template.fromStack(stacks().api).hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowOrigins: ['https://kakeibo.sakekasu-builder.com'],
+        AllowHeaders: ['authorization', 'content-type'],
+      },
+    });
+  });
+
   it('毎月 1 日にレポートを作る', () => {
     Template.fromStack(stacks().api).hasResourceProperties('AWS::Events::Rule', {
       ScheduleExpression: 'cron(0 0 1 * ? *)',
@@ -169,6 +178,19 @@ describe('SiteStack', () => {
         ]),
       },
     });
+  });
+
+  /**
+   * ドメインを渡さない状態（CloudFront の既定ドメインで配信する状態）の確認。
+   * `sakekasu-builder.com` の委任先ゾーンが別アカウントにあることが分かるまで、
+   * この状態で運用する。詳細は docs/operations.md にある。
+   */
+  it('ドメインを渡さなければ別名も証明書も付けず、Route53 も触らない', () => {
+    const template = Template.fromStack(stacks().site);
+    const distribution = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0];
+    expect(distribution.Properties.DistributionConfig.Aliases).toBeUndefined();
+    expect(distribution.Properties.DistributionConfig.ViewerCertificate).toBeUndefined();
+    expect(Object.keys(template.findResources('AWS::Route53::RecordSet'))).toHaveLength(0);
   });
 
   it('配信物のバケットを公開せず、OAC で読む', () => {

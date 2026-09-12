@@ -26,62 +26,63 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 デプロイ先は sakekasu-builder と同じアカウント（232791540685 / ap-northeast-1）。
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けてある。
 
-### 1. 証明書とドメイン
+### 1. ドメインと証明書（いまは付けていない）
 
-`kakeibo.sakekasu-builder.com` で配信する。`sakekasu-builder.com` のゾーンは Route53 にあり、
-`infra/cdk.json` の context にゾーン ID を書いてあるので、追加の指定は要らない。
+`kakeibo.sakekasu-builder.com` で配信する予定だが、**DNS の整理が済むまでは付けていない。**
+`infra/cdk.json` から `domainName` と `hostedZoneId` を外してあり、CloudFront の既定ドメイン
+（`https://xxxxxxxx.cloudfront.net`）で配信する。
+
+#### なぜ付けられないか
+
+`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウント（232791540685）に無い。
 
 ```
-domainName:   kakeibo.sakekasu-builder.com
-hostedZoneId: Z04931052NZ9UUTMOMG57
+$ dig NS sakekasu-builder.com +short      # 実際に委任されている NS
+ns-1240.awsdns-27.org. / ns-1718.awsdns-22.co.uk. / ns-804.awsdns-36.net. / ns-229.awsdns-28.com.
+
+$ aws route53 get-hosted-zone --id Z04931052NZ9UUTMOMG57   # このアカウントのゾーンの NS
+ns-1336.awsdns-39.org / ns-529.awsdns-02.net / ns-310.awsdns-38.com / ns-1620.awsdns-10.co.uk
 ```
 
-証明書は us-east-1 に `-cert` スタックが立てて発行し、検証用のレコードは CDK が Route53 へ入れる。
-配信先を指す A / AAAA のエイリアスレコードも同じく自動で入る。手作業は無い。
+噛み合っていない。このアカウントにあるゾーンは公開ゾーン（`PrivateZone: false`）だが、
+レジストラからの委任を受けていない。ドメインもこのアカウントの Route53 Domains には
+登録されていない。つまり本物のゾーンは別のアカウント（組織の管理アカウント <管理アカウント ID> が候補）にある。
 
-ゾーンの所在は権威 DNS を引けば分かる。AWS の認証は要らない。
+このゾーン ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
+ゾーンに書かれ、ACM が永久に `PENDING_VALIDATION` のままになる。`cdk deploy` は待ち続け、
+証明書が最初のスタックなので残りの 4 スタックも作られない（実際に 45 分待って気づいた）。
 
-```sh
-dig NS sakekasu-builder.com +short
-# ns-1240.awsdns-27.org. のように awsdns が返れば Route53
-```
+#### 付けるときの手順
 
-ゾーン ID を取り直すときは、手元なら自分のプロファイルを使う。読み取り専用の `verify` プロファイルは
-クラウドセッションでしか作られないので、手元で `--profile verify` を渡すと
-「The config profile (verify) could not be found」で止まる。
+本物のゾーンが別アカウントにあるなら、CloudFormation はそこにレコードを書けない。
+サブドメインを委任するのが筋。
 
-```sh
-aws configure list-profiles   # プロファイル名が分からなければ先にこれ
-aws route53 list-hosted-zones \
-  --query "HostedZones[?Name=='sakekasu-builder.com.'].[Id,Name]" \
-  --output table --profile sakekasu-builder
-```
+1. `kakeibo.sakekasu-builder.com` のゾーンをこのアカウントに作る
+2. そのゾーンの 4 つの NS を、本物のゾーン側に `kakeibo` の NS レコードとして 1 つ入れる
+   （別アカウントでの手作業はここだけ）
+3. `infra/cdk.json` に書き戻す
 
-ゾーンがデプロイ先と別のアカウントにある場合、CDK は検証レコードを入れられない
-（`HostedZone.fromHostedZoneAttributes` は所在を確かめないので、synth は通ってデプロイで止まる）。
-いまは両方とも 232791540685 にある。
+   ```json
+   "domainName": "kakeibo.sakekasu-builder.com",
+   "hostedZoneId": "<新しく作ったゾーンの ID>"
+   ```
 
-#### ゾーンが Route53 から移ったとき
+以後この配下は全部このアカウントで完結し、証明書の発行・DNS 検証・エイリアスレコードは
+CDK が面倒を見る。
 
-証明書を先に us-east-1 で手で発行し、検証用の CNAME を移り先の DNS に入れる。発行できたら
-ARN を context で渡し、CloudFront を指すレコードも手で入れる。
+委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ARN を
+`certificateArn` で渡す形になる。CloudFront を指すレコードも手で入れる。
 
 ```sh
 aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
   --validation-method DNS --region us-east-1
-cd infra
-npx cdk deploy --all -c env=dev -c hostedZoneId= \
-  -c certificateArn=arn:aws:acm:us-east-1:232791540685:certificate/xxxx
 ```
 
-ドメインを一旦外して CloudFront の既定ドメインで配信することもできる。後からドメインを足せる。
+#### 使っていないゾーンについて
 
-```sh
-npx cdk deploy --all -c env=dev -c domainName=
-```
-
-DNS 検証つきの証明書を、ゾーンも ARN も渡さずに CDK に作らせてはいけない。検証レコードが入るまで
-`cdk deploy` が待ち続けて、止まったように見える。context の 2 つはそれを避けるためにある。
+このアカウントの `Z04931052NZ9UUTMOMG57` は委任されておらず、何も解決していない。
+証明書の検証で作られた `_xxxx.kakeibo...` の CNAME が残っているかもしれない。
+本物のゾーンの所在が分かったら、混乱の元なので消すかどうかを決める。
 
 ### 2. 依存を入れる
 
@@ -135,7 +136,27 @@ aws cognito-idp admin-create-user \
 仮パスワードがメールで届く。最初のサインインで新しいパスワードを求められるので、画面の
 指示どおりに設定する。認証アプリの MFA は Cognito 側で任意にしてある。
 
-### 5. フロントを置く
+### 5. API の CORS に配信元を入れる
+
+独自ドメインを使っていない間は、CloudFront の既定ドメインを context の `siteOrigin` で渡す。
+これを入れないと、配信したフロントから API を叩いたときに CORS で弾かれる。
+
+配信スタックを作る前にはディストリビューションのドメインが決まらないので、初回だけ
+2 回に分かれる。まず全部を作り、出てきたドメインを渡してもう一度打つ。
+
+```sh
+site=$(aws cloudformation describe-stacks --stack-name sakekasu-kakeibo-dev-site \
+  --query "Stacks[0].Outputs[?OutputKey=='SiteUrl'].OutputValue" --output text)
+echo "$site"
+
+cd infra
+npx cdk deploy sakekasu-kakeibo-dev-api -c env=dev -c siteOrigin="$site"
+```
+
+`infra/cdk.json` の context に `"siteOrigin": "https://xxxxxxxx.cloudfront.net"` と書いておけば、
+以後の Actions からのデプロイでも維持される。独自ドメインを付けたら要らなくなる。
+
+### 6. フロントを置く
 
 ```sh
 prefix=sakekasu-kakeibo-dev
@@ -246,6 +267,33 @@ npm ci   # リポジトリのルートで
 ```sh
 grep -c github-oidc infra/bin/app.ts   # 0 なら古い
 git pull origin main
+```
+
+### `cdk deploy` が証明書のスタックで終わらない
+
+`sakekasu-kakeibo-dev-cert` が `CREATE_IN_PROGRESS` のまま何十分も動かない場合。
+ACM の検証レコードを、委任されていないゾーンに書いている。
+
+```sh
+# 期待するレコードと検証の状態
+arn=$(aws acm list-certificates --region us-east-1 \
+  --query "CertificateSummaryList[?DomainName=='kakeibo.sakekasu-builder.com'].CertificateArn" --output text)
+aws acm describe-certificate --region us-east-1 --certificate-arn "$arn" \
+  --query "Certificate.DomainValidationOptions"
+
+# そのゾーンが本当に委任先かどうか（NS が dig の結果と一致するか）
+aws route53 get-hosted-zone --id <ゾーン ID> \
+  --query "{Private:HostedZone.Config.PrivateZone,NS:DelegationSet.NameServers}"
+dig NS sakekasu-builder.com +short
+```
+
+レコードが Route53 に存在していても、そのゾーンが委任先でなければ公開 DNS からは引けない。
+`dig +short CNAME <検証レコード名>` が空なら、それが起きている。
+
+止めるにはスタックを消す。CloudFormation は待ち続けるので、Actions の実行を止めただけでは終わらない。
+
+```sh
+aws cloudformation delete-stack --region us-east-1 --stack-name sakekasu-kakeibo-dev-cert
 ```
 
 ### `Not authorized to perform sts:AssumeRoleWithWebIdentity`
