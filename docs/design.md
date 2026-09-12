@@ -32,6 +32,13 @@ RPC の形をしていて、グラフで引く必要がないこと。試行錯�
 配信物は GitHub Actions から `aws s3 sync` で置く。CDK の `BucketDeployment` は使わない
 （`Custom::CDKBucketDeployment` というカスタムリソースが増え、あちらが #129 で消したものと同じ性質になる）。
 
+カスタムリソースを作らない方針の例外が 1 つある。証明書は CloudFront の制約で us-east-1 に
+置くしかなく、その ARN を配信スタックへ渡すのに `crossRegionReferences` を使っている。これが
+`Custom::CrossRegionExportWriter`（証明書スタック側）と `Custom::CrossRegionExportReader`
+（配信スタック側）を 1 つずつ作る。避ける方法は、証明書スタックを先に入れて出力の ARN を
+手で context に貼ることだが、その手間を環境を作るたびに払うことになる。`BucketDeployment` と
+`logRetention` は代わりがあって消せたのに対し、これには無いので通した。
+
 ## スタック
 
 | スタック | 中身 |

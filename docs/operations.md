@@ -26,42 +26,62 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 デプロイ先は sakekasu-builder と同じアカウント（232791540685 / ap-northeast-1）。
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けてある。
 
-### 1. 証明書とドメインの段取りを決める
+### 1. 証明書とドメイン
 
-`kakeibo.sakekasu-builder.com` で配信する。証明書の扱いは 3 通りあり、DNS がどこにあるかで決まる。
+`kakeibo.sakekasu-builder.com` で配信する。`sakekasu-builder.com` のゾーンは Route53 にあり、
+`infra/cdk.json` の context にゾーン ID を書いてあるので、追加の指定は要らない。
 
-`sakekasu-builder.com` の DNS は CDK の管理外にある（あちらの `infra/` に Route53 の定義は無く、
-apex と www が Amplify の CloudFront へ CNAME で向いている）。まずどこにゾーンがあるかを確かめる。
-
-```sh
-aws route53 list-hosted-zones --query "HostedZones[?Name=='sakekasu-builder.com.']" --profile verify
+```
+domainName:   kakeibo.sakekasu-builder.com
+hostedZoneId: Z04931052NZ9UUTMOMG57
 ```
 
-- **Route53 にある** → ゾーン ID を context に渡す。証明書の発行と DNS 検証、レコードの追加まで CDK がやる
+証明書は us-east-1 に `-cert` スタックが立てて発行し、検証用のレコードは CDK が Route53 へ入れる。
+配信先を指す A / AAAA のエイリアスレコードも同じく自動で入る。手作業は無い。
 
-  ```sh
-  cd infra
-  npx cdk deploy --all -c env=dev -c hostedZoneId=Z0123456789ABC
-  ```
+ゾーンの所在は権威 DNS を引けば分かる。AWS の認証は要らない。
 
-- **別の DNS サービスにある** → 証明書を先に us-east-1 で手で発行し、検証用の CNAME をそこに入れる。
-  発行できたら ARN を渡す。CloudFront を指す CNAME レコードも手で入れる
+```sh
+dig NS sakekasu-builder.com +short
+# ns-1240.awsdns-27.org. のように awsdns が返れば Route53
+```
 
-  ```sh
-  aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
-    --validation-method DNS --region us-east-1
-  cd infra
-  npx cdk deploy --all -c env=dev -c certificateArn=arn:aws:acm:us-east-1:232791540685:certificate/xxxx
-  ```
+ゾーン ID を取り直すときは、手元なら自分のプロファイルを使う。読み取り専用の `verify` プロファイルは
+クラウドセッションでしか作られないので、手元で `--profile verify` を渡すと
+「The config profile (verify) could not be found」で止まる。
 
-- **まだ決めない** → ドメインを外して CloudFront の既定ドメインで配信する。後からドメインを足せる
+```sh
+aws configure list-profiles   # プロファイル名が分からなければ先にこれ
+aws route53 list-hosted-zones \
+  --query "HostedZones[?Name=='sakekasu-builder.com.'].[Id,Name]" \
+  --output table --profile sakekasu-builder
+```
 
-  ```sh
-  npx cdk deploy --all -c env=dev -c domainName=
-  ```
+ゾーンがデプロイ先と別のアカウントにある場合、CDK は検証レコードを入れられない
+（`HostedZone.fromHostedZoneAttributes` は所在を確かめないので、synth は通ってデプロイで止まる）。
+いまは両方とも 232791540685 にある。
 
-DNS 検証つきの証明書を context 無しで CDK に作らせると、検証レコードが入るまで `cdk deploy` が
-待ち続けて止まったように見える。上の 3 通りはそれを避けるためにある。
+#### ゾーンが Route53 から移ったとき
+
+証明書を先に us-east-1 で手で発行し、検証用の CNAME を移り先の DNS に入れる。発行できたら
+ARN を context で渡し、CloudFront を指すレコードも手で入れる。
+
+```sh
+aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
+  --validation-method DNS --region us-east-1
+cd infra
+npx cdk deploy --all -c env=dev -c hostedZoneId= \
+  -c certificateArn=arn:aws:acm:us-east-1:232791540685:certificate/xxxx
+```
+
+ドメインを一旦外して CloudFront の既定ドメインで配信することもできる。後からドメインを足せる。
+
+```sh
+npx cdk deploy --all -c env=dev -c domainName=
+```
+
+DNS 検証つきの証明書を、ゾーンも ARN も渡さずに CDK に作らせてはいけない。検証レコードが入るまで
+`cdk deploy` が待ち続けて、止まったように見える。context の 2 つはそれを避けるためにある。
 
 ### 2. スタックを入れる
 
@@ -72,8 +92,10 @@ npx cdk bootstrap  # このアカウントで初めて CDK を使う場合だけ
 npx cdk deploy --all -c env=dev
 ```
 
-スタックは 4 つ（`-auth` `-data` `-api` `-site`）。ドメインを Route53 で扱う場合は us-east-1 に
-`-cert` が増える。
+スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが
+CloudFront の制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
+`Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
+作らない方針の唯一の例外。理由は design.md にある）。
 
 ### 3. 自分のユーザーを 1 つ作る
 
