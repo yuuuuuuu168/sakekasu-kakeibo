@@ -57,18 +57,80 @@ ns-1336.awsdns-39.org / ns-529.awsdns-02.net / ns-310.awsdns-38.com / ns-1620.aw
 本物のゾーンが別アカウントにあるなら、CloudFormation はそこにレコードを書けない。
 サブドメインを委任するのが筋。
 
-1. `kakeibo.sakekasu-builder.com` のゾーンをこのアカウントに作る
-2. そのゾーンの 4 つの NS を、本物のゾーン側に `kakeibo` の NS レコードとして 1 つ入れる
-   （別アカウントでの手作業はここだけ）
-3. `infra/cdk.json` に書き戻す
+**1. サブドメインのゾーンをこのアカウントに作る**
 
-   ```json
-   "domainName": "kakeibo.sakekasu-builder.com",
-   "hostedZoneId": "<新しく作ったゾーンの ID>"
-   ```
+`cdk.json` の context に `dnsZone` が入っていれば、`sakekasu-kakeibo-{env}-dns` が
+合成される。main へのマージで立つ。ゾーンを作るだけなので待ち時間は無い。
+
+```json
+"dnsZone": "kakeibo.sakekasu-builder.com"
+```
+
+立ったらゾーン ID と NS 4 つを読む。
+
+```sh
+aws cloudformation describe-stacks --stack-name sakekasu-kakeibo-dev-dns \
+  --query "Stacks[0].Outputs[*].[OutputKey,OutputValue]" --output table
+```
+
+**2. 親のゾーン側に NS レコードを 1 つ入れる**
+
+ここだけ別アカウント（本物のゾーンがある方）での手作業になる。入れるのは
+`kakeibo.sakekasu-builder.com` の NS レコード 1 本で、値は 1 で読んだ 4 つ。
+
+```sh
+# 親のゾーンがあるアカウントで打つ
+cat > /tmp/delegate.json <<'JSON'
+{
+  "Comment": "sakekasu-kakeibo へサブドメインを委任する",
+  "Changes": [{
+    "Action": "UPSERT",
+    "ResourceRecordSet": {
+      "Name": "kakeibo.sakekasu-builder.com",
+      "Type": "NS",
+      "TTL": 300,
+      "ResourceRecords": [
+        {"Value": "ns-xxxx.awsdns-xx.org"},
+        {"Value": "ns-xxxx.awsdns-xx.co.uk"},
+        {"Value": "ns-xxxx.awsdns-xx.net"},
+        {"Value": "ns-xxxx.awsdns-xx.com"}
+      ]
+    }
+  }]
+}
+JSON
+aws route53 change-resource-record-sets \
+  --hosted-zone-id <親のゾーンの ID> --change-batch file:///tmp/delegate.json
+```
+
+親のゾーンの ID は、そのアカウントで `aws route53 list-hosted-zones` を打ち、
+`dig NS sakekasu-builder.com +short` が返す NS と `get-hosted-zone` の NS が
+一致するゾーンを選ぶ。名前だけで選ぶと、今回のように委任されていないゾーンを
+掴んでしまう。
+
+**3. 委任が効いたことを確かめる**
+
+```sh
+dig NS kakeibo.sakekasu-builder.com +short
+```
+
+1 で読んだ 4 つが返ってくれば通っている。TTL の都合で数分かかることがある。
+**ここを飛ばして 4 に進むと、45 分待つやつが再現する。**
+
+**4. `infra/cdk.json` に書き戻す**
+
+```json
+"domainName": "kakeibo.sakekasu-builder.com",
+"hostedZoneId": "<1 で読んだゾーン ID>",
+"zoneName": "kakeibo.sakekasu-builder.com"
+```
+
+`zoneName` を明示するのが要点。省くと `domainName` の先頭を落とした
+`sakekasu-builder.com` が既定値になり、こちらのアカウントに無いゾーンを指してしまう
+（サブドメイン委任では、ゾーン名はサブドメインそのもの）。
 
 以後この配下は全部このアカウントで完結し、証明書の発行・DNS 検証・エイリアスレコードは
-CDK が面倒を見る。
+CDK が面倒を見る。`siteOrigin` は要らなくなるので消す。
 
 委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ARN を
 `certificateArn` で渡す形になる。CloudFront を指すレコードも手で入れる。
