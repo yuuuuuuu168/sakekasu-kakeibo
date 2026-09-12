@@ -62,9 +62,13 @@ Cognito ユーザー・SSM パラメータは IAM 側で拒否される。
 
 ## デプロイ
 
-初回は手元から `cdk deploy`。証明書とドメインの段取りが DNS の置き場所で変わるので、
-[docs/operations.md](docs/operations.md) の手順に従う。2 回目以降は
-`.github/workflows/deploy.yml` を手で起動する。
+**デプロイは main へのマージ経由。手元からの `cdk deploy` は原則打たない。**
+例外は 2 つだけで、`npx cdk bootstrap` と、Actions 用のロールを作る
+`npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true`。
+どちらも Actions にロールを触らせないため、手で打つ。
+
+確かめたいだけなら `cdk diff` までにとどめる。手順は
+[docs/operations.md](docs/operations.md) にある。
 
 Lambda と Bedrock のモデル ID を差し替えるときは、IAM に推論プロファイルと振り先の
 foundation-model の両方の ARN が入っていることを確かめる。片方だけだと、振り先に当たった
