@@ -179,12 +179,19 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 
 ## デプロイ
 
-初回は手元から入れる。手順は [docs/operations.md](docs/operations.md) にある。
+デプロイは main へのマージ経由。`.github/workflows/deploy.yml` が `cdk deploy --all` を打ち、続けてフロントをビルドして S3 へ同期し、`index.html` を無効化する。認証は GitHub OIDC で、リポジトリにアクセスキーは置かない。
+
+ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。依存の取得とテストも認証情報を入れる前に済ませている。詳しい理由は [docs/operations.md](docs/operations.md) にある。
+
+手元から打つのは、最初の 1 回だけ。
 
 ```bash
 cd infra
-npx cdk deploy --all -c env=dev
+npx cdk bootstrap  # このアカウントで CDK 初回のときだけ
+npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ```
+
+Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。
 
 スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。
 
