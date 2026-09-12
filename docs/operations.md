@@ -369,6 +369,44 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 `verify` はクラウドセッション専用のプロファイル。手元では自分のプロファイルを使う。
 `scripts/aws-sso-login.sh` が「Local session detected」で止まるのも同じ理由。
 
+### 仮パスワードのメールが届かない
+
+`admin-create-user` は通って `UserStatus` が `FORCE_CHANGE_PASSWORD` になっているのに、
+メールが来ない。原因は 2 つ考えられる。
+
+1. そのアドレスに受信の用意が無い。ドメインを持っているだけでは受け取れず、MX レコードを
+   メールのサービスに向ける必要がある。このリポジトリはそこまで面倒を見ていない
+2. Cognito の既定の送信元（`no-reply@verificationemail.com`）が弾かれている。UserPool に
+   SES を繋いでいないので既定の送信元になる。送信元はこちらのドメインで認証されていないため、
+   迷惑メールに入るか、受信側で落とされることがある
+
+どちらにしても、利用者は本人ひとりなのでメールを待つ必要は無い。パスワードを直接入れる。
+
+```sh
+read -rs "?パスワード: " pw; echo   # bash なら read -rsp "パスワード: " pw; echo
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <UserPoolId> \
+  --username <ユーザー名> \
+  --password "$pw" \
+  --permanent \
+  --region ap-northeast-1
+unset pw
+```
+
+`--permanent` を付けると `UserStatus` が `CONFIRMED` になり、初回のパスワード変更を
+求められなくなる。付けなければ仮パスワード扱いになり、画面の変更フローに入る（対応済み）。
+
+パスワードを忘れたときの復旧はメールだけに設定してある（`accountRecovery: EMAIL_ONLY`）。
+受け取れないアドレスを入れたままだと復旧できないので、届くアドレスに直しておく。
+
+```sh
+aws cognito-idp admin-update-user-attributes \
+  --user-pool-id <UserPoolId> \
+  --username <ユーザー名> \
+  --user-attributes Name=email,Value=<届くアドレス> Name=email_verified,Value=true \
+  --region ap-northeast-1
+```
+
 ## 月次レポートを手で作り直す
 
 毎月 1 日の 09:00（JST）に EventBridge が Lambda を叩く。過去の月を作り直したいときは直接呼ぶ。
