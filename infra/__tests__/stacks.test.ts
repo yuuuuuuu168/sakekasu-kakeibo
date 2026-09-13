@@ -40,6 +40,22 @@ describe('AuthStack', () => {
     });
   });
 
+  /*
+   * 必須にしていないと、登録しないまま使い続けられてしまう。SMS を有効にしないのは、
+   * 電話番号を預かることになり SIM の乗っ取りでも抜かれるため。
+   */
+  it('MFA を必須にし、二要素は認証アプリだけにする', () => {
+    const template = Template.fromStack(stacks().auth);
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      MfaConfiguration: 'ON',
+      EnabledMfas: ['SOFTWARE_TOKEN_MFA'],
+    });
+    const pools = template.findResources('AWS::Cognito::UserPool');
+    for (const pool of Object.values(pools)) {
+      expect(pool.Properties.EnabledMfas).not.toContain('SMS_MFA');
+    }
+  });
+
   it('ブラウザ向けクライアントに SRP 以外の認証を持たせない', () => {
     const template = Template.fromStack(stacks().auth);
     template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
