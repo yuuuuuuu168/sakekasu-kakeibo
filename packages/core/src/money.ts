@@ -36,7 +36,7 @@ export function formatYen(amount: number): string {
   return `${sign}¥${Math.abs(amount).toLocaleString('ja-JP')}`;
 }
 
-/** 0 除算を避けた比率。上限 0 のカテゴリに実績があれば Infinity ではなく 1 を超える値を返す */
+/** 0 除算を避けた比率。上限 0 のカテゴリに実績があれば Infinity を返す */
 export function ratio(actual: number, limit: number): number {
   if (limit > 0) return actual / limit;
   return actual > 0 ? Number.POSITIVE_INFINITY : 0;
