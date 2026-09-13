@@ -332,6 +332,58 @@ cd infra
 npx cdk diff -c env=dev --profile sakekasu-builder
 ```
 
+## PR のセキュリティレビュー
+
+PR の差分を AWS Security Agent に読ませ、指摘を PR のコメントに残す。設計レビューと
+コードレビューは 2025 年 12 月のプレビューで入った機能で、ペネトレーションテストだけが
+2026 年 3 月に GA になっている。ここで使うのはコードレビューのほうなので、いまはプレビュー。
+
+**リポジトリに置くものは無い。** 設定は AWS のコンソールと GitHub App の側で完結する。
+ワークフローを 1 本足す方式（`anthropics/claude-code-security-review` など）も試したが、
+AWS で 1 本に寄せる判断をして入れていない。長命の API キーを Secrets に置かずに済むのも
+こちらの利点になる。
+
+### 先に確かめること
+
+sakekasu-builder が既に AWS Security Agent に繋がっている。**その連携がどの AWS アカウントから
+張られているかを先に見る。**
+
+「1 つの GitHub アカウント（組織）は 1 つの AWS アカウントにしか紐づけられない」制約があるため。
+GitHub App は 1 アカウントに 1 回しか入れられず、そのインストールが AWS アカウント 1 つに
+結びつく。builder も kakeibo も同じ `yuuuuuuu168` の下にあるので、
+
+- builder の連携が <アプリのアカウント ID> から張ってあるなら、そのまま kakeibo を足せる
+- 別の AWS アカウントから張ってあるなら、そちらに寄せるしかない。kakeibo 用に
+  別アカウントから繋ぐことはできない
+
+デプロイ先が同じアカウントであることと、Security Agent の連携をどのアカウントから張ったかは
+別の話なので、コンソールで実際に見る。
+
+### 入れ方
+
+1. **Agent Space を kakeibo 用に新しく作る。** builder と同じ Agent Space には入れない。
+   コードレビューの設定とセキュリティ要件は Agent Space 単位で、その中のコードレビューを
+   有効にした全リポジトリに効く。[docs/security-requirements.md](security-requirements.md)
+   の 8 件は kakeibo 固有（`sub` によるスコープ、レシート画像の S3、Bedrock の IAM）なので、
+   同居させると builder にも同じ要件が当たる
+2. **GitHub App のリポジトリ選択に `sakekasu-kakeibo` を足す。** builder だけを選んで
+   入れてあるなら kakeibo は見えない。自動では増えない。App 自体の入れ直しは要らない
+   （新しく繋ぐ場合は Integrations → Add integration → GitHub → Install and authorize）
+3. Agent Space の capabilities から「コードレビューを有効にする」を選び、
+   リポジトリを繋いで Code review のトグルを入れる
+4. セキュリティ要件を入れる。マネージドの要件（認証・認可、監視、暗号化、シークレット管理、
+   情報保護）を有効にしたうえで、`docs/security-requirements.md` の 8 件をカスタム要件として足す
+
+### 覚えておくこと
+
+- コードレビューはプレビュー。コンソール側の作りは変わりうるので、上の手順は当てにしすぎない
+- **CI の関門にはならない。** `test.yml` の `paths` にワークフロー自身を入れて「関門を外す変更を
+  無検査で通さない」形にしているが、コードレビューはリポジトリの外で動くので同じ手が使えない。
+  コンソールでトグルを切れば、リポジトリ側には何の跡も残らずに止まる
+- 観点を変えるときは、`docs/security-requirements.md` を直してからコンソールに反映する。
+  コンソールだけ直すと、次に誰かが読んだときに食い違う
+- 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
+
 ## よくある詰まり
 
 ### `npx canceled due to missing packages` で `Failed to bundle asset`
