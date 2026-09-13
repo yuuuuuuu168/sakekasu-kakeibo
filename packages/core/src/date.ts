@@ -26,7 +26,7 @@ export function parseDateCell(raw: string, referenceYear?: number): string | und
   const compact = COMPACT.exec(text);
   if (compact) {
     const [, y, m, d] = compact;
-    return isRealDate(+y, +m, +d) ? `${y}-${m}-${d}` : undefined;
+    return isRealDate(+y, +m, +d) ? `${y}-${pad(+m)}-${pad(+d)}` : undefined;
   }
 
   const ymd = YMD.exec(text);
