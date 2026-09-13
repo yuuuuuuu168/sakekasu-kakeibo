@@ -334,53 +334,38 @@ npx cdk diff -c env=dev --profile sakekasu-builder
 
 ## PR のセキュリティレビュー
 
-`.github/workflows/security-review.yml` が PR ごとに 1 回走り、差分をセキュリティの観点で
-読ませて、指摘を PR のコメントに残す。使っているのは
-[anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review)。
-パターン照合の SAST ではないので、`sub` のスコープ漏れや IAM の広げすぎのような、
-文脈が要る指摘が出る。
+PR の差分を AWS Security Agent に読ませ、指摘を PR のコメントに残す。設計レビューと
+コードレビューは 2025 年 12 月のプレビューで入った機能で、ペネトレーションテストだけが
+2026 年 3 月に GA になっている。ここで使うのはコードレビューのほうなので、いまはプレビュー。
 
-見てほしい観点は `.github/security-scan-instructions.md` に書いてある。誤検知が続くものは、
-この「指摘しなくてよいもの」の節に足していく。
+**リポジトリに置くものは無い。** 設定は AWS のコンソールと GitHub App の側で完結する。
+ワークフローを 1 本足す方式（`anthropics/claude-code-security-review` など）も試したが、
+AWS で 1 本に寄せる判断をして入れていない。長命の API キーを Secrets に置かずに済むのも
+こちらの利点になる。
 
-### 鍵を置く
+### 入れ方
 
-この Action は Anthropic の API キーを要る。リポジトリの Settings → Secrets and variables →
-Actions に `CLAUDE_API_KEY` という名前で入れる。
+1. AWS Security Agent のコンソールで Agent Space を作る
+2. Integrations → Add integration → GitHub → Install and authorize。GitHub 側で
+   AWS Security Agent の App を入れるアカウントを選び、`sakekasu-kakeibo` だけに絞る
+3. Agent Space の capabilities から「コードレビューを有効にする」を選び、
+   リポジトリを繋いで Code review のトグルを入れる
+4. セキュリティ要件を入れる。マネージドの要件（認証・認可、監視、暗号化、シークレット管理、
+   情報保護）を有効にしたうえで、[docs/security-requirements.md](security-requirements.md)
+   の 8 件をカスタム要件として足す
 
-デプロイは OIDC に寄せてアクセスキーを置かない方針にしているが、ここだけは長命のキーを
-1 本置くことになる。Bedrock（OCR で既に使っている）+ OIDC で回せれば鍵は要らないが、
-この Action は指摘の絞り込みで Anthropic の SDK を直に叩いていて、Bedrock 経由の設定を
-通せない。置くキーの持ち主は Anthropic の API だけで、AWS のリソースには触れない。
+「1 GitHub 組織 = 1 AWS アカウント」の制約がある。同じ GitHub 組織を複数の AWS アカウントから
+繋ぐことはできない。
 
-鍵が未設定のうちはレビューを飛ばして警告だけ出す。入れ忘れで関係のない PR まで
-赤くならないようにしてある。
+### 覚えておくこと
 
-### 挙動
-
-- 指摘が出ても CI は赤にしない。まずはコメントだけ残して誤検知の量を見る。
-  止めるかどうかはそれから決める
-- 指摘ゼロの PR にはコメントを出さない
-- 同じ PR に何度 push しても 1 回しか走らない（Action 側がキャッシュに印を置いている）。
-  もう一度走らせたいときは、Actions の画面からジョブを再実行するのではなく、
-  `run-every-commit: 'true'` を一時的に入れる
-- `docs/**` や `.kiro/**` だけの PR では走らない
-
-### `uses` の SHA を上げる
-
-上流は `@main` しか出していないが、ここから実行されるコードが増えるのでコミット SHA で
-留めてある。上げるときは手で書き換える。
-
-```sh
-git ls-remote https://github.com/anthropics/claude-code-security-review.git refs/heads/main
-```
-
-### public にするなら
-
-この Action はプロンプトインジェクションに固くはなく、信用できる PR にだけ使うものとされている。
-今は private で fork も無く、PR を出すのは本人と Claude だけなので問題にならない。
-public にするなら、外部からの PR は承認後に走る設定（Settings → Actions → Fork pull request
-workflows）を先に確かめる。
+- コードレビューはプレビュー。コンソール側の作りは変わりうるので、上の手順は当てにしすぎない
+- **CI の関門にはならない。** `test.yml` の `paths` にワークフロー自身を入れて「関門を外す変更を
+  無検査で通さない」形にしているが、コードレビューはリポジトリの外で動くので同じ手が使えない。
+  コンソールでトグルを切れば、リポジトリ側には何の跡も残らずに止まる
+- 観点を変えるときは、`docs/security-requirements.md` を直してからコンソールに反映する。
+  コンソールだけ直すと、次に誰かが読んだときに食い違う
+- 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
 
 ## よくある詰まり
 
