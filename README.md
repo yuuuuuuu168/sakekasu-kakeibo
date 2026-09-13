@@ -217,6 +217,8 @@ npm test
 
 テストは `packages/core` に厚く置いている。CSV の列推定、店舗名の正規化、内訳分割の不変条件、レシートのマッチ、叱りの段階。ここが正しければ、残りは画面と配線になる。
 
+PR の差分は AWS Security Agent のコードレビューにもかける。設定は AWS のコンソール側で、リポジトリには置かない。見てほしい観点と入れ方は [docs/security-requirements.md](docs/security-requirements.md) と [docs/operations.md](docs/operations.md) にある。
+
 ## デザイン
 
 検証済みの既定パレットをそのまま使っている。上限の達成状況は status の 4 色（good / warning / serious / critical）で表し、色だけで意味を持たせないようアイコンと「余裕あり / 超過」の文字を必ず添える。金額の棒は単一色相の表現で、系列ごとの色分けはしない。
