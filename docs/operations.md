@@ -212,8 +212,14 @@ aws cognito-idp admin-create-user \
   --region ap-northeast-1
 ```
 
-仮パスワードがメールで届く。最初のサインインで新しいパスワードを求められるので、画面の
-指示どおりに設定する。認証アプリの MFA は Cognito 側で任意にしてある。
+仮パスワードがメールで届く（迷惑メールに入りやすい。下の「よくある詰まり」にある）。
+
+**初回サインインは 2 段ある。** 新しいパスワードを決めたあと、続けて認証アプリの登録に入る。
+MFA は必須にしてあるので飛ばせない。画面に QR と鍵が出るので、認証アプリ（Google
+Authenticator、1Password、iOS のパスワードなど TOTP に対応したもの）に登録して、
+表示された 6 桁を入れる。スマートフォンなら「認証アプリで開く」を押すほうが早い。
+
+2 回目以降は、ユーザー名とパスワードのあとに 6 桁を聞かれる。
 
 サインインはメールアドレスでもこの username でも通る。エイリアスにしてあるのはそのため。
 
@@ -433,6 +439,25 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 
 `verify` はクラウドセッション専用のプロファイル。手元では自分のプロファイルを使う。
 `scripts/aws-sso-login.sh` が「Local session detected」で止まるのも同じ理由。
+
+### 認証アプリを失くしてサインインできない
+
+MFA は必須なので、認証アプリを消してしまうと自分では戻せない。管理者の操作で登録を
+解除すると、次のサインインで登録の段からやり直せる。
+
+```sh
+aws cognito-idp admin-set-user-mfa-preference \
+  --user-pool-id ap-northeast-1_O1PQB99IK \
+  --username <ユーザー名> \
+  --software-token-mfa-settings Enabled=false,PreferredMfa=false \
+  --region ap-northeast-1
+```
+
+これで登録が外れる。UserPool 側は必須のままなので、次にサインインすると認証アプリの
+登録を求められ、新しい端末で登録し直せる。パスワードは変わらない。
+
+AWS に入る手段まで失うと手が無くなるので、認証アプリのバックアップ（1Password などの
+同期するもの、または復旧コードの保管）は用意しておく。
 
 ### 画面が「Failed to fetch」のまま。CORS を直しても消えない
 

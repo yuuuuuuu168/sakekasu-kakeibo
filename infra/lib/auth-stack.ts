@@ -21,7 +21,18 @@ export class AuthStack extends cdk.Stack {
       userPoolName: `sakekasu-kakeibo-${props.envName}`,
       selfSignUpEnabled: false,
       signInAliases: { email: true, username: true },
-      mfa: cognito.Mfa.OPTIONAL,
+      /*
+       * MFA は必須。二要素は認証アプリ（TOTP）だけで、SMS は使わない。SMS は電話番号を
+       * 預かることになり、SIM の乗っ取りでも抜かれる。
+       *
+       * 必須にすると、登録していないユーザーはサインインの途中で登録の段に入る。
+       * 画面側（src/features/auth/AuthGate.tsx）がその段を扱えないと、サインインする
+       * 手段が無くなる。両方を揃えて変えること。
+       *
+       * 端末を失くしたときは管理者が admin-set-user-mfa-preference で解除して
+       * 登録し直す。手順は docs/operations.md にある。
+       */
+      mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: { sms: false, otp: true },
       passwordPolicy: {
         minLength: 12,
