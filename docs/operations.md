@@ -343,19 +343,36 @@ PR の差分を AWS Security Agent に読ませ、指摘を PR のコメント�
 AWS で 1 本に寄せる判断をして入れていない。長命の API キーを Secrets に置かずに済むのも
 こちらの利点になる。
 
+### 先に確かめること
+
+sakekasu-builder が既に AWS Security Agent に繋がっている。**その連携がどの AWS アカウントから
+張られているかを先に見る。**
+
+「1 つの GitHub アカウント（組織）は 1 つの AWS アカウントにしか紐づけられない」制約があるため。
+GitHub App は 1 アカウントに 1 回しか入れられず、そのインストールが AWS アカウント 1 つに
+結びつく。builder も kakeibo も同じ `yuuuuuuu168` の下にあるので、
+
+- builder の連携が 232791540685 から張ってあるなら、そのまま kakeibo を足せる
+- 別の AWS アカウントから張ってあるなら、そちらに寄せるしかない。kakeibo 用に
+  別アカウントから繋ぐことはできない
+
+デプロイ先が同じアカウントであることと、Security Agent の連携をどのアカウントから張ったかは
+別の話なので、コンソールで実際に見る。
+
 ### 入れ方
 
-1. AWS Security Agent のコンソールで Agent Space を作る
-2. Integrations → Add integration → GitHub → Install and authorize。GitHub 側で
-   AWS Security Agent の App を入れるアカウントを選び、`sakekasu-kakeibo` だけに絞る
+1. **Agent Space を kakeibo 用に新しく作る。** builder と同じ Agent Space には入れない。
+   コードレビューの設定とセキュリティ要件は Agent Space 単位で、その中のコードレビューを
+   有効にした全リポジトリに効く。[docs/security-requirements.md](security-requirements.md)
+   の 8 件は kakeibo 固有（`sub` によるスコープ、レシート画像の S3、Bedrock の IAM）なので、
+   同居させると builder にも同じ要件が当たる
+2. **GitHub App のリポジトリ選択に `sakekasu-kakeibo` を足す。** builder だけを選んで
+   入れてあるなら kakeibo は見えない。自動では増えない。App 自体の入れ直しは要らない
+   （新しく繋ぐ場合は Integrations → Add integration → GitHub → Install and authorize）
 3. Agent Space の capabilities から「コードレビューを有効にする」を選び、
    リポジトリを繋いで Code review のトグルを入れる
 4. セキュリティ要件を入れる。マネージドの要件（認証・認可、監視、暗号化、シークレット管理、
-   情報保護）を有効にしたうえで、[docs/security-requirements.md](security-requirements.md)
-   の 8 件をカスタム要件として足す
-
-「1 GitHub 組織 = 1 AWS アカウント」の制約がある。同じ GitHub 組織を複数の AWS アカウントから
-繋ぐことはできない。
+   情報保護）を有効にしたうえで、`docs/security-requirements.md` の 8 件をカスタム要件として足す
 
 ### 覚えておくこと
 
