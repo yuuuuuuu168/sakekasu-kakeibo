@@ -414,6 +414,17 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
   `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
 - 同じ PR に続けて push したら、前のレビューは打ち切る（`concurrency`）
 - AWS Security Agent と役割が分かれている。片方はセキュリティ、こちらは汎用
+- **`claude-review.yml` 自身を変える PR では、レビュー（Claude の実行）だけがスキップされる。**
+  claude-code-action が、PR のワークフローを main の版と突き合わせ、違えば自分の実行を止める
+  （改ざん防止）。効くのはこの Action の中だけで、**ジョブ自体は動く**。同一リポジトリの
+  ブランチ PR では、checkout もトークンを見る step も、シークレット（`GITHUB_TOKEN`、
+  `id-token`、`CLAUDE_CODE_OAUTH_TOKEN`）付きで走る。つまりワークフローを書き換える PR が
+  安全になるわけではない。**信用できる PR にだけ使う**という前提は変わらない（このリポジトリは
+  private で fork も無く、PR を出すのは本人と Claude だけ）。fork からの PR にはシークレットが
+  渡らないので、鍵の有無を見る step でそのまま飛ぶ。track_progress の投稿を含む本来の動きは、
+  main にマージされて初めて次の PR から効く
+- `permissions` の `id-token: write` は、この検証とは別。claude-code-action が GitHub App
+  トークンを OIDC で取得するのに要る
 
 ### `uses` の SHA を上げる
 
