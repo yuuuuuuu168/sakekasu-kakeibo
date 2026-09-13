@@ -332,6 +332,56 @@ cd infra
 npx cdk diff -c env=dev --profile sakekasu-builder
 ```
 
+## PR のセキュリティレビュー
+
+`.github/workflows/security-review.yml` が PR ごとに 1 回走り、差分をセキュリティの観点で
+読ませて、指摘を PR のコメントに残す。使っているのは
+[anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review)。
+パターン照合の SAST ではないので、`sub` のスコープ漏れや IAM の広げすぎのような、
+文脈が要る指摘が出る。
+
+見てほしい観点は `.github/security-scan-instructions.md` に書いてある。誤検知が続くものは、
+この「指摘しなくてよいもの」の節に足していく。
+
+### 鍵を置く
+
+この Action は Anthropic の API キーを要る。リポジトリの Settings → Secrets and variables →
+Actions に `CLAUDE_API_KEY` という名前で入れる。
+
+デプロイは OIDC に寄せてアクセスキーを置かない方針にしているが、ここだけは長命のキーを
+1 本置くことになる。Bedrock（OCR で既に使っている）+ OIDC で回せれば鍵は要らないが、
+この Action は指摘の絞り込みで Anthropic の SDK を直に叩いていて、Bedrock 経由の設定を
+通せない。置くキーの持ち主は Anthropic の API だけで、AWS のリソースには触れない。
+
+鍵が未設定のうちはレビューを飛ばして警告だけ出す。入れ忘れで関係のない PR まで
+赤くならないようにしてある。
+
+### 挙動
+
+- 指摘が出ても CI は赤にしない。まずはコメントだけ残して誤検知の量を見る。
+  止めるかどうかはそれから決める
+- 指摘ゼロの PR にはコメントを出さない
+- 同じ PR に何度 push しても 1 回しか走らない（Action 側がキャッシュに印を置いている）。
+  もう一度走らせたいときは、Actions の画面からジョブを再実行するのではなく、
+  `run-every-commit: 'true'` を一時的に入れる
+- `docs/**` や `.kiro/**` だけの PR では走らない
+
+### `uses` の SHA を上げる
+
+上流は `@main` しか出していないが、ここから実行されるコードが増えるのでコミット SHA で
+留めてある。上げるときは手で書き換える。
+
+```sh
+git ls-remote https://github.com/anthropics/claude-code-security-review.git refs/heads/main
+```
+
+### public にするなら
+
+この Action はプロンプトインジェクションに固くはなく、信用できる PR にだけ使うものとされている。
+今は private で fork も無く、PR を出すのは本人と Claude だけなので問題にならない。
+public にするなら、外部からの PR は承認後に走る設定（Settings → Actions → Fork pull request
+workflows）を先に確かめる。
+
 ## よくある詰まり
 
 ### `npx canceled due to missing packages` で `Failed to bundle asset`

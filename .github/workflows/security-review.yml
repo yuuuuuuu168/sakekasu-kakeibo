@@ -1,0 +1,66 @@
+# PR の差分をセキュリティの観点で読ませ、指摘を PR のコメントとして残す。
+#
+# 指摘が出ても CI は赤にしない。パターン照合ではなく意味を読ませる仕組みなので、
+# まずはコメントだけ残して誤検知の量を見る。止めるかどうかはそれから決める。
+#
+# paths にワークフロー自身を入れているのは test.yml と同じ理由。この関門を外す変更そのものを
+# 無検査で通さないため。docs や .kiro だけの PR では走らせない。
+name: security-review
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/**'
+      - '.github/security-scan-instructions.md'
+
+permissions:
+  contents: read
+  pull-requests: write # 指摘をコメントで残すのに要る
+
+jobs:
+  security:
+    name: 差分のセキュリティレビュー
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      # 鍵が無いときは落とさずに飛ばす。Action は鍵が空だと exit 1 で終わるので、
+      # 設定を入れるまでの間、関係のない PR まで赤くなってしまう。
+      #
+      # この Action は Anthropic の API を直に叩く（指摘の絞り込みに SDK を使っている）ため、
+      # Bedrock + OIDC では回せない。デプロイと違い、ここだけは長命の API キーを 1 本置く。
+      # 鍵が読めるのはこのワークフローの中だけで、AWS のリソースには触れない。
+      - name: 鍵の有無を見る
+        id: key
+        env:
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CLAUDE_API_KEY:-}" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::secrets.CLAUDE_API_KEY が未設定のため、セキュリティレビューを飛ばしました'
+          fi
+
+      # @main ではなくコミット SHA で留める。ここから実行されるコードが増えるので、
+      # 上流が変わった瞬間に中身が入れ替わるのは避ける。更新は手で SHA を上げる。
+      - name: セキュリティレビュー
+        if: steps.key.outputs.present == 'true'
+        uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda # main (2026-09-13 時点)
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          # Action の既定は古い世代のままなので現行のものを指定する
+          claude-model: claude-opus-5
+          comment-pr: 'true'
+          exclude-directories: docs,.kiro
+          # Action は自分のディレクトリへ移動してから走るので、絶対パスで渡す
+          custom-security-scan-instructions: ${{ github.workspace }}/.github/security-scan-instructions.md
