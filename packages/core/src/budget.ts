@@ -1,7 +1,6 @@
-import { categoryLabel } from './categories';
+import { categoryLabel, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
-import { UNCATEGORIZED_ID } from './categories';
 import type { Budget, Category, Transaction } from './types';
 
 export type CategoryTotal = {
