@@ -45,6 +45,9 @@ inclusion: always
 UI コンポーネントのライブラリとルータは入れていない。画面が 6 枚しかないため。
 ルータはハッシュだけで、CloudFront のリライト規則を要らなくしている。
 
+上部のタブは使う順に レシート / 明細 / 明細取り込み / ダッシュボード / レポート の 5 枚。
+既定の画面（`#/`）はレシート。カテゴリと上限の設定は右上の歯車（`#/settings`）の中にある。
+
 ## プロジェクト構成
 
 ```
@@ -55,8 +58,8 @@ packages/core/     # AWS に依存しない純粋関数。画面と Lambda の�
   src/budget.ts    # 月次の集計
   src/report.ts    # 叱りの生成
 src/
-  features/        # 機能ごとのディレクトリ（auth / dashboard / import /
-                   # transactions / receipts / categories / report）
+  features/        # 機能ごとのディレクトリ（auth / receipts / transactions / import /
+                   # dashboard / report / categories / settings）
   api/             # API クライアント（remote / local の 2 実装）とストア
   components/ui/   # 共通コンポーネント
 infra/
