@@ -65,6 +65,10 @@ jobs:
         if: steps.token.outputs.present == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # prompt だけだと agent モードになり、レビューは最終メッセージに出るだけで PR に
+          # 投稿されない（コメント用ツールが立ち上がらず権限拒否になる）。track_progress で
+          # トラッキングコメントを立て、そこにレビュー結果を書き込ませる。
+          track_progress: true
           prompt: |
             この pull request の差分をレビューしてください。セキュリティは別の仕組み（AWS
             Security Agent）が見るので、ここでは次を中心に見てください。
