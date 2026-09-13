@@ -414,6 +414,10 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
   `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
 - 同じ PR に続けて push したら、前のレビューは打ち切る（`concurrency`）
 - AWS Security Agent と役割が分かれている。片方はセキュリティ、こちらは汎用
+- **`claude-review.yml` 自身を変える PR ではレビューが走らない。** Action は、PR の
+  ワークフローが main の版と一致していることを確かめてから動く（改ざん防止）。ワークフロー
+  を直す PR ではスキップ（緑のまま）になり、main にマージされて初めて次の PR から効く。
+  `permissions` に `id-token: write` が要るのもこのため（GitHub App トークンを OIDC で取る）
 
 ### `uses` の SHA を上げる
 
