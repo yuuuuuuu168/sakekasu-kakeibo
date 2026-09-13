@@ -85,7 +85,7 @@ export function DashboardPage() {
         </div>
       )}
 
-      <Card title="カテゴリ別" action={<a href="#/categories" className="text-xs text-accent">上限を決める</a>}>
+      <Card title="カテゴリ別" action={<a href="#/settings" className="text-xs text-accent">上限を決める</a>}>
         {rows.length === 0 ? (
           <EmptyState title="この月の明細がありません">
             <a href="#/import" className="text-accent">
