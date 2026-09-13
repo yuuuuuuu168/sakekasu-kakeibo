@@ -32,6 +32,7 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write # 指摘をコメントで残すのに要る
+  id-token: write # claude-code-action が GitHub App トークンを OIDC で取得するのに要る
 
 jobs:
   review:
