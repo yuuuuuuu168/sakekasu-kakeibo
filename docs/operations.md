@@ -384,6 +384,45 @@ GitHub App は 1 アカウントに 1 回しか入れられず、そのインス
   コンソールだけ直すと、次に誰かが読んだときに食い違う
 - 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
 
+## PR の汎用コードレビュー（claude-code-action）
+
+セキュリティは上の AWS Security Agent が見る。その担当外（ロジックのバグ、可読性、設計、
+CLAUDE.md や steering の方針との食い違い）を埋めるのが `.github/workflows/claude-review.yml`。
+[anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) を使い、
+PR の差分をレビューして指摘を PR のコメントに残す。CI は赤にしない。
+
+**課金は Claude の Max 契約枠から引く。** Bedrock も従量課金の API キーも通さない。そのために
+OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「長命の鍵を置かない」とは折り合いが
+つかないが、これは AWS の権限に触れる鍵ではなく Claude の契約に紐づくトークンで、従量課金も
+発生しない、という判断で置いている。
+
+### 鍵を置く
+
+手元の Claude Code で `claude setup-token` を実行する。ブラウザで OAuth を通すと、長命の
+トークンが 1 度だけ表示される。それを repo の Settings → Secrets and variables → Actions に
+`CLAUDE_CODE_OAUTH_TOKEN` という名前で入れる。
+
+- トークンは atsuhisa の Max 契約に紐づく。CI のレビューは、対話で Claude Code を使うときと
+  同じ枠（5 時間・週次の上限）を食う。PR を出すのが本人と Claude だけなので量は少ない
+- ログアウトや期限切れで無効になることがある。そのときは `claude setup-token` で取り直して
+  Secret を更新する
+
+### 挙動
+
+- 指摘が出ても CI は赤にしない。コメントを残すだけ
+- 走らせるのは `src` / `packages` / `infra` と設定ファイル、それにワークフロー自身。
+  `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
+- 同じ PR に続けて push したら、前のレビューは打ち切る（`concurrency`）
+- AWS Security Agent と役割が分かれている。片方はセキュリティ、こちらは汎用
+
+### `uses` の SHA を上げる
+
+`@v1` タグの固定 SHA で留めてある。上げるときは手で書き換える。
+
+```sh
+git ls-remote https://github.com/anthropics/claude-code-action.git refs/tags/v1
+```
+
 ## よくある詰まり
 
 ### `npx canceled due to missing packages` で `Failed to bundle asset`

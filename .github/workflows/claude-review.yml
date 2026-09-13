@@ -1,0 +1,79 @@
+# PR の差分を Claude に汎用レビューさせる（バグ・可読性・設計）。
+#
+# セキュリティは AWS Security Agent（コンソール側、AWS 側で稼働）が見る。こちらはその担当外を
+# 埋めるためのもので、役割を分けている。指摘は PR のコメントに残す。CI は赤にしない。
+#
+# 課金は Claude の Max 契約枠から引く。secrets.CLAUDE_CODE_OAUTH_TOKEN を使うため、AWS の
+# Bedrock も従量課金の API キーも通らない。トークンは `claude setup-token` で作る（下の docs 参照）。
+#
+# paths に自身を入れているのは test.yml と同じ理由。この関門を外す変更そのものを無検査で
+# 通さないため。docs や .kiro だけの PR では走らせない（Max の枠を無駄に使わない）。
+name: claude-review
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'packages/**'
+      - 'infra/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'eslint.config.js'
+      - 'tsconfig*.json'
+      - 'vite.config.ts'
+      - '.github/workflows/**'
+
+# 同じ PR に続けて push したら、前のレビューは打ち切る。Max の枠を二重に使わない。
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # 指摘をコメントで残すのに要る
+
+jobs:
+  review:
+    name: 差分の汎用レビュー
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      # トークンが無いときは落とさずに飛ばす。設定を入れるまでの間、関係のない PR まで
+      # 赤くならないようにする（このワークフローを入れた PR 自身も含む）。
+      - name: トークンの有無を見る
+        id: token
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::secrets.CLAUDE_CODE_OAUTH_TOKEN が未設定のため、レビューを飛ばしました'
+          fi
+
+      # v1 タグの固定 SHA で留める。ここから実行されるコードが増えるので、上流が動いても
+      # 中身が入れ替わらないようにする。更新は手で SHA を上げる（docs/operations.md 参照）。
+      - uses: anthropics/claude-code-action@a73a99cefc6aea0126f858804cd22a7a44e11924 # v1
+        if: steps.token.outputs.present == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            この pull request の差分をレビューしてください。セキュリティは別の仕組み（AWS
+            Security Agent）が見るので、ここでは次を中心に見てください。
+
+            - ロジックのバグ、境界条件の抜け、例外・エラー時の扱い
+            - 可読性と命名。周りのコードの書き方に揃っているか
+            - CLAUDE.md と .kiro/steering/ の方針に反していないか（内訳の合計が明細の
+              金額に一致する不変条件、叱りの文面は固定テンプレートから組む、カスタム
+              リソースを使わない、など）
+            - packages/core を触った変更が画面と Lambda の両方に与える影響
+
+            指摘は根拠とともに簡潔に。問題が無ければ「指摘なし」とだけ返してください。
+            重箱の隅は控えめに。
