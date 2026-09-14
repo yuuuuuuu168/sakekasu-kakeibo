@@ -35,6 +35,7 @@ const SK = {
   transaction: (id: string) => `TXN#${id}`,
   categories: 'CONFIG#categories',
   rules: 'CONFIG#rules',
+  recurring: 'CONFIG#recurring',
   budget: (month: string) => `BUDGET#${month}`,
   mapping: (sourceId: string) => `MAPPING#${sourceId}`,
   receipt: (id: string) => `RECEIPT#${id}`,
@@ -79,6 +80,10 @@ async function route(sub: string, method: string, segments: string[], body: Json
 
   if (method === 'PUT' && resource === 'rules') {
     return putConfig(sub, SK.rules, 'rules', body);
+  }
+
+  if (method === 'PUT' && resource === 'recurring') {
+    return putConfig(sub, SK.recurring, 'recurring', body);
   }
 
   if (method === 'PUT' && resource === 'budgets' && param) {
@@ -144,6 +149,7 @@ async function loadSnapshot(sub: string) {
     transactions: [] as unknown[],
     receipts: [] as unknown[],
     mappings: [] as unknown[],
+    recurring: [] as unknown[],
   };
 
   for (const item of items) {
@@ -151,6 +157,7 @@ async function loadSnapshot(sub: string) {
     if (sk.startsWith('TXN#')) snapshot.transactions.push(strip(item));
     else if (sk === SK.categories) snapshot.categories = asArray(item.categories);
     else if (sk === SK.rules) snapshot.rules = asArray(item.rules);
+    else if (sk === SK.recurring) snapshot.recurring = asArray(item.recurring);
     else if (sk.startsWith('BUDGET#')) snapshot.budgets.push(strip(item));
     else if (sk.startsWith('RECEIPT#')) snapshot.receipts.push(strip(item));
     else if (sk.startsWith('MAPPING#')) snapshot.mappings.push(strip(item));

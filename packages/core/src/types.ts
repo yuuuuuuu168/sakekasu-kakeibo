@@ -92,6 +92,36 @@ export type Budget = {
   limits: Record<string, number>;
 };
 
+/**
+ * 先に分かっている定期的な支払い。サブスク、分割、奨学金。
+ * ここから明細は作らない（取り込んだ明細と必ず重なるため）。着地見込みと残り回数の材料。
+ */
+export type RecurringPayment = {
+  id: string;
+  /** 「Netflix」「iPhone 16 分割」など、画面に出す名前 */
+  label: string;
+  /** 円。毎回同じ額を前提にする。variableAmount を立てたときだけ目安 */
+  amount: number;
+  categoryId: string;
+  /** 引き落とし日。その月に無い日は月末に丸める */
+  dayOfMonth: number;
+  /** 初回の月。YYYY-MM */
+  startMonth: string;
+  /** 何か月おきか。既定は 1（毎月）。年払いのサブスクは 12 */
+  intervalMonths?: number;
+  /** 終わりが決まっているものだけ入れる。回数と最終月は早い方が効く */
+  totalCount?: number;
+  endMonth?: string;
+  /** 総額が決まっているもの（奨学金など）。残額の表示に使う */
+  totalAmount?: number;
+  /** 明細に出る店舗名。取り込んだ明細と突き合わせる手がかり。空なら label で照合する */
+  merchantPattern?: string;
+  /** 電気代のように毎回額が動くもの。金額は目安になり、突き合わせで額を見ない */
+  variableAmount?: boolean;
+  /** 停止したもの。見込みからは外すが、過去の月を再現できるよう残す */
+  archived?: boolean;
+};
+
 /** CSV の列とその意味の対応 */
 export type ColumnMapping = {
   /** ヘッダ行の位置。ヘッダが無ければ -1 */

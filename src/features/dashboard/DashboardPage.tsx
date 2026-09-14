@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeftRight, Copy, ReceiptText, TriangleAlert } from 'lucide-react';
+import { ArrowLeftRight, CalendarClock, Check, Copy, ReceiptText, TriangleAlert } from 'lucide-react';
 import {
   TRANSFER_ID,
   UNCATEGORIZED_ID,
@@ -8,11 +8,12 @@ import {
   findMisfiledTransfers,
   formatYen,
   monthOf,
+  recurringStatus,
   topMerchants,
   transactionsOfMonth,
 } from '@kakeibo/core';
 import { useStore } from '../../api/store';
-import { Button, Card, EmptyState } from '../../components/ui/primitives';
+import { Badge, Button, Card, EmptyState } from '../../components/ui/primitives';
 import { Meter } from '../../components/ui/Meter';
 import { StatTile } from '../../components/ui/StatTile';
 import { MonthPicker } from '../../components/ui/MonthPicker';
@@ -31,6 +32,8 @@ export function DashboardPage() {
         categories: snapshot.categories,
         budget: snapshot.budgets.find((budget) => budget.month === month),
         today: todayIso(),
+        // 登録済みの定期支払いを渡すと、その月のまだ発生していない分が着地見込みに乗る
+        recurring: snapshot.recurring,
       }),
     [month, snapshot],
   );
@@ -66,7 +69,13 @@ export function DashboardPage() {
         <StatTile
           label="月末の着地見込み"
           value={<span className="tnum">{formatYen(summary.projected)}</span>}
-          note={summary.limitTotal > 0 ? `上限総額 ${formatYen(summary.limitTotal)}` : '上限が未設定'}
+          note={
+            summary.recurringRemaining > 0
+              ? `うち未発生の定期 ${formatYen(summary.recurringRemaining)}`
+              : summary.limitTotal > 0
+                ? `上限総額 ${formatYen(summary.limitTotal)}`
+                : '上限が未設定'
+          }
           tone={summary.limitTotal > 0 && summary.projected > summary.limitTotal ? 'critical' : 'neutral'}
         />
         <StatTile
@@ -171,6 +180,47 @@ export function DashboardPage() {
           </ul>
         )}
       </Card>
+
+      {summary.recurringOccurrences.length > 0 && (
+        <Card
+          title="今月の定期的な支払い"
+          action={
+            <a href="#/settings" className="text-xs text-accent">
+              登録を直す
+            </a>
+          }
+        >
+          <ul className="divide-y divide-grid">
+            {summary.recurringOccurrences.map((occurrence) => {
+              const payment = snapshot.recurring.find((item) => item.id === occurrence.paymentId);
+              const status = payment ? recurringStatus(payment, todayIso()) : undefined;
+              return (
+                <li key={occurrence.paymentId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                  {occurrence.transactionId ? (
+                    <Check size={16} className="text-success-text" aria-label="取り込み済み" />
+                  ) : (
+                    <CalendarClock size={16} className="text-ink-2" aria-label="これから" />
+                  )}
+                  <span className="text-sm text-ink">{occurrence.label}</span>
+                  <span className="text-xs text-muted">{occurrence.date}</span>
+                  {status?.remainingCount !== undefined && (
+                    <Badge tone="neutral">
+                      あと {status.remainingCount} 回
+                      {status.remainingAmount !== undefined && ` / ${formatYen(status.remainingAmount)}`}
+                    </Badge>
+                  )}
+                  <span className="flex-1" />
+                  <span className="tnum text-sm font-medium text-ink">{formatYen(occurrence.amount)}</span>
+                  <span className="text-xs text-muted">{occurrence.transactionId ? '取り込み済み' : '見込み'}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-3 text-xs text-muted">
+            取り込み済みの分は実績に入っています。着地見込みでは二重に数えず、見込みの分だけを足しています。
+          </p>
+        </Card>
+      )}
 
       {merchants.length > 0 && (
         <Card title="よく使った店">

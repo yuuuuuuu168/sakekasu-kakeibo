@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import fc from 'fast-check';
 import { aggregateMonth, carryOverBudget, totalsByCategory, transactionsOfMonth } from '../budget';
-import { SEED_CATEGORIES } from '../categories';
-import type { Budget, Transaction } from '../types';
+import { SEED_CATEGORIES, TRANSFER_ID } from '../categories';
+import type { Budget, RecurringPayment, Transaction } from '../types';
 
 function txn(id: string, date: string, amount: number, splits: [string, number][], needsDetail = false): Transaction {
   return {
@@ -76,6 +77,144 @@ describe('aggregateMonth', () => {
     // 非有限な数が混ざっていないこと。DynamoDB / JSON はこれを弾く
     for (const row of summary.categories) expect(Number.isFinite(row.usage)).toBe(true);
     expect(JSON.stringify(summary)).not.toContain('null');
+  });
+});
+
+describe('定期支払いと着地見込み', () => {
+  const NETFLIX: RecurringPayment = {
+    id: 'r1',
+    label: 'Netflix',
+    amount: 1590,
+    categoryId: 'subscription',
+    dayOfMonth: 25,
+    startMonth: '2026-01',
+  };
+
+  it('まだ発生していない分を日割りとは別枠で足す', () => {
+    const base = aggregateMonth({ month: '2026-09', transactions: TRANSACTIONS, categories: SEED_CATEGORIES, budget: BUDGET, today: '2026-09-15' });
+    const withRecurring = aggregateMonth({
+      month: '2026-09',
+      transactions: TRANSACTIONS,
+      categories: SEED_CATEGORIES,
+      budget: BUDGET,
+      today: '2026-09-15',
+      recurring: [NETFLIX],
+    });
+    expect(withRecurring.projected).toBe(base.projected + 1590);
+    expect(withRecurring.recurringRemaining).toBe(1590);
+    expect(withRecurring.categories.find((row) => row.categoryId === 'subscription')?.recurring).toBe(1590);
+  });
+
+  it('既に取り込まれている定期支払いは二重に数えない', () => {
+    const paid = txn('sub', '2026-09-25', 1590, [['subscription', 1590]]);
+    paid.rawMerchant = 'NETFLIX.COM';
+    paid.merchant = 'NETFLIXCOM';
+    const transactions = [...TRANSACTIONS, paid];
+
+    const summary = aggregateMonth({
+      month: '2026-09',
+      transactions,
+      categories: SEED_CATEGORIES,
+      budget: BUDGET,
+      today: '2026-09-26',
+      recurring: [NETFLIX],
+    });
+
+    // 実績に入っている 1,590 円はペースで伸ばさず、そのまま 1 回だけ数える
+    const variable = 5300;
+    const pace = 30 / 26;
+    expect(summary.projected).toBe(Math.round(variable * pace) + 1590);
+    expect(summary.recurringTotal).toBe(1590);
+    expect(summary.recurringRemaining).toBe(0);
+  });
+
+  it('停止した定期支払いは見込みに入らない', () => {
+    const summary = aggregateMonth({
+      month: '2026-09',
+      transactions: TRANSACTIONS,
+      categories: SEED_CATEGORIES,
+      today: '2026-09-15',
+      recurring: [{ ...NETFLIX, archived: true }],
+    });
+    expect(summary.recurringTotal).toBe(0);
+  });
+
+  it('終わった月以降は見込みに出ない', () => {
+    const ended: RecurringPayment = { ...NETFLIX, totalCount: 3 };
+    const summary = aggregateMonth({
+      month: '2026-09',
+      transactions: TRANSACTIONS,
+      categories: SEED_CATEGORIES,
+      today: '2026-09-15',
+      recurring: [ended],
+    });
+    expect(summary.recurringTotal).toBe(0);
+  });
+
+  it('定期支払いを渡さなければ従来どおりの日割りのまま', () => {
+    const base = aggregateMonth({ month: '2026-09', transactions: TRANSACTIONS, categories: SEED_CATEGORIES, budget: BUDGET, today: '2026-09-15' });
+    expect(base.projected).toBe(Math.round(base.total * (30 / 15)));
+    expect(base.recurringTotal).toBe(0);
+  });
+
+  it('チャージの明細は定期支払いに当てない', () => {
+    // 名前が当たるチャージ明細があっても、支出ではないので突き合わせの相手にしない
+    const charge = txn('charge', '2026-09-25', 1590, [[TRANSFER_ID, 1590]]);
+    charge.rawMerchant = 'NETFLIX.COM';
+    charge.merchant = 'NETFLIXCOM';
+
+    const summary = aggregateMonth({
+      month: '2026-09',
+      transactions: [...TRANSACTIONS, charge],
+      categories: SEED_CATEGORIES,
+      today: '2026-09-26',
+      recurring: [NETFLIX],
+    });
+
+    expect(summary.recurringOccurrences[0].transactionId).toBeUndefined();
+    expect(summary.recurringRemaining).toBe(1590);
+    expect(summary.transferTotal).toBe(1590);
+  });
+
+  it('振替カテゴリで登録された定期支払いは見込みに乗らない', () => {
+    const summary = aggregateMonth({
+      month: '2026-09',
+      transactions: TRANSACTIONS,
+      categories: SEED_CATEGORIES,
+      today: '2026-09-15',
+      recurring: [{ ...NETFLIX, categoryId: TRANSFER_ID }],
+    });
+    expect(summary.recurringRemaining).toBe(0);
+    expect(summary.categories.some((row) => row.categoryId === TRANSFER_ID)).toBe(false);
+  });
+
+  it('定期支払いの分を二重に数えない（プロパティ）', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 50_000 }),
+        fc.integer({ min: 1, max: 28 }),
+        fc.integer({ min: 1, max: 28 }),
+        fc.boolean(),
+        (amount, dayOfMonth, todayDay, imported) => {
+          const payment: RecurringPayment = { ...NETFLIX, amount, dayOfMonth };
+          // 取り込み済みなら、同じ支払いが明細としても入っている状況
+          const paid = txn('sub', `2026-09-${String(dayOfMonth).padStart(2, '0')}`, amount, [['subscription', amount]]);
+          paid.rawMerchant = 'NETFLIX.COM';
+          paid.merchant = 'NETFLIXCOM';
+          const transactions = imported ? [...TRANSACTIONS, paid] : TRANSACTIONS;
+          const today = `2026-09-${String(todayDay).padStart(2, '0')}`;
+
+          const summary = aggregateMonth({ month: '2026-09', transactions, categories: SEED_CATEGORIES, today, recurring: [payment] });
+          const bare = aggregateMonth({ month: '2026-09', transactions: TRANSACTIONS, categories: SEED_CATEGORIES, today });
+
+          // 定期支払いの分はちょうど 1 回。日割りで伸ばす部分は定期支払いを含まない
+          expect(summary.projected).toBe(bare.projected + amount);
+          expect(summary.recurringTotal).toBe(amount);
+          expect(summary.recurringRemaining).toBe(imported ? 0 : amount);
+          expect(summary.projected).toBeGreaterThanOrEqual(summary.total);
+        },
+      ),
+    );
   });
 });
 

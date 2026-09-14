@@ -6,6 +6,7 @@ import {
   type Category,
   type CategoryRule,
   type Receipt,
+  type RecurringPayment,
   type Transaction,
 } from '@kakeibo/core';
 import { api } from './index';
@@ -23,6 +24,7 @@ type Store = {
   removeTransaction: (id: string) => Promise<void>;
   saveCategories: (categories: Category[]) => Promise<void>;
   saveRules: (rules: CategoryRule[]) => Promise<void>;
+  saveRecurring: (recurring: RecurringPayment[]) => Promise<void>;
   saveBudget: (budget: Budget) => Promise<void>;
   saveMapping: (mapping: SavedMapping) => Promise<void>;
   saveReceipt: (receipt: Receipt) => Promise<void>;
@@ -36,6 +38,7 @@ const EMPTY: Snapshot = {
   transactions: [],
   receipts: [],
   mappings: [],
+  recurring: [],
 };
 
 const StoreContext = createContext<Store | undefined>(undefined);
@@ -106,6 +109,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         commit(
           () => api.putRules(rules),
           (current) => ({ ...current, rules }),
+        ),
+      saveRecurring: (recurring) =>
+        commit(
+          () => api.putRecurring(recurring),
+          (current) => ({ ...current, recurring }),
         ),
       saveBudget: (budget) =>
         commit(

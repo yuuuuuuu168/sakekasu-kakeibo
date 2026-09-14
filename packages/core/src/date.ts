@@ -65,9 +65,28 @@ export function daysInMonth(month: string): number {
   return new Date(Date.UTC(year, mon, 0)).getUTCDate();
 }
 
-export function previousMonth(month: string): string {
+/** 月を前後に動かす。YYYY-MM を跨いで年も繰り上がる */
+export function addMonths(month: string, delta: number): string {
   const [year, mon] = month.split('-').map(Number);
-  return mon === 1 ? `${year - 1}-12` : `${year}-${pad(mon - 1)}`;
+  const date = new Date(Date.UTC(year, mon - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}`;
+}
+
+/** from から to までの月数。to が前なら負 */
+export function monthDiff(from: string, to: string): number {
+  const [fromYear, fromMon] = from.split('-').map(Number);
+  const [toYear, toMon] = to.split('-').map(Number);
+  return (toYear - fromYear) * 12 + (toMon - fromMon);
+}
+
+/** 月と日から YYYY-MM-DD を作る。その月に無い日（2 月の 31 日）は月末に丸める */
+export function dateInMonth(month: string, day: number): string {
+  const clamped = Math.min(Math.max(1, Math.trunc(day)), daysInMonth(month));
+  return `${month}-${pad(clamped)}`;
+}
+
+export function previousMonth(month: string): string {
+  return addMonths(month, -1);
 }
 
 /** 月の何日目かを日数で返す。当月なら今日、過去の月ならその月の日数 */

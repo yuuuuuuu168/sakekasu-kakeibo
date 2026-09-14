@@ -1,3 +1,5 @@
+import { addMonths } from '@kakeibo/core';
+
 export function todayIso(): string {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -9,11 +11,8 @@ export function currentMonth(): string {
   return todayIso().slice(0, 7);
 }
 
-export function shiftMonth(month: string, delta: number): string {
-  const [year, mon] = month.split('-').map(Number);
-  const date = new Date(Date.UTC(year, mon - 1 + delta, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-}
+/** 月をずらす。中身は packages/core の addMonths（Lambda と同じ計算を 2 回書かない） */
+export const shiftMonth = addMonths;
 
 export function formatMonth(month: string): string {
   const [year, mon] = month.split('-');

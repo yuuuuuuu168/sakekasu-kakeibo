@@ -4,7 +4,7 @@ import { SEED_CATEGORIES, TRANSFER_ID, allRules, type CategoryRule, type Transac
 import type { Snapshot } from '../../../api/types';
 
 const store = vi.hoisted(() => ({
-  snapshot: { categories: [], rules: [], budgets: [], transactions: [], receipts: [], mappings: [] } as Snapshot,
+  snapshot: { categories: [], rules: [], budgets: [], transactions: [], receipts: [], mappings: [], recurring: [] } as Snapshot,
   rules: [] as CategoryRule[],
   saveTransaction: vi.fn(async (_txn: Transaction) => undefined),
   removeTransaction: vi.fn(async (_id: string) => undefined),
