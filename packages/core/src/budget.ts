@@ -72,7 +72,10 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
       label: categoryLabel(categories, categoryId),
       actual,
       limit,
-      usage: ratio(actual, limit),
+      // 上限が無いカテゴリでは消化率は定義できない。ratio は 0 除算を Infinity で返すが、
+      // Infinity は月次レポートの保存（DynamoDB）で弾かれて throw になるため、有限の 0 に
+      // する。画面は limit<=0 を「上限なし」として usage を読まず、超過は over が持つ。
+      usage: limit > 0 ? ratio(actual, limit) : 0,
       over: Math.max(0, actual - limit),
       projected: Math.round(actual * pace),
     };
