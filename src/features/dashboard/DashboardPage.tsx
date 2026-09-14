@@ -1,6 +1,16 @@
 import { useMemo, useState } from 'react';
-import { Copy, ReceiptText, TriangleAlert } from 'lucide-react';
-import { UNCATEGORIZED_ID, aggregateMonth, findDuplicates, formatYen, monthOf, topMerchants, transactionsOfMonth } from '@kakeibo/core';
+import { ArrowLeftRight, Copy, ReceiptText, TriangleAlert } from 'lucide-react';
+import {
+  TRANSFER_ID,
+  UNCATEGORIZED_ID,
+  aggregateMonth,
+  findDuplicates,
+  findMisfiledTransfers,
+  formatYen,
+  monthOf,
+  topMerchants,
+  transactionsOfMonth,
+} from '@kakeibo/core';
 import { useStore } from '../../api/store';
 import { Button, Card, EmptyState } from '../../components/ui/primitives';
 import { Meter } from '../../components/ui/Meter';
@@ -10,7 +20,7 @@ import { currentMonth, todayIso } from '../../lib/month';
 import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER, navigate } from '../../lib/router';
 
 export function DashboardPage() {
-  const { snapshot } = useStore();
+  const { snapshot, rules } = useStore();
   const [month, setMonth] = useState(currentMonth());
 
   const summary = useMemo(
@@ -26,6 +36,12 @@ export function DashboardPage() {
   );
 
   const merchants = useMemo(() => topMerchants(transactionsOfMonth(snapshot.transactions, month)), [month, snapshot.transactions]);
+
+  // ルールは取り込みのときにしか当たらないので、チャージのルールより前の分はここに出る
+  const misfiled = useMemo(
+    () => findMisfiledTransfers(transactionsOfMonth(snapshot.transactions, month), rules),
+    [month, snapshot.transactions, rules],
+  );
 
   // 重複は月をまたぐので探すのは全件から。出すのはこの月に掛かる組だけ
   const duplicates = useMemo(
@@ -90,6 +106,32 @@ export function DashboardPage() {
           </p>
           <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${DUPLICATES_FILTER}`)}>
             確かめる
+          </Button>
+        </div>
+      )}
+
+      {misfiled.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
+          <ArrowLeftRight size={18} aria-hidden className="text-ink" />
+          <p className="flex-1 text-sm text-ink">
+            チャージらしい明細が {misfiled.length} 件、支出として計上されたままです。カードから残高へ移しただけの分なので、
+            このままだとカテゴリ別の実績が水増しされます。
+          </p>
+          <Button variant="primary" size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
+            振替にする
+          </Button>
+        </div>
+      )}
+
+      {summary.transferCount > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-plane px-4 py-3 ring-1 ring-grid">
+          <ArrowLeftRight size={18} aria-hidden className="text-ink-2" />
+          <p className="flex-1 text-sm text-ink-2">
+            残高へのチャージ {summary.transferCount} 件・{formatYen(summary.transferTotal)} は支出から外しています。使った分は
+            PayPay や Suica の利用明細のほうで数えます。
+          </p>
+          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
+            内訳を見る
           </Button>
         </div>
       )}

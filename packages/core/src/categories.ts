@@ -3,6 +3,13 @@ import type { Category } from './types';
 export const UNCATEGORIZED_ID = 'uncategorized';
 
 /**
+ * 残高へのチャージを入れるカテゴリ。PayPay や Suica の残高に移しただけの金は支出ではないので、
+ * カテゴリ別の実績と上限からは外す。支出として数えるのは残高側の利用明細のほう。
+ * 普通のカテゴリとして持たせてあるのは、画面の付け替えとルール学習がそのまま使えるから。
+ */
+export const TRANSFER_ID = 'transfer';
+
+/**
  * 初期カテゴリ。試行錯誤フェーズの出発点で、増やす前提。
  * 「酒」と「カフェ・嗜好品」を食費から独立させてあるのは、混ぜると何に使ったかが
  * 見えなくなる支出だから。要らなければ画面から食費へ統合する。
@@ -21,6 +28,7 @@ export const SEED_CATEGORIES: Category[] = [
   { id: 'hobby', label: '趣味・娯楽', order: 11 },
   { id: 'social', label: '交際費', order: 12 },
   { id: 'subscription', label: 'サブスク', order: 13 },
+  { id: TRANSFER_ID, label: '振替・チャージ', order: 90 },
   { id: UNCATEGORIZED_ID, label: '未分類', order: 99 },
 ];
 
