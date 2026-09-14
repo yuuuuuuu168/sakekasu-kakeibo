@@ -64,7 +64,10 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
   const totals = totalsByCategory(spending);
   // 一部の内訳だけを振替に割った明細が残るので、カテゴリとしても落とす
   totals.delete(TRANSFER_ID);
-  const limits = budget?.limits ?? {};
+  // 振替は行として出さないので、上限が入っていても持ち込まない。
+  // limitTotal は limits をそのまま足すため、ここで落とさないと「どの行にも紐付かない上限」が合計に混ざる
+  const limits = { ...(budget?.limits ?? {}) };
+  delete limits[TRANSFER_ID];
 
   const days = daysInMonth(month);
   const elapsed = Math.min(Math.max(elapsedDays(month, today), 1), days);
