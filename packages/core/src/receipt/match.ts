@@ -13,7 +13,8 @@ export const MAX_DATE_GAP = 4;
 /** これを超える候補が 1 件だけなら自動で紐付ける */
 export const AUTO_MATCH_SCORE = 70;
 
-function dateScore(gap: number): number {
+/** 日付の近さの点。重複検知（duplicate.ts）も同じ物差しを使うので export している */
+export function dateScore(gap: number): number {
   const absolute = Math.abs(gap);
   if (absolute === 0) return 40;
   if (absolute === 1) return 30;

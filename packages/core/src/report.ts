@@ -1,6 +1,7 @@
 import { aggregateMonth, transactionsOfMonth, type CategoryTotal } from './budget';
 import { formatYen } from './money';
 import { previousMonth } from './date';
+import { spendingAmount, spendingOnly } from './transfer';
 import type { Budget, Category, Transaction } from './types';
 
 export type ScoldLevel = 0 | 1 | 2 | 3 | 4;
@@ -53,8 +54,9 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
   const { month, transactions, categories, budget } = input;
   // 締めた月のレポートなので、着地見込みの基準日は月内の最終日でよい
   const summary = aggregateMonth({ month, transactions, categories, budget, today: `${month}-28` });
-  const previous = transactionsOfMonth(transactions, previousMonth(month));
-  const previousTotal = previous.reduce((sum, txn) => sum + txn.amount, 0);
+  // 前月との比較も支出どうしで見る。片方にチャージが混ざると増減が嘘になる
+  const previous = spendingOnly(transactionsOfMonth(transactions, previousMonth(month)));
+  const previousTotal = previous.reduce((sum, txn) => sum + spendingAmount(txn), 0);
 
   const overCategories = summary.categories.filter((row) => row.over > 0);
   const overTotal = overCategories.reduce((sum, row) => sum + row.over, 0);
@@ -90,13 +92,16 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
 export function topMerchants(transactions: Transaction[], limit = 5): MerchantTotal[] {
   const totals = new Map<string, MerchantTotal>();
   for (const txn of transactions) {
-    if (txn.amount <= 0) continue;
+    // チャージは店で使った金ではないので、その分を引いてから数える。
+    // 引いて 0 以下になるのは、返金と、内訳が全部チャージの明細
+    const amount = spendingAmount(txn);
+    if (amount <= 0) continue;
     const found = totals.get(txn.merchant);
     if (found) {
-      found.amount += txn.amount;
+      found.amount += amount;
       found.count += 1;
     } else {
-      totals.set(txn.merchant, { merchant: txn.merchant, rawMerchant: txn.rawMerchant, amount: txn.amount, count: 1 });
+      totals.set(txn.merchant, { merchant: txn.merchant, rawMerchant: txn.rawMerchant, amount, count: 1 });
     }
   }
   return [...totals.values()].sort((a, b) => b.amount - a.amount).slice(0, limit);
