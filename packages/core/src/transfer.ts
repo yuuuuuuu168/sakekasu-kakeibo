@@ -16,6 +16,24 @@ export function isTransfer(txn: Transaction): boolean {
   return txn.splits.length > 0 && txn.splits.every((split) => split.categoryId === TRANSFER_ID);
 }
 
+/**
+ * 内訳にチャージが 1 行でも混じっているか。
+ * 1 件の明細をチャージと買い物に割ることはできるので、全部がチャージとは限らない。
+ * 額を数えるとき（transferTotal）はこの粒度で見るので、件数もこれに合わせる。
+ */
+export function hasTransfer(txn: Transaction): boolean {
+  return txn.splits.some((split) => split.categoryId === TRANSFER_ID);
+}
+
+/**
+ * 支出として数える額。チャージの内訳を引いた残り。
+ * 明細まるごとを落とすだけだと、割った明細のチャージ分が残って二重計上になる。
+ * 集計・前月との比較・「よく使った店」は、どれもこの額で数える。
+ */
+export function spendingAmount(txn: Transaction): number {
+  return txn.splits.reduce((sum, split) => (split.categoryId === TRANSFER_ID ? sum : sum + split.amount), 0);
+}
+
 /** 振替を落とした明細。カテゴリ別の実績はこれを見る */
 export function spendingOnly(transactions: Transaction[]): Transaction[] {
   return transactions.filter((txn) => !isTransfer(txn));

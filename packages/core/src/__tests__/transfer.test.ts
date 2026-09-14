@@ -3,7 +3,7 @@ import { SEED_CATEGORIES, TRANSFER_ID } from '../categories';
 import { allRules, classify } from '../rules';
 import { aggregateMonth } from '../budget';
 import { buildMonthlyReport, topMerchants } from '../report';
-import { asTransfer, findMisfiledTransfers, isTransfer, spendingOnly, transferTotal } from '../transfer';
+import { asTransfer, findMisfiledTransfers, hasTransfer, isTransfer, spendingAmount, spendingOnly, transferTotal } from '../transfer';
 import type { Transaction } from '../types';
 
 function txn(partial: Partial<Transaction> & { id: string; date: string; amount: number; rawMerchant: string }): Transaction {
@@ -23,6 +23,18 @@ function transfer(id: string, date: string, amount: number, rawMerchant: string)
 }
 
 const RULES = allRules([]);
+
+/** 1 件の明細をチャージと買い物に割ったもの。SplitDialog から作れる */
+const MIXED: Transaction = txn({
+  id: 'mixed1',
+  date: '2026-09-04',
+  amount: 5000,
+  rawMerchant: 'ビューカード',
+  splits: [
+    { id: 'mixed1-1', amount: 3000, categoryId: TRANSFER_ID, origin: 'manual' },
+    { id: 'mixed1-2', amount: 2000, categoryId: 'transport', origin: 'manual' },
+  ],
+});
 
 describe('チャージのルール', () => {
   it('JRE カードの Suica チャージを交通費ではなく振替にする', () => {
@@ -66,6 +78,18 @@ describe('isTransfer / spendingOnly', () => {
 
   it('振替の合計を出す', () => {
     expect(transferTotal([charge, lunch])).toBe(3000);
+  });
+
+  it('割った明細は「全部が振替」ではないが、振替を含む', () => {
+    expect(isTransfer(MIXED)).toBe(false);
+    expect(hasTransfer(MIXED)).toBe(true);
+    expect(hasTransfer(lunch)).toBe(false);
+  });
+
+  it('支出として数える額は、チャージの内訳を引いた残り', () => {
+    expect(spendingAmount(MIXED)).toBe(2000);
+    expect(spendingAmount(charge)).toBe(0);
+    expect(spendingAmount(lunch)).toBe(900);
   });
 });
 
@@ -113,19 +137,15 @@ describe('aggregateMonth', () => {
   });
 
   it('内訳の一部だけを振替に割っても、その分は集計から落ちる', () => {
-    const mixed = txn({
-      id: 't4',
-      date: '2026-09-04',
-      amount: 5000,
-      rawMerchant: 'ビューカード',
-      splits: [
-        { id: 't4-1', amount: 3000, categoryId: TRANSFER_ID, origin: 'manual' },
-        { id: 't4-2', amount: 2000, categoryId: 'transport', origin: 'manual' },
-      ],
-    });
-    const withMixed = aggregateMonth({ month: '2026-09', transactions: [mixed], categories: SEED_CATEGORIES, today: '2026-09-30' });
+    const withMixed = aggregateMonth({ month: '2026-09', transactions: [MIXED], categories: SEED_CATEGORIES, today: '2026-09-30' });
     expect(withMixed.total).toBe(2000);
     expect(withMixed.transferTotal).toBe(3000);
+  });
+
+  it('割った明細しかない月でも件数が 0 にならない', () => {
+    // 件数と額の粒度がずれると「0 件・¥3,000」になり、外した分を出す帯そのものが消える
+    const withMixed = aggregateMonth({ month: '2026-09', transactions: [MIXED], categories: SEED_CATEGORIES, today: '2026-09-30' });
+    expect(withMixed.transferCount).toBe(1);
   });
 });
 
@@ -139,6 +159,24 @@ describe('レポート', () => {
 
   it('よく使った店にチャージを出さない', () => {
     expect(topMerchants(transactions).map((row) => row.rawMerchant)).toEqual(['大戸屋']);
+  });
+
+  it('割った明細は、よく使った店でもチャージの分を引いて数える', () => {
+    const rows = topMerchants([MIXED]);
+    expect(rows).toEqual([{ merchant: MIXED.merchant, rawMerchant: 'ビューカード', amount: 2000, count: 1 }]);
+  });
+
+  it('割った明細があっても、前月との比較が当月と同じ数え方になる', () => {
+    // 前月だけ明細まるごとを足すと、チャージの分だけ増減が嘘になる
+    const report = buildMonthlyReport({
+      month: '2026-09',
+      transactions: [{ ...MIXED, id: 'prev', date: '2026-08-04' }, { ...MIXED }],
+      categories: SEED_CATEGORIES,
+      generatedAt: '2026-10-01T00:00:00Z',
+    });
+    expect(report.total).toBe(2000);
+    expect(report.previousTotal).toBe(2000);
+    expect(report.deltaFromPrevious).toBe(0);
   });
 
   it('前月との比較も支出どうしで見る', () => {

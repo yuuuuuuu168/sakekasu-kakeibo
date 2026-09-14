@@ -1,7 +1,7 @@
 import { categoryLabel, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
-import { isTransfer, spendingOnly, transferTotal } from './transfer';
+import { hasTransfer, spendingOnly, transferTotal } from './transfer';
 import type { Budget, Category, Transaction } from './types';
 
 export type CategoryTotal = {
@@ -111,7 +111,9 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
     uncategorizedTotal: totals.get(UNCATEGORIZED_ID) ?? 0,
     transactionCount: spending.length,
     transferTotal: transferTotal(monthly),
-    transferCount: monthly.filter(isTransfer).length,
+    // 額は内訳ごとに数えているので、件数も「チャージを含む明細」で揃える。
+    // 揃えないと、割った明細しかない月が「0 件・¥3,000」になり、帯そのものも出なくなる
+    transferCount: monthly.filter(hasTransfer).length,
   };
 }
 
