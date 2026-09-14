@@ -6,6 +6,7 @@ import type {
   MonthlyReport,
   Receipt,
   ReceiptItem,
+  RecurringPayment,
   SourceKind,
   Transaction,
 } from '@kakeibo/core';
@@ -25,6 +26,7 @@ export type Snapshot = {
   transactions: Transaction[];
   receipts: Receipt[];
   mappings: SavedMapping[];
+  recurring: RecurringPayment[];
 };
 
 /** OCR が返すレシートの下書き。確定前なので id は持たない */
@@ -50,6 +52,7 @@ export interface KakeiboApi {
   deleteTransaction(id: string): Promise<void>;
   putCategories(categories: Category[]): Promise<void>;
   putRules(rules: CategoryRule[]): Promise<void>;
+  putRecurring(recurring: RecurringPayment[]): Promise<void>;
   putBudget(budget: Budget): Promise<void>;
   putMapping(mapping: SavedMapping): Promise<void>;
   putReceipt(receipt: Receipt): Promise<void>;
