@@ -1,7 +1,8 @@
-import { categoryLabel, UNCATEGORIZED_ID } from './categories';
+import { categoryLabel, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
 import { recurringOccurrences, type RecurringOccurrence } from './recurring';
+import { hasTransfer, spendingOnly, transferTotal } from './transfer';
 import type { Budget, Category, RecurringPayment, Transaction } from './types';
 
 export type CategoryTotal = {
@@ -35,6 +36,9 @@ export type MonthSummary = {
   recurringRemaining: number;
   /** その月の定期支払いの内訳。突き合った明細があれば transactionId が入る */
   recurringOccurrences: RecurringOccurrence[];
+  /** 残高へのチャージの合計。支出ではないので total には入れない。外した分として画面に出す */
+  transferTotal: number;
+  transferCount: number;
 };
 
 export function transactionsOfMonth(transactions: Transaction[], month: string): Transaction[] {
@@ -79,21 +83,30 @@ export type AggregateInput = {
 export function aggregateMonth(input: AggregateInput): MonthSummary {
   const { month, categories, budget, today } = input;
   const monthly = transactionsOfMonth(input.transactions, month);
-  const totals = totalsByCategory(monthly);
-  const limits = budget?.limits ?? {};
+  // チャージは自分の残高への移動なので、カテゴリ別の実績からも上限からも外す
+  const spending = spendingOnly(monthly);
+  const totals = totalsByCategory(spending);
+  // 一部の内訳だけを振替に割った明細が残るので、カテゴリとしても落とす
+  totals.delete(TRANSFER_ID);
+  // 振替は行として出さないので、上限が入っていても持ち込まない。
+  // limitTotal は limits をそのまま足すため、ここで落とさないと「どの行にも紐付かない上限」が合計に混ざる
+  const limits = { ...(budget?.limits ?? {}) };
+  delete limits[TRANSFER_ID];
 
   const days = daysInMonth(month);
   const elapsed = Math.min(Math.max(elapsedDays(month, today), 1), days);
   const pace = days / elapsed;
 
-  const occurrences = recurringOccurrences({ month, payments: input.recurring ?? [], transactions: monthly });
+  // 突き合わせる相手は支出の明細だけ。チャージは残高への移動で、定期支払いが落ちた先ではない
+  const occurrences = recurringOccurrences({ month, payments: input.recurring ?? [], transactions: spending });
   const matchedIds = new Set(occurrences.map((occurrence) => occurrence.transactionId).filter((id): id is string => id !== undefined));
   // 突き合った明細はカテゴリ別の実績から一度引く。内訳が複数カテゴリに割れていても辻褄が合うよう、
-  // 登録したカテゴリではなく明細の内訳をそのまま使う
-  const matchedTotals = totalsByCategory(monthly.filter((txn) => matchedIds.has(txn.id)));
+  // 登録したカテゴリではなく明細の内訳をそのまま使う。振替の内訳は totals にも入っていないので落とす
+  const matchedTotals = totalsByCategory(spending.filter((txn) => matchedIds.has(txn.id)));
+  matchedTotals.delete(TRANSFER_ID);
   const plannedTotals = new Map<string, number>();
   for (const occurrence of occurrences) {
-    if (occurrence.transactionId) continue;
+    if (occurrence.transactionId || occurrence.categoryId === TRANSFER_ID) continue;
     plannedTotals.set(occurrence.categoryId, (plannedTotals.get(occurrence.categoryId) ?? 0) + occurrence.amount);
   }
 
@@ -103,6 +116,7 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
     ...Object.keys(limits),
     ...plannedTotals.keys(),
   ]);
+  ids.delete(TRANSFER_ID);
 
   const rows: CategoryTotal[] = [...ids].map((categoryId) => {
     const actual = totals.get(categoryId) ?? 0;
@@ -140,12 +154,16 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
     limitTotal,
     projected: Math.round((total - matchedTotal) * pace) + matchedTotal + plannedTotal,
     categories: rows,
-    needsDetailCount: monthly.filter((txn) => txn.needsDetail).length,
+    needsDetailCount: spending.filter((txn) => txn.needsDetail).length,
     uncategorizedTotal: totals.get(UNCATEGORIZED_ID) ?? 0,
-    transactionCount: monthly.length,
+    transactionCount: spending.length,
     recurringTotal: matchedTotal + plannedTotal,
     recurringRemaining: plannedTotal,
     recurringOccurrences: occurrences,
+    transferTotal: transferTotal(monthly),
+    // 額は内訳ごとに数えているので、件数も「チャージを含む明細」で揃える。
+    // 揃えないと、割った明細しかない月が「0 件・¥3,000」になり、帯そのものも出なくなる
+    transferCount: monthly.filter(hasTransfer).length,
   };
 }
 

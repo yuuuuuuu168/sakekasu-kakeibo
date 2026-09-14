@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pause, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import {
+  TRANSFER_ID,
   activeCategories,
   categoryLabel,
   formatYen,
@@ -30,7 +31,8 @@ const INTERVALS: { value: number; label: string }[] = [
 export function RecurringPayments() {
   const { snapshot, saveRecurring } = useStore();
   const [editing, setEditing] = useState<RecurringPayment | 'new' | undefined>();
-  const categories = activeCategories(snapshot.categories);
+  // 振替（チャージ）は支出ではないので、定期支払いの行き先には選ばせない。集計でも外れている
+  const categories = activeCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID);
   const today = todayIso();
 
   const rows = useMemo(() => {
