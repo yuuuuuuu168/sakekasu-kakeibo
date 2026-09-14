@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
-import { ReceiptText, TriangleAlert } from 'lucide-react';
-import { UNCATEGORIZED_ID, aggregateMonth, formatYen, topMerchants, transactionsOfMonth } from '@kakeibo/core';
+import { Copy, ReceiptText, TriangleAlert } from 'lucide-react';
+import { UNCATEGORIZED_ID, aggregateMonth, findDuplicates, formatYen, monthOf, topMerchants, transactionsOfMonth } from '@kakeibo/core';
 import { useStore } from '../../api/store';
 import { Button, Card, EmptyState } from '../../components/ui/primitives';
 import { Meter } from '../../components/ui/Meter';
 import { StatTile } from '../../components/ui/StatTile';
 import { MonthPicker } from '../../components/ui/MonthPicker';
 import { currentMonth, todayIso } from '../../lib/month';
-import { navigate } from '../../lib/router';
+import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER, navigate } from '../../lib/router';
 
 export function DashboardPage() {
   const { snapshot } = useStore();
@@ -26,6 +26,15 @@ export function DashboardPage() {
   );
 
   const merchants = useMemo(() => topMerchants(transactionsOfMonth(snapshot.transactions, month)), [month, snapshot.transactions]);
+
+  // 重複は月をまたぐので探すのは全件から。出すのはこの月に掛かる組だけ
+  const duplicates = useMemo(
+    () =>
+      findDuplicates(snapshot.transactions).filter(
+        (pair) => monthOf(pair.a.date) === month || monthOf(pair.b.date) === month,
+      ),
+    [month, snapshot.transactions],
+  );
   const rows = summary.categories.filter((row) => row.actual !== 0 || row.limit > 0);
   const overTotal = summary.categories.reduce((sum, row) => sum + row.over, 0);
 
@@ -67,8 +76,20 @@ export function DashboardPage() {
           <Button variant="primary" size="sm" onClick={() => navigate('#/receipts')}>
             レシートを当てる
           </Button>
-          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=needsDetail`)}>
+          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${NEEDS_DETAIL_FILTER}`)}>
             明細を見る
+          </Button>
+        </div>
+      )}
+
+      {duplicates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
+          <Copy size={18} aria-hidden className="text-ink" />
+          <p className="flex-1 text-sm text-ink">
+            同じ支払いが二重に入っている可能性が {duplicates.length} 組。放っておくとカテゴリ別の実績が水増しされます。
+          </p>
+          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${DUPLICATES_FILTER}`)}>
+            確かめる
           </Button>
         </div>
       )}

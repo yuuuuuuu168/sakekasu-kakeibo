@@ -13,3 +13,4 @@ export * from './statement/normalize';
 export * from './receipt/items';
 export * from './receipt/split';
 export * from './receipt/match';
+export * from './duplicate';

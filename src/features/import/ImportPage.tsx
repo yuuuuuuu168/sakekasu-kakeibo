@@ -6,9 +6,12 @@ import {
   decodeStatementBytes,
   detectColumns,
   detectDelimiter,
+  duplicatesInvolving,
+  findDuplicates,
   formatYen,
   isMappingComplete,
   mergeImported,
+  monthOf,
   parseCsv,
   type ColumnMapping,
   type SourceKind,
@@ -16,7 +19,7 @@ import {
 } from '@kakeibo/core';
 import { useStore } from '../../api/store';
 import { Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
-import { navigate } from '../../lib/router';
+import { DUPLICATES_FILTER, navigate } from '../../lib/router';
 import { parsePdfStatement } from './parsePdf';
 import type { SkippedRow } from '@kakeibo/core';
 
@@ -117,10 +120,23 @@ export function ImportPage() {
         source,
         mapping,
       });
-      setMessage(`${merge.added} 件を取り込みました。${merge.kept > 0 ? `${merge.kept} 件は既にあったので飛ばしました。` : ''}`);
+
+      /**
+       * ID が一致する分は mergeImported が弾いた。残るのは ID が別なのに同じ支払い、
+       * つまり現金として保存したレシートや、取り込み元を選び違えた分。ここで気づける口を作る。
+       */
+      const suspects = duplicatesInvolving(findDuplicates(merge.merged), fresh.map((txn) => txn.id));
+
+      setMessage(
+        `${merge.added} 件を取り込みました。` +
+          (merge.kept > 0 ? `${merge.kept} 件は既にあったので飛ばしました。` : '') +
+          (suspects.length > 0 ? `重複の可能性が ${suspects.length} 組あります。` : ''),
+      );
       setLoaded(undefined);
       setMapping(undefined);
-      if (merge.added > 0) navigate('#/transactions');
+      // 明細一覧は月で絞る。取り込んだのが過去の月でも候補が見えるよう、組のある月へ送る
+      if (suspects.length > 0) navigate(`#/transactions?month=${monthOf(suspects[0].a.date)}&filter=${DUPLICATES_FILTER}`);
+      else if (merge.added > 0) navigate('#/transactions');
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
