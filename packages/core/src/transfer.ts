@@ -54,10 +54,14 @@ export function transferTotal(transactions: Transaction[]): number {
  * 今のルールならチャージと判定されるのに、別のカテゴリのまま残っている明細。
  * ルールは取り込みのときにしか当たらないので、チャージのルールを足す前に取り込んだ分が
  * ここに出る。交通費として計上されたままの Suica チャージがこれに当たる。
+ *
+ * 除くのは isTransfer（全部チャージ）ではなく hasTransfer（1 行でもチャージ）。
+ * 一部だけを手でチャージに割った明細は「手つかずで残っている分」ではないうえ、まとめて
+ * 振替にする操作が asTransfer で内訳を 1 行に潰すので、残りの買い物が黙って消える。
  */
 export function findMisfiledTransfers(transactions: Transaction[], rules: CategoryRule[]): Transaction[] {
   return transactions.filter(
-    (txn) => !isTransfer(txn) && classify(txn.rawMerchant, rules).categoryId === TRANSFER_ID,
+    (txn) => !hasTransfer(txn) && classify(txn.rawMerchant, rules).categoryId === TRANSFER_ID,
   );
 }
 

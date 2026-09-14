@@ -215,4 +215,21 @@ describe('findMisfiledTransfers / asTransfer', () => {
     expect(fixed.splits.reduce((sum, split) => sum + split.amount, 0)).toBe(fixed.amount);
     expect(isTransfer(fixed)).toBe(true);
   });
+
+  it('手で一部だけチャージに割った明細は出さない', () => {
+    // 5,000 円のうち 3,000 をチャージ、2,000 を食費に割った明細。isTransfer は false なので、
+    // ここで外さないと「まとめて振替にする」が asTransfer を当て、食費 2,000 円が消える
+    const split = txn({
+      id: 'mix1',
+      date: '2026-09-10',
+      amount: 5000,
+      rawMerchant: 'ＰａｙＰａｙチャージ',
+      splits: [
+        { id: 'mix1-1', amount: 3000, categoryId: TRANSFER_ID, origin: 'manual' },
+        { id: 'mix1-2', amount: 2000, categoryId: 'food', origin: 'manual' },
+      ],
+    });
+    expect(isTransfer(split)).toBe(false);
+    expect(findMisfiledTransfers([split], RULES)).toEqual([]);
+  });
 });
