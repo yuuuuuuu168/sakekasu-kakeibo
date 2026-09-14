@@ -6,6 +6,7 @@ import {
   type CategoryRule,
   type MonthlyReport,
   type Receipt,
+  type RecurringPayment,
   type Transaction,
 } from '@kakeibo/core';
 import { ApiUnavailable, type KakeiboApi, type ReceiptDraft, type SavedMapping, type Snapshot, type UploadTarget } from './types';
@@ -20,6 +21,7 @@ function emptySnapshot(): Snapshot {
     transactions: [],
     receipts: [],
     mappings: [],
+    recurring: [],
   };
 }
 
@@ -78,6 +80,10 @@ export const localApi: KakeiboApi = {
 
   async putRules(rules: CategoryRule[]): Promise<void> {
     update((snapshot) => ({ ...snapshot, rules }));
+  },
+
+  async putRecurring(recurring: RecurringPayment[]): Promise<void> {
+    update((snapshot) => ({ ...snapshot, recurring }));
   },
 
   async putBudget(budget: Budget): Promise<void> {

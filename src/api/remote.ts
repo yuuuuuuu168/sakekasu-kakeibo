@@ -1,5 +1,5 @@
 import { fetchAuthSession } from 'aws-amplify/auth';
-import type { Budget, Category, CategoryRule, MonthlyReport, Receipt, Transaction } from '@kakeibo/core';
+import type { Budget, Category, CategoryRule, MonthlyReport, Receipt, RecurringPayment, Transaction } from '@kakeibo/core';
 import { config } from '../config';
 import type { KakeiboApi, ReceiptDraft, SavedMapping, Snapshot, UploadTarget } from './types';
 
@@ -38,6 +38,7 @@ export const remoteApi: KakeiboApi = {
   deleteTransaction: (id: string) => request<void>('DELETE', `/transactions/${encodeURIComponent(id)}`),
   putCategories: (categories: Category[]) => request<void>('PUT', '/categories', { categories }),
   putRules: (rules: CategoryRule[]) => request<void>('PUT', '/rules', { rules }),
+  putRecurring: (recurring: RecurringPayment[]) => request<void>('PUT', '/recurring', { recurring }),
   putBudget: (budget: Budget) => request<void>('PUT', `/budgets/${budget.month}`, budget),
   putMapping: (mapping: SavedMapping) => request<void>('PUT', `/mappings/${encodeURIComponent(mapping.sourceId)}`, mapping),
   putReceipt: (receipt: Receipt) => request<void>('PUT', `/receipts/${encodeURIComponent(receipt.id)}`, receipt),

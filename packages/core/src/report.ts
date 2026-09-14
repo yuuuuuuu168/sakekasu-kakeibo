@@ -52,7 +52,9 @@ export type ReportInput = {
  */
 export function buildMonthlyReport(input: ReportInput): MonthlyReport {
   const { month, transactions, categories, budget } = input;
-  // 締めた月のレポートなので、着地見込みの基準日は月内の最終日でよい
+  // 締めた月のレポートなので、着地見込みの基準日は月内の最終日でよい。
+  // 定期支払い（recurring）はここに渡さない。締めた月は実績が出そろっていて見込みが要らないうえ、
+  // 節約しようのない固定費を叱っても行動が変わらないため、叱りの材料からは外す
   const summary = aggregateMonth({ month, transactions, categories, budget, today: `${month}-28` });
   // 前月との比較も支出どうしで見る。片方にチャージが混ざると増減が嘘になる
   const previous = spendingOnly(transactionsOfMonth(transactions, previousMonth(month)));
