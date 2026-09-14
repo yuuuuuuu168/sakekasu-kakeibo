@@ -100,6 +100,18 @@ describe('aggregateMonth', () => {
     expect(summary.categories.some((row) => row.categoryId === TRANSFER_ID)).toBe(false);
   });
 
+  it('振替に上限が入っていても、上限の合計には数えない', () => {
+    const withLimit = aggregateMonth({
+      month: '2026-09',
+      transactions,
+      categories: SEED_CATEGORIES,
+      budget: { month: '2026-09', limits: { food: 20000, [TRANSFER_ID]: 50000 } },
+      today: '2026-09-30',
+    });
+    expect(withLimit.limitTotal).toBe(20000);
+    expect(withLimit.categories.some((row) => row.categoryId === TRANSFER_ID)).toBe(false);
+  });
+
   it('内訳の一部だけを振替に割っても、その分は集計から落ちる', () => {
     const mixed = txn({
       id: 't4',
