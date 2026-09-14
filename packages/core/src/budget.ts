@@ -1,6 +1,7 @@
-import { categoryLabel, UNCATEGORIZED_ID } from './categories';
+import { categoryLabel, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
+import { isTransfer, spendingOnly, transferTotal } from './transfer';
 import type { Budget, Category, Transaction } from './types';
 
 export type CategoryTotal = {
@@ -26,6 +27,9 @@ export type MonthSummary = {
   needsDetailCount: number;
   uncategorizedTotal: number;
   transactionCount: number;
+  /** 残高へのチャージの合計。支出ではないので total には入れない。外した分として画面に出す */
+  transferTotal: number;
+  transferCount: number;
 };
 
 export function transactionsOfMonth(transactions: Transaction[], month: string): Transaction[] {
@@ -55,7 +59,11 @@ export type AggregateInput = {
 export function aggregateMonth(input: AggregateInput): MonthSummary {
   const { month, categories, budget, today } = input;
   const monthly = transactionsOfMonth(input.transactions, month);
-  const totals = totalsByCategory(monthly);
+  // チャージは自分の残高への移動なので、カテゴリ別の実績からも上限からも外す
+  const spending = spendingOnly(monthly);
+  const totals = totalsByCategory(spending);
+  // 一部の内訳だけを振替に割った明細が残るので、カテゴリとしても落とす
+  totals.delete(TRANSFER_ID);
   const limits = budget?.limits ?? {};
 
   const days = daysInMonth(month);
@@ -63,6 +71,7 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
   const pace = days / elapsed;
 
   const ids = new Set<string>([...categories.filter((c) => !c.archived).map((c) => c.id), ...totals.keys(), ...Object.keys(limits)]);
+  ids.delete(TRANSFER_ID);
 
   const rows: CategoryTotal[] = [...ids].map((categoryId) => {
     const actual = totals.get(categoryId) ?? 0;
@@ -95,9 +104,11 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
     limitTotal,
     projected: Math.round(total * pace),
     categories: rows,
-    needsDetailCount: monthly.filter((txn) => txn.needsDetail).length,
+    needsDetailCount: spending.filter((txn) => txn.needsDetail).length,
     uncategorizedTotal: totals.get(UNCATEGORIZED_ID) ?? 0,
-    transactionCount: monthly.length,
+    transactionCount: spending.length,
+    transferTotal: transferTotal(monthly),
+    transferCount: monthly.filter(isTransfer).length,
   };
 }
 

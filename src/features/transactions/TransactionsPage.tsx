@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react';
-import { Copy, Scissors, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, Copy, Scissors, Trash2 } from 'lucide-react';
 import {
+  TRANSFER_ID,
   UNCATEGORIZED_ID,
   activeCategories,
+  asTransfer,
   categoryLabel,
   duplicateKey,
   findDuplicates,
+  findMisfiledTransfers,
   formatYen,
+  isTransfer,
   learnRule,
   markNotDuplicate,
   monthOf,
@@ -22,19 +26,33 @@ import { currentMonth } from '../../lib/month';
 import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER } from '../../lib/router';
 
 export function TransactionsPage({ month: initialMonth, filter: initialFilter }: { month?: string; filter?: string }) {
-  const { snapshot, saveTransaction, removeTransaction, saveRules } = useStore();
+  const { snapshot, rules, saveTransaction, removeTransaction, saveRules } = useStore();
   const [month, setMonth] = useState(initialMonth ?? currentMonth());
   const [filter, setFilter] = useState(initialFilter ?? 'all');
   const [editing, setEditing] = useState<Transaction | undefined>();
 
   const categories = activeCategories(snapshot.categories);
 
+  /**
+   * ルールは取り込みのときにしか当たらない。チャージのルールを足す前に取り込んだ分は
+   * 交通費などに入ったままなので、振替の絞り込みを開いたときに名指しして直せるようにする。
+   */
+  const misfiled = useMemo(() => {
+    if (filter !== TRANSFER_ID) return [];
+    return findMisfiledTransfers(transactionsOfMonth(snapshot.transactions, month), rules);
+  }, [snapshot.transactions, month, filter, rules]);
+
   const rows = useMemo(() => {
     const monthly = transactionsOfMonth(snapshot.transactions, month).sort((a, b) => b.date.localeCompare(a.date));
     if (filter === 'all') return monthly;
     if (filter === NEEDS_DETAIL_FILTER) return monthly.filter((txn) => txn.needsDetail);
+    // 振替では、まだ振替になっていないチャージの候補も一緒に出す。帯の件数と一覧を合わせるため
+    if (filter === TRANSFER_ID) {
+      const suspects = new Set(misfiled.map((txn) => txn.id));
+      return monthly.filter((txn) => isTransfer(txn) || suspects.has(txn.id));
+    }
     return monthly.filter((txn) => txn.splits.some((split) => split.categoryId === filter));
-  }, [snapshot.transactions, month, filter]);
+  }, [snapshot.transactions, month, filter, misfiled]);
 
   /**
    * 重複は月をまたぐ。月末に現金で保存したレシートと、翌月頭に計上されたカード明細が典型。
@@ -62,6 +80,11 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     const rule = learnRule(txn.rawMerchant, categoryId);
     const others = snapshot.rules.filter((item) => item.id !== rule.id);
     await saveRules([...others, rule]);
+  }
+
+  /** チャージらしいのに別のカテゴリのままの明細を、まとめて振替にする */
+  async function markAllAsTransfer() {
+    for (const txn of misfiled) await saveTransaction(asTransfer(txn));
   }
 
   /** 重複ではないと言われた組。両側に印を付けて、次からは候補に出さない */
@@ -93,6 +116,18 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
         </div>
       </div>
 
+      {misfiled.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
+          <ArrowLeftRight size={18} aria-hidden className="text-ink" />
+          <p className="flex-1 text-sm text-ink">
+            チャージらしい明細が {misfiled.length} 件、まだ支出として計上されています。振替にすると、この分がカテゴリ別の実績から外れます。
+          </p>
+          <Button variant="primary" size="sm" onClick={() => void markAllAsTransfer()}>
+            まとめて振替にする
+          </Button>
+        </div>
+      )}
+
       {filter === DUPLICATES_FILTER ? (
         <DuplicatesCard pairs={duplicates} onRemove={removeTransaction} onDismiss={dismissDuplicate} />
       ) : (
@@ -115,6 +150,8 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                         <span className="text-xs text-muted">{txn.sourceLabel}</span>
                         {txn.needsDetail && <Badge tone="accent">内訳待ち</Badge>}
                         {txn.receiptId && <Badge tone="good">レシートあり</Badge>}
+                        {isTransfer(txn) && <Badge tone="neutral">振替・集計外</Badge>}
+                        {misfiled.some((item) => item.id === txn.id) && <Badge tone="warning">チャージらしい</Badge>}
                       </div>
 
                       {txn.splits.length > 1 ? (
