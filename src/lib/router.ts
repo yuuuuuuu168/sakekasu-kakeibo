@@ -24,6 +24,13 @@ export const ROUTES: { name: Route['name']; label: string; path: string }[] = [
 
 export const SETTINGS_PATH = '#/settings';
 
+/**
+ * 明細一覧の `filter` に渡す、組み込みの絞り込み。カテゴリ ID と同じ場所に入るので、
+ * カテゴリ ID にはならない名前にしてある。
+ */
+export const NEEDS_DETAIL_FILTER = 'needsDetail';
+export const DUPLICATES_FILTER = 'duplicates';
+
 export function parseHash(hash: string): Route {
   const [path, query] = hash.replace(/^#\/?/, '').split('?');
   const params = new URLSearchParams(query ?? '');

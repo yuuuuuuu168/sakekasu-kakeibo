@@ -1,5 +1,5 @@
 import { normalizeMerchant } from './merchant';
-import { UNCATEGORIZED_ID } from './categories';
+import { TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import type { CategoryRule } from './types';
 
 export type Classification = {
@@ -182,8 +182,7 @@ const SEEDS: Seed[] = [
   ['カクヤス', 'alcohol'],
   ['ビアバー', 'alcohol'],
 
-  // 交通
-  ['モバイルSuica', 'transport'],
+  // 交通。モバイルSuica はチャージなので下の TRANSFER_SEEDS に置いてある
   ['SUICA', 'transport'],
   ['PASMO', 'transport'],
   ['ICOCA', 'transport'],
@@ -265,15 +264,41 @@ const SEEDS: Seed[] = [
   ['クリーニング', 'apparel'],
 ];
 
-export const BUILTIN_RULES: CategoryRule[] = SEEDS.map(([pattern, categoryId, ambiguous], index) => ({
-  id: `builtin-${index}`,
-  pattern,
-  matchType: 'contains' as const,
-  categoryId,
-  ...(ambiguous ? { ambiguous: true as const } : {}),
-  priority: 10,
-  builtin: true,
-}));
+/**
+ * 残高へのチャージ。カード明細に出るこれらは支出ではなく、自分の残高への移動。
+ * 「モバイルSuica」はカードの明細に出た時点でチャージそのものなので、店名だけで判る。
+ * 優先度を普通の初期ルールより上げてあるのは、交通の「SUICA」に取られないため。
+ * 同値だとパターンの長い方が勝つ規則があり、長さでは当てにできない。
+ */
+const TRANSFER_SEEDS: Seed[] = [
+  ['チャージ', TRANSFER_ID],
+  ['モバイルSuica', TRANSFER_ID],
+  ['モバイルスイカ', TRANSFER_ID],
+  ['モバイルPASMO', TRANSFER_ID],
+];
+
+/** チャージのルールの優先度。初期ルールの 10 と、利用者が付け替えて覚えさせる 100 の間 */
+export const TRANSFER_PRIORITY = 20;
+
+export const BUILTIN_RULES: CategoryRule[] = [
+  ...SEEDS.map(([pattern, categoryId, ambiguous], index) => ({
+    id: `builtin-${index}`,
+    pattern,
+    matchType: 'contains' as const,
+    categoryId,
+    ...(ambiguous ? { ambiguous: true as const } : {}),
+    priority: 10,
+    builtin: true,
+  })),
+  ...TRANSFER_SEEDS.map(([pattern, categoryId], index) => ({
+    id: `builtin-transfer-${index}`,
+    pattern,
+    matchType: 'contains' as const,
+    categoryId,
+    priority: TRANSFER_PRIORITY,
+    builtin: true,
+  })),
+];
 
 /** 利用者のルールを初期搭載ルールより先に見る形で 1 本にする */
 export function allRules(userRules: CategoryRule[]): CategoryRule[] {

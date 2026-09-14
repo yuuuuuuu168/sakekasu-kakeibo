@@ -1,6 +1,7 @@
-import { categoryLabel, UNCATEGORIZED_ID } from './categories';
+import { categoryLabel, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
+import { hasTransfer, spendingOnly, transferTotal } from './transfer';
 import type { Budget, Category, Transaction } from './types';
 
 export type CategoryTotal = {
@@ -26,6 +27,9 @@ export type MonthSummary = {
   needsDetailCount: number;
   uncategorizedTotal: number;
   transactionCount: number;
+  /** 残高へのチャージの合計。支出ではないので total には入れない。外した分として画面に出す */
+  transferTotal: number;
+  transferCount: number;
 };
 
 export function transactionsOfMonth(transactions: Transaction[], month: string): Transaction[] {
@@ -55,14 +59,22 @@ export type AggregateInput = {
 export function aggregateMonth(input: AggregateInput): MonthSummary {
   const { month, categories, budget, today } = input;
   const monthly = transactionsOfMonth(input.transactions, month);
-  const totals = totalsByCategory(monthly);
-  const limits = budget?.limits ?? {};
+  // チャージは自分の残高への移動なので、カテゴリ別の実績からも上限からも外す
+  const spending = spendingOnly(monthly);
+  const totals = totalsByCategory(spending);
+  // 一部の内訳だけを振替に割った明細が残るので、カテゴリとしても落とす
+  totals.delete(TRANSFER_ID);
+  // 振替は行として出さないので、上限が入っていても持ち込まない。
+  // limitTotal は limits をそのまま足すため、ここで落とさないと「どの行にも紐付かない上限」が合計に混ざる
+  const limits = { ...(budget?.limits ?? {}) };
+  delete limits[TRANSFER_ID];
 
   const days = daysInMonth(month);
   const elapsed = Math.min(Math.max(elapsedDays(month, today), 1), days);
   const pace = days / elapsed;
 
   const ids = new Set<string>([...categories.filter((c) => !c.archived).map((c) => c.id), ...totals.keys(), ...Object.keys(limits)]);
+  ids.delete(TRANSFER_ID);
 
   const rows: CategoryTotal[] = [...ids].map((categoryId) => {
     const actual = totals.get(categoryId) ?? 0;
@@ -95,9 +107,13 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
     limitTotal,
     projected: Math.round(total * pace),
     categories: rows,
-    needsDetailCount: monthly.filter((txn) => txn.needsDetail).length,
+    needsDetailCount: spending.filter((txn) => txn.needsDetail).length,
     uncategorizedTotal: totals.get(UNCATEGORIZED_ID) ?? 0,
-    transactionCount: monthly.length,
+    transactionCount: spending.length,
+    transferTotal: transferTotal(monthly),
+    // 額は内訳ごとに数えているので、件数も「チャージを含む明細」で揃える。
+    // 揃えないと、割った明細しかない月が「0 件・¥3,000」になり、帯そのものも出なくなる
+    transferCount: monthly.filter(hasTransfer).length,
   };
 }
 

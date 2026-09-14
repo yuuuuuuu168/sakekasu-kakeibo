@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
+  TRANSFER_ID,
   UNCATEGORIZED_ID,
   activeCategories,
   aggregateMonth,
@@ -27,7 +28,9 @@ export function CategoriesPage() {
   const [message, setMessage] = useState<string | undefined>();
 
   const budget = snapshot.budgets.find((item) => item.month === month);
-  const categories = activeCategories(snapshot.categories);
+  // 振替・チャージは支出ではなく、集計にも上限にも出てこない。
+  // ここに並べると実績 0 のまま上限だけ入れられるし、統合すると過去のチャージが支出に戻る
+  const categories = activeCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID);
 
   const summary = useMemo(
     () =>

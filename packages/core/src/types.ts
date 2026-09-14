@@ -40,6 +40,11 @@ export type Transaction = {
   receiptId?: string;
   importId?: string;
   note?: string;
+  /**
+   * 「重複ではない」と人が言った相手の明細 ID。印は両側に持たせる。
+   * 消すだけだと取り込み直しで戻ってくるので、否定したことのほうを覚えておく。
+   */
+  notDuplicateOf?: string[];
 };
 
 export type MatchType = 'contains' | 'equals' | 'startsWith' | 'regex';
