@@ -64,6 +64,19 @@ describe('aggregateMonth', () => {
     expect(summary.limitTotal).toBe(0);
     expect(summary.projected).toBe(0);
   });
+
+  it('上限が無いカテゴリに支出があっても usage は有限（保存で弾かれない）', () => {
+    // food の上限を外し、支出だけ残す。ratio なら Infinity になる状況
+    const budget: Budget = { month: '2026-09', limits: { daily: 5_000 } };
+    const summary = aggregateMonth({ month: '2026-09', transactions: TRANSACTIONS, categories: SEED_CATEGORIES, budget, today: '2026-09-15' });
+    const food = summary.categories.find((row) => row.categoryId === 'food');
+    expect(food?.actual).toBeGreaterThan(0);
+    expect(food?.limit).toBe(0);
+    expect(Number.isFinite(food?.usage)).toBe(true);
+    // 非有限な数が混ざっていないこと。DynamoDB / JSON はこれを弾く
+    for (const row of summary.categories) expect(Number.isFinite(row.usage)).toBe(true);
+    expect(JSON.stringify(summary)).not.toContain('null');
+  });
 });
 
 describe('carryOverBudget', () => {
