@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Camera, Plus, Trash2 } from 'lucide-react';
+import { Camera, Copy, Plus, Trash2 } from 'lucide-react';
 import {
   UNCATEGORIZED_ID,
   activeCategories,
@@ -7,7 +7,9 @@ import {
   autoMatch,
   categoryLabel,
   classifyItem,
+  duplicateKey,
   findCandidates,
+  findDuplicateReceipts,
   formatYen,
   splitsFromReceipt,
   transactionId,
@@ -51,6 +53,12 @@ export function ReceiptsPage() {
   const [message, setMessage] = useState<string | undefined>();
 
   const categories = activeCategories(snapshot.categories);
+
+  /**
+   * 同じレシートを 2 回撮ったもの。ID は撮った時刻から作るので中身が同じでも別 ID になり、
+   * 保存済み一覧では未紐付けが 2 枚並ぶだけで気づけない。ここで名指しする。
+   */
+  const duplicates = useMemo(() => findDuplicateReceipts(snapshot.receipts), [snapshot.receipts]);
 
   const candidates = useMemo<MatchCandidate[]>(() => {
     if (!draft || draft.total <= 0) return [];
@@ -296,6 +304,46 @@ export function ReceiptsPage() {
               {selectedTxnId ? '明細に当てる' : 'レシートだけ保存'}
             </Button>
           </div>
+        </Card>
+      )}
+
+      {duplicates.length > 0 && (
+        <Card title={`同じレシートかもしれない組 ${duplicates.length} 件`}>
+          <p className="text-xs text-muted">
+            合計が一致して日付が近いレシートです。2 回撮ったものなら片方を消してください。別々の買い物ならそのままで構いません
+          </p>
+          <ul className="mt-2 divide-y divide-grid">
+            {duplicates.map((pair) => (
+              <li key={duplicateKey(pair)} className="py-2">
+                <div className="flex items-center gap-1.5">
+                  <Copy size={14} className="text-muted" aria-hidden />
+                  <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
+                </div>
+                <ul className="mt-1.5 space-y-1">
+                  {[pair.a, pair.b].map((item) => (
+                    <li key={item.id} className="flex items-center gap-2 rounded-lg bg-plane px-2 py-1.5">
+                      <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
+                      {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
+                      {item.status === 'cash' && <Badge tone="neutral">現金</Badge>}
+                      {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
+                      <span className="tnum text-sm font-semibold text-ink">{formatYen(item.total)}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm('このレシートを消しますか')) void removeReceipt(item.id);
+                        }}
+                        className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
+                        aria-label={`${item.date} の ${item.storeName || '店名なし'} のレシートを消す`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 
