@@ -75,7 +75,7 @@ describe('determineLevel', () => {
       total: 60_000,
       limitTotal: 45_000,
       overTotal: 15_000,
-      overCategories: [{ categoryId: 'food', label: '食費', actual: 45_000, limit: 30_000, usage: 1.5, over: 15_000, projected: 45_000 }],
+      overCategories: [{ categoryId: 'food', label: '食費', actual: 45_000, limit: 30_000, usage: 1.5, over: 15_000, projected: 45_000, recurring: 0 }],
       worst: [],
       needsDetailCount: 0,
       hasLimits: true,

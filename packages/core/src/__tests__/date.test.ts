@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daysInMonth, diffDays, elapsedDays, parseDateCell, previousMonth } from '../date';
+import { addMonths, dateInMonth, daysInMonth, diffDays, elapsedDays, monthDiff, parseDateCell, previousMonth } from '../date';
 
 describe('parseDateCell', () => {
   it.each([
@@ -47,5 +47,25 @@ describe('日付の計算', () => {
     expect(elapsedDays('2026-09', '2026-09-12')).toBe(12);
     expect(elapsedDays('2026-08', '2026-09-12')).toBe(31);
     expect(elapsedDays('2026-10', '2026-09-12')).toBe(0);
+  });
+
+  it('月を動かすと年も繰り上がる', () => {
+    expect(addMonths('2026-09', 4)).toBe('2027-01');
+    expect(addMonths('2026-01', -1)).toBe('2025-12');
+    expect(addMonths('2026-09', 0)).toBe('2026-09');
+    expect(addMonths('2026-04', 24)).toBe('2028-04');
+  });
+
+  it('月の差は前なら負になる', () => {
+    expect(monthDiff('2026-01', '2026-09')).toBe(8);
+    expect(monthDiff('2026-09', '2026-01')).toBe(-8);
+    expect(monthDiff('2025-12', '2026-01')).toBe(1);
+  });
+
+  it('その月に無い日は月末に丸める', () => {
+    expect(dateInMonth('2026-09', 5)).toBe('2026-09-05');
+    expect(dateInMonth('2026-02', 31)).toBe('2026-02-28');
+    expect(dateInMonth('2024-02', 31)).toBe('2024-02-29');
+    expect(dateInMonth('2026-09', 0)).toBe('2026-09-01');
   });
 });
