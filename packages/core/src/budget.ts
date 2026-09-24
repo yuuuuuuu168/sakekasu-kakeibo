@@ -1,9 +1,16 @@
-import { categoryLabel, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
+import { categoryLabel, rollUpLimits, rollUpTotals, rootCategoryId, topLevelCategories, TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
 import { daysInMonth, elapsedDays, monthOf } from './date';
 import { ratio } from './money';
 import { recurringOccurrences, type RecurringOccurrence } from './recurring';
 import { hasTransfer, spendingOnly, transferTotal } from './transfer';
 import type { Budget, Category, RecurringPayment, Transaction } from './types';
+
+/** 大カテゴリの中の分解。小カテゴリを作ってからしか出てこない */
+export type CategoryChildTotal = {
+  categoryId: string;
+  label: string;
+  actual: number;
+};
 
 export type CategoryTotal = {
   categoryId: string;
@@ -18,6 +25,12 @@ export type CategoryTotal = {
   projected: number;
   /** このカテゴリの、その月の定期支払い。固定費なので上限には含めて数える */
   recurring: number;
+  /**
+   * 小カテゴリ別の実績。額の大きい順で、0 円の小カテゴリは並べない。
+   * 実績のある小カテゴリが無ければキーそのものを持たせない（保存するレポートを太らせないため）。
+   * actual はこの合計を含んだ額なので、足し直さないこと。
+   */
+  children?: CategoryChildTotal[];
 };
 
 export type MonthSummary = {
@@ -85,12 +98,15 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
   const monthly = transactionsOfMonth(input.transactions, month);
   // チャージは自分の残高への移動なので、カテゴリ別の実績からも上限からも外す
   const spending = spendingOnly(monthly);
-  const totals = totalsByCategory(spending);
+  // 内訳には小カテゴリの ID が入りうる。上限とレポートは大カテゴリの単位なので、
+  // 行を組む前に親へ寄せる。小カテゴリ別の額は itemTotals の方に残しておき、children に回す
+  const itemTotals = totalsByCategory(spending);
+  const totals = rollUpTotals(itemTotals, categories);
   // 一部の内訳だけを振替に割った明細が残るので、カテゴリとしても落とす
   totals.delete(TRANSFER_ID);
   // 振替は行として出さないので、上限が入っていても持ち込まない。
   // limitTotal は limits をそのまま足すため、ここで落とさないと「どの行にも紐付かない上限」が合計に混ざる
-  const limits = { ...(budget?.limits ?? {}) };
+  const limits = rollUpLimits(budget?.limits ?? {}, categories);
   delete limits[TRANSFER_ID];
 
   const days = daysInMonth(month);
@@ -102,21 +118,36 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
   const matchedIds = new Set(occurrences.map((occurrence) => occurrence.transactionId).filter((id): id is string => id !== undefined));
   // 突き合った明細はカテゴリ別の実績から一度引く。内訳が複数カテゴリに割れていても辻褄が合うよう、
   // 登録したカテゴリではなく明細の内訳をそのまま使う。振替の内訳は totals にも入っていないので落とす
-  const matchedTotals = totalsByCategory(spending.filter((txn) => matchedIds.has(txn.id)));
+  const matchedTotals = rollUpTotals(totalsByCategory(spending.filter((txn) => matchedIds.has(txn.id))), categories);
   matchedTotals.delete(TRANSFER_ID);
   const plannedTotals = new Map<string, number>();
   for (const occurrence of occurrences) {
     if (occurrence.transactionId || occurrence.categoryId === TRANSFER_ID) continue;
-    plannedTotals.set(occurrence.categoryId, (plannedTotals.get(occurrence.categoryId) ?? 0) + occurrence.amount);
+    const root = rootCategoryId(categories, occurrence.categoryId);
+    plannedTotals.set(root, (plannedTotals.get(root) ?? 0) + occurrence.amount);
   }
 
   const ids = new Set<string>([
-    ...categories.filter((c) => !c.archived).map((c) => c.id),
+    ...topLevelCategories(categories).map((c) => c.id),
     ...totals.keys(),
     ...Object.keys(limits),
     ...plannedTotals.keys(),
   ]);
   ids.delete(TRANSFER_ID);
+
+  // 小カテゴリ別の内訳は、親に寄せる前の額から組む。「食費 12,000 円」の中身を見せるための材料
+  const childTotals = new Map<string, CategoryChildTotal[]>();
+  for (const [categoryId, actual] of itemTotals) {
+    if (actual === 0 || categoryId === TRANSFER_ID) continue;
+    const root = rootCategoryId(categories, categoryId);
+    if (root === categoryId) continue;
+    const siblings = childTotals.get(root) ?? [];
+    siblings.push({ categoryId, label: categoryLabel(categories, categoryId), actual });
+    childTotals.set(root, siblings);
+  }
+  for (const siblings of childTotals.values()) {
+    siblings.sort((a, b) => (b.actual !== a.actual ? b.actual - a.actual : a.label.localeCompare(b.label, 'ja')));
+  }
 
   const rows: CategoryTotal[] = [...ids].map((categoryId) => {
     const actual = totals.get(categoryId) ?? 0;
@@ -135,6 +166,7 @@ export function aggregateMonth(input: AggregateInput): MonthSummary {
       over: Math.max(0, actual - limit),
       projected: Math.round((actual - matched) * pace) + matched + planned,
       recurring: matched + planned,
+      ...(childTotals.has(categoryId) ? { children: childTotals.get(categoryId) } : {}),
     };
   });
 

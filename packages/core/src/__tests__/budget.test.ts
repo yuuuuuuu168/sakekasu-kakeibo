@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { aggregateMonth, carryOverBudget, totalsByCategory, transactionsOfMonth } from '../budget';
 import { SEED_CATEGORIES, TRANSFER_ID } from '../categories';
-import type { Budget, RecurringPayment, Transaction } from '../types';
+import type { Budget, Category, RecurringPayment, Transaction } from '../types';
 
 function txn(id: string, date: string, amount: number, splits: [string, number][], needsDetail = false): Transaction {
   return {
@@ -215,6 +215,65 @@ describe('定期支払いと着地見込み', () => {
         },
       ),
     );
+  });
+});
+
+describe('小カテゴリ', () => {
+  const NESTED: Category[] = [
+    ...SEED_CATEGORIES,
+    { id: 'rice', label: '米・パン', order: 101, parentId: 'food' },
+    { id: 'deli', label: '惣菜', order: 102, parentId: 'food' },
+  ];
+  // 食費の内訳が小カテゴリに割れている明細
+  const NESTED_TRANSACTIONS: Transaction[] = [
+    txn('a', '2026-09-01', 1200, [['rice', 800], ['deli', 400]]),
+    txn('b', '2026-09-05', 620, [['cafe', 620]]),
+  ];
+
+  function summaryOf(budget?: Budget) {
+    return aggregateMonth({ month: '2026-09', transactions: NESTED_TRANSACTIONS, categories: NESTED, budget, today: '2026-09-15' });
+  }
+
+  it('実績は大カテゴリに寄せて数える', () => {
+    const food = summaryOf().categories.find((row) => row.categoryId === 'food');
+    expect(food?.actual).toBe(1200);
+  });
+
+  it('小カテゴリは行として並べない', () => {
+    expect(summaryOf().categories.map((row) => row.categoryId)).not.toContain('rice');
+  });
+
+  it('大カテゴリの中の内訳を children に持つ', () => {
+    const food = summaryOf().categories.find((row) => row.categoryId === 'food');
+    expect(food?.children).toEqual([
+      { categoryId: 'rice', label: '米・パン', actual: 800 },
+      { categoryId: 'deli', label: '惣菜', actual: 400 },
+    ]);
+    // 合計は actual に含まれている。足し直すと二重に数える
+    expect(food?.children?.reduce((sum, child) => sum + child.actual, 0)).toBe(food?.actual);
+  });
+
+  it('小カテゴリを持たないカテゴリには children を付けない', () => {
+    const cafe = summaryOf().categories.find((row) => row.categoryId === 'cafe');
+    expect(cafe?.children).toBeUndefined();
+  });
+
+  it('上限は大カテゴリで突き合わせる。小カテゴリに残った上限も親に寄せる', () => {
+    const summary = summaryOf({ month: '2026-09', limits: { food: 1_000, rice: 500 } });
+    const food = summary.categories.find((row) => row.categoryId === 'food');
+    expect(food?.limit).toBe(1_500);
+    expect(food?.over).toBe(0);
+    expect(summary.limitTotal).toBe(1_500);
+  });
+
+  it('合計は小カテゴリに割っても変わらない', () => {
+    const flat = aggregateMonth({
+      month: '2026-09',
+      transactions: [txn('a', '2026-09-01', 1200, [['food', 1200]]), NESTED_TRANSACTIONS[1]],
+      categories: NESTED,
+      today: '2026-09-15',
+    });
+    expect(summaryOf().total).toBe(flat.total);
   });
 });
 

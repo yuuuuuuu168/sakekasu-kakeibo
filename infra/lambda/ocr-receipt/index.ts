@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { SEED_CATEGORIES, UNCATEGORIZED_ID, classifyItem, toYen } from '@kakeibo/core';
+import { classifyItem, toYen } from '@kakeibo/core';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -24,13 +24,10 @@ function requireEnv(name: string): string {
   return value;
 }
 
-type Category = { id: string; label: string };
-
 type RawItem = {
   name?: unknown;
   amount?: unknown;
   quantity?: unknown;
-  categoryId?: unknown;
 };
 
 export async function handler(
@@ -49,13 +46,9 @@ export async function handler(
     return json(403, { message: 'その画像は読めません' });
   }
 
-  const categories: Category[] = Array.isArray(body.categories)
-    ? (body.categories as Category[]).filter((item) => typeof item?.id === 'string' && typeof item?.label === 'string')
-    : SEED_CATEGORIES.map((category) => ({ id: category.id, label: category.label }));
-
   try {
     const image = await loadImage(key);
-    const draft = await analyze(image, categories);
+    const draft = await analyze(image);
     return json(200, draft);
   } catch (cause) {
     console.error('[ocr] failed', cause);
@@ -91,8 +84,12 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
-function buildPrompt(categories: Category[]): string {
-  const list = categories.map((category) => `- ${category.id}: ${category.label}`).join('\n');
+/**
+ * カテゴリは聞かない。このモデルに任せるのは「印字を読む」ところまでで、
+ * どの費目かは別の関数（classify）が Jev に聞く。仕事を 1 つにすると
+ * 出力が短くなり、JSON が壊れる目も減る。
+ */
+function buildPrompt(): string {
   return `このレシートの写真から、次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
 
 {
@@ -100,7 +97,7 @@ function buildPrompt(categories: Category[]): string {
   "date": "YYYY-MM-DD",
   "total": 合計金額の整数,
   "items": [
-    { "name": "品目名", "amount": 金額の整数, "quantity": 個数, "categoryId": "カテゴリID" }
+    { "name": "品目名", "amount": 金額の整数, "quantity": 個数 }
   ]
 }
 
@@ -109,14 +106,11 @@ function buildPrompt(categories: Category[]): string {
 - 値引き・ポイント値引きは負の金額の品目として入れる
 - 小計・合計・お預り・お釣り・消費税は items に入れない
 - 日付が読めなければ date を空文字にする
-- 品目名は印字されたまま。略字はそのまま書く
-- categoryId は次から 1 つ選ぶ。迷ったら ${UNCATEGORIZED_ID}
-${list}`;
+- 品目名は印字されたまま。略字はそのまま書く`;
 }
 
 async function analyze(
   image: { base64: string; mediaType: string },
-  categories: Category[],
 ): Promise<{ storeName: string; date: string; total: number; items: unknown[]; warnings: string[] }> {
   const response = await bedrock.send(
     new InvokeModelCommand({
@@ -131,7 +125,7 @@ async function analyze(
             role: 'user',
             content: [
               { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-              { type: 'text', text: buildPrompt(categories) },
+              { type: 'text', text: buildPrompt() },
             ],
           },
         ],
@@ -141,17 +135,19 @@ async function analyze(
 
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as { content?: { text?: string }[] };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
-  return normalizeDraft(text, categories);
+  return normalizeDraft(text);
 }
 
 /**
  * モデルの出力を家計簿が扱える形に直す。
- * JSON が壊れていること、金額が文字列で来ること、存在しないカテゴリを返すことが
- * いずれも起きるので、全部ここで吸収して warnings に残す。
+ * JSON が壊れていること、金額が文字列で来ることがいずれも起きるので、
+ * 全部ここで吸収して warnings に残す。
+ *
+ * カテゴリはキーワード表（classifyItem）で仮に付ける。本番の判定は画面が
+ * この後 /classify に聞きに行くので、ここで付けるのはその返事が来ないときの控え。
  */
 export function normalizeDraft(
   text: string,
-  categories: Category[],
 ): { storeName: string; date: string; total: number; items: { name: string; amount: number; quantity?: number; categoryId: string }[]; warnings: string[] } {
   const warnings: string[] = [];
   const parsed = extractJson(text);
@@ -159,18 +155,16 @@ export function normalizeDraft(
     return { storeName: '', date: '', total: 0, items: [], warnings: ['レシートを読み取れませんでした。手で入れてください。'] };
   }
 
-  const known = new Set(categories.map((category) => category.id));
   const items = (Array.isArray(parsed.items) ? (parsed.items as RawItem[]) : [])
     .map((item) => {
       const name = typeof item.name === 'string' ? item.name.trim() : '';
       const amount = toNumber(item.amount);
       if (name === '' || amount === undefined) return undefined;
-      const hinted = typeof item.categoryId === 'string' && known.has(item.categoryId) ? item.categoryId : undefined;
       return {
         name,
         amount: toYen(amount),
         ...(toNumber(item.quantity) !== undefined ? { quantity: toNumber(item.quantity) } : {}),
-        categoryId: classifyItem(name, hinted),
+        categoryId: classifyItem(name),
       };
     })
     .filter((item): item is { name: string; amount: number; quantity?: number; categoryId: string } => item !== undefined);
