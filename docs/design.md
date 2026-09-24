@@ -12,7 +12,8 @@ API Gateway (HTTP API) ── Cognito JWT オーソライザ
 Lambda (api)  ──▶ DynamoDB (シングルテーブル)
   │
   ├─▶ S3 (レシート画像)  … 署名付き URL を返すだけ。本体は通さない
-  └─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)
+  ├─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)      … 画像から品目を起こす
+  └─▶ Lambda (classify)   ──▶ TypeSafe (Jev)         … 品目名・店舗名のカテゴリを決める
 
 EventBridge (毎月1日 09:00 JST) ──▶ Lambda (monthly-report) ──▶ DynamoDB
 
@@ -59,7 +60,7 @@ DynamoDB のシングルテーブル。`pk` はユーザー固定、`sk` で種�
 | --- | --- | --- | --- |
 | 明細 | `USER#<sub>` | `TXN#<id>` | `date`, `amount`, `merchant`, `rawMerchant`, `source`, `splits`, `needsDetail`, `receiptId`, `notDuplicateOf` |
 | レシート | `USER#<sub>` | `RECEIPT#<id>` | `storeName`, `date`, `total`, `items`, `imageKey`, `txnId`, `status` |
-| カテゴリ | `USER#<sub>` | `CONFIG#categories` | `categories`（配列） |
+| カテゴリ | `USER#<sub>` | `CONFIG#categories` | `categories`（配列。`parentId` で 2 段まで） |
 | ルール | `USER#<sub>` | `CONFIG#rules` | `rules`（配列） |
 | 定期支払い | `USER#<sub>` | `CONFIG#recurring` | `recurring`（配列） |
 | 予算 | `USER#<sub>` | `BUDGET#<YYYY-MM>` | `limits`（カテゴリ ID → 上限額） |
@@ -95,6 +96,7 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 | `PUT /mappings/{sourceId}` | CSV の列の対応を保存する |
 | `POST /uploads` | レシート画像の署名付き URL を返す |
 | `POST /receipts/analyze` | 画像を OCR してレシートの下書きを返す（別の Lambda） |
+| `POST /classify` | 品目名や店舗名のカテゴリを判定して返す（別の Lambda） |
 | `PUT /receipts/{id}` `DELETE /receipts/{id}` | レシートを保存・削除する |
 | `GET /reports/{month}` | 作っておいた月次レポートを返す |
 
@@ -107,7 +109,8 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 
 `VITE_API_URL` などが渡されていないとき、画面は「ローカルモード」で動く。
 データはブラウザの localStorage に入り、月次レポートもその場で組む。AWS を用意する前に
-カテゴリの試行錯誤を始められるようにするため。OCR と画像の置き場所だけは代わりが無いので断る。
+カテゴリの試行錯誤を始められるようにするため。OCR・カテゴリ判定・画像の置き場所だけは代わりが無いので断る。
+カテゴリ判定が無いときは、キーワード表とルールの答えがそのまま残る。
 
 ## 明細 ID の決め方
 
@@ -146,16 +149,63 @@ id = sha256(source + '|' + date + '|' + amount + '|' + normalizeMerchant(rawMerc
 `酒` を独立させてあるのは sakekasu-builder と同じ理由。食費に混ぜると見えなくなる。
 `カフェ・嗜好品` はコンビニのコーヒーや菓子が食費に紛れるのを防ぐため。どちらも、要らなければ統合する。
 
+## 大カテゴリと小カテゴリ
+
+`Category` は `parentId` を持てる。入れると小カテゴリになり、階層は 2 段まで。
+
+- **上限と月次レポートは大カテゴリの単位**。小カテゴリの実績は親に寄せて数える
+  （`rollUpTotals` / `rollUpLimits`）。上限を小カテゴリごとに置くと、月の途中で
+  内訳の付け替えが起きるたびに上限の意味が変わってしまう
+- 内訳（`Split.categoryId`）には小カテゴリの ID が入る。「食費 12,000 円」の中で
+  何に使ったかは、ダッシュボードの大カテゴリの行に畳んで出す（`CategoryTotal.children`）
+- 壊れた形（親が消えた、循環した、孫ができた）でも額が宙に浮かないよう、
+  `rootCategoryId` が必ず大カテゴリの ID を返す。親を統合して使わなくなったときは、
+  子をそのまま大カテゴリとして立てる
+
 ## 自動分類の優先順
 
 1. レシートで確定した内訳。これが最強で、後から上書きされない
 2. 利用者のルール（`priority` の降順）
 3. 初期搭載ルール
-4. 未分類
+4. カテゴリ判定（Jev）。確信が高ければルールとして覚え、次からは 2 で当たる
+5. 未分類
 
 初期搭載ルールには `ambiguous: true` の印を持つものがある。コンビニ、ドラッグストア、スーパー、
 Amazon、ホームセンター、ネットスーパー。これに当たった明細は、カテゴリを推定したうえで
 `needsDetail: true` を立てる。ダッシュボードに「内訳待ち N 件」として出す。
+
+## カテゴリ判定（2 段）
+
+OCR とカテゴリ判定は別のモデルに分けている。画像から印字を起こすのは生成の仕事で Claude
+（Bedrock / Haiku 4.5）、「食費か日用品か」は選択肢から 1 つ選ぶ仕事で Jev（TypeSafe）。
+Jev は答えと一緒に校正された確信度（0〜1）を返すので、そのまま入れる・人に見せる・
+未分類に落とす、の線を数字で引ける。
+
+判定は 2 段に分ける。
+
+1. 大カテゴリを選ぶ。選択肢は大カテゴリだけ（未分類と振替も混ぜる。逃げ道がないと
+   分からないものがどこかに押し込まれる）
+2. その大カテゴリに小カテゴリがあれば、その中から選ぶ。選択肢に
+   「この中のどれにも当てはまらない」を必ず混ぜる
+
+小カテゴリまで決まったときの確信度は 2 つの積。大カテゴリが外れていれば小カテゴリも
+外れているので、小カテゴリが正しいと言えるのは両方当たったときだけ。積が線を下回ったら
+大カテゴリで止める。**大カテゴリまでの結論は捨てない**のが 2 段に分けた理由。
+
+| 確信度 | 扱い |
+| --- | --- |
+| 0.8 以上 | そのまま入れる。店舗名ならルールとして覚える |
+| 0.5 以上 | 入れるが、レシートの注意書きに出す。ルールは作らない |
+| 0.5 未満 | 未分類に落とす |
+
+判定は「あれば嬉しい」ものとして扱う。ローカルモード、鍵の設定漏れ、TypeSafe 側の不調、
+どれで転んでもレシートは登録できて明細は取り込める。落ちたときはキーワード表
+（`classifyItem`）とルールの答えがそのまま残る。
+
+材料づくりと採否は `packages/core/src/classify.ts`（AWS も HTTP も知らない純粋関数）、
+モデルの呼び出しは `infra/lambda/classify/` にある。
+
+外に出るのは品目名と店舗名だけで、画像・金額・日付・明細の中身は送らない。
 
 ## レシートと明細のマッチ
 
@@ -286,7 +336,7 @@ priority 100 なので、こちらが勝つ。`チャージスポット` のよ�
 packages/core/      明細解析、正規化、分類、マッチ、集計、叱り。AWS に依存しない純粋関数
 src/                フロントエンド（React 19 + Vite + Tailwind v4）
 infra/              CDK
-infra/lambda/       api, ocr-receipt, monthly-report
+infra/lambda/       api, ocr-receipt, classify, monthly-report
 ```
 
 `packages/core` はビルドしない。TypeScript のソースをそのまま公開し、Vite と esbuild（NodejsFunction）

@@ -28,26 +28,43 @@ GET や他の操作まで署名しないこと。受け取る `contentType` は 
 `infra/lib/api-stack.ts` の IAM は、推論プロファイルと振り先の foundation-model の
 2 つの ARN だけを許している。`*` に広げないこと、別のアクションを足さないこと。
 Lambda ごとの権限も同じで、API は table への読み書きとバケットへの `Put` だけ、
-OCR はバケットの読み取りと Bedrock だけに限ること。
+OCR はバケットの読み取りと Bedrock だけ、カテゴリ判定は API キーのシークレットの
+読み取りだけに限ること。
 
-## 5. デプロイ用ロールを main 以外から引き受けられないこと
+## 5. カテゴリ判定の API キーをコードにもテンプレートにも置かないこと
+
+カテゴリ判定（TypeSafe / Jev）の鍵は Secrets Manager の
+`sakekasu-kakeibo-{env}-typesafe-api-key` に入れ、値は人が入れる。
+CDK が作るのは入れ物だけで、`generateSecretString` 以外で値を渡さないこと。
+環境変数に鍵そのものを置かないこと（関数に渡すのはシークレットの ARN）。
+Lambda のログに鍵が出ないこと（SDK の `logLevel` を `debug` にしないこと。
+`debug` はリクエストヘッダと本文を出す）。
+
+## 6. 外部のモデルへ渡すのは品目名と店舗名だけに限ること
+
+`infra/lambda/classify/` が TypeSafe に送るのは、レシートの品目名と明細の店舗名、
+そしてカテゴリの一覧（ID と名前）だけ。レシート画像、金額、日付、明細の件数や合計、
+Cognito の `sub` を送らないこと。1 回の呼び出しで見る対象の上限（`MAX_SUBJECTS`）を
+外さないこと。判定が落ちても処理が続くこと（キーワード表とルールに落ちる）。
+
+## 7. デプロイ用ロールを main 以外から引き受けられないこと
 
 `infra/lib/github-oidc-stack.ts` の信頼ポリシーは main の ref のときだけ引き受けを許している。
 PR や他のブランチ、他のリポジトリから引き受けられるようにしないこと。
 
-## 6. CloudFront のセキュリティヘッダを緩めないこと
+## 8. CloudFront のセキュリティヘッダを緩めないこと
 
 CSP、HSTS、`X-Content-Type-Options` ほかを `infra/lib/site-stack.ts` で付けている。
 特に CSP に `unsafe-inline` や `unsafe-eval`、広いホストを足さないこと。
 
-## 7. 外から来たファイルの解析で境界を越えないこと
+## 9. 外から来たファイルの解析で境界を越えないこと
 
 CSV / PDF / 画像の取り込みは `packages/core/src/statement/` と `src/features/import/`。
 文字コード判定や列の推定で際限なくメモリを使わないこと。解析した値を検査せずに
 DOM や API の呼び出しへ渡さないこと。明細やレシートの文字列を画面に出すのに
 `dangerouslySetInnerHTML` のような経路を使わないこと。
 
-## 8. Actions のワークフローで認証情報を依存のコードに触らせないこと
+## 10. Actions のワークフローで認証情報を依存のコードに触らせないこと
 
 `deploy.yml` は AWS の認証を入れる前に `npm ci --ignore-scripts` を済ませる並びになっている。
 この順番を崩さないこと。`permissions` を広げないこと、`pull_request_target` を使わないこと、
