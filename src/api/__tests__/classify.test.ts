@@ -67,6 +67,24 @@ describe('judgeReceiptItems', () => {
     ]);
   });
 
+  /*
+   * 判定の側でも同じ検査をしているが、内訳に書き込むのはこちらなので、
+   * 手元にないカテゴリを渡されたら書かない。どの行にも出てこない額を作らせないため
+   */
+  it('手元にないカテゴリを返されたら使わない', async () => {
+    api.classify.mockResolvedValue({ '0': { categoryId: 'ghost', confidence: 0.99, status: 'accepted' } });
+    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
+    expect(judged.items[0].categoryId).toBe('food');
+    expect(judged.warnings).toEqual([]);
+  });
+
+  it('使わなくなったカテゴリを返されたら使わない', async () => {
+    const archived = CATEGORIES.map((category) => (category.id === 'apparel' ? { ...category, archived: true } : category));
+    api.classify.mockResolvedValue({ '0': { categoryId: 'apparel', confidence: 0.99, status: 'accepted' } });
+    const judged = await judgeReceiptItems(ITEMS, '店', archived);
+    expect(judged.items[0].categoryId).toBe('food');
+  });
+
   it('判定が落ちても品目はそのまま返す', async () => {
     api.classify.mockRejectedValue(new Error('AWS 側が必要です'));
     const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
@@ -125,6 +143,15 @@ describe('judgeUnmatchedMerchants', () => {
     api.classify.mockResolvedValue({ [key]: { categoryId: UNCATEGORIZED_ID, confidence: 0.1, status: 'unresolved' } });
     const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
     expect(judged.transactions[0].splits[0].categoryId).toBe(UNCATEGORIZED_ID);
+    expect(judged.judged).toBe(0);
+  });
+
+  it('手元にないカテゴリを返されたら、内訳もルールも書き換えない', async () => {
+    const key = normalizeMerchant('謎の商店');
+    api.classify.mockResolvedValue({ [key]: { categoryId: 'ghost', confidence: 0.99, status: 'accepted' } });
+    const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
+    expect(judged.transactions[0].splits[0].categoryId).toBe(UNCATEGORIZED_ID);
+    expect(judged.learned).toEqual([]);
     expect(judged.judged).toBe(0);
   });
 
