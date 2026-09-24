@@ -19,6 +19,7 @@ import {
   type Transaction,
 } from '@kakeibo/core';
 import { api } from '../../api/index';
+import { judgeReceiptItems } from '../../api/classify';
 import { uploadToS3 } from '../../api/remote';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
@@ -73,14 +74,20 @@ export function ReceiptsPage() {
       const target = await api.requestUpload(file.type || 'image/jpeg');
       await uploadToS3(target, file);
       const result = await api.analyzeReceipt({ key: target.key });
+      // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
+      // 判定が届かなければキーワード表の答えがそのまま残る
+      const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId) }));
+      const judged = await judgeReceiptItems(read, result.storeName, snapshot.categories);
+      const warnings = [...(result.warnings ?? []), ...judged.warnings];
+
       const next: Draft = {
         id: `r-${Date.now().toString(36)}`,
         storeName: result.storeName,
         date: result.date || todayIso(),
         total: result.total,
-        items: result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId) })),
+        items: judged.items,
         imageKey: target.key,
-        ...(result.warnings ? { warnings: result.warnings } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
       };
       setDraft(next);
       const auto = autoMatch(findCandidates({ ...next, status: 'pending' }, snapshot.transactions));

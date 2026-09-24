@@ -5,6 +5,7 @@ export * from './hash';
 export * from './merchant';
 export * from './categories';
 export * from './rules';
+export * from './classify';
 export * from './recurring';
 export * from './budget';
 export * from './report';

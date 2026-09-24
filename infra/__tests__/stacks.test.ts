@@ -134,6 +134,38 @@ describe('ApiStack', () => {
     });
   });
 
+  it('カテゴリ判定の同時実行にも天井を置く', () => {
+    Template.fromStack(stacks().api).hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-classify',
+      ReservedConcurrentExecutions: 3,
+    });
+  });
+
+  it('カテゴリ判定の API キーは値を持たないシークレットとして作る', () => {
+    const template = Template.fromStack(stacks().api);
+    const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret'));
+    expect(secrets).toHaveLength(1);
+    expect(secrets[0].Properties.SecretString).toBeUndefined();
+    expect(secrets[0].Properties.Name).toBe('sakekasu-kakeibo-test-typesafe-api-key');
+  });
+
+  /*
+   * 判定の関数に要るのはシークレットの読み取りだけ。明細（table）にもレシート画像（bucket）にも
+   * 触らせない。外の API に渡すのは品目名と店舗名だけ、という線をここで固定する。
+   */
+  it('カテゴリ判定の関数にはシークレットの読み取りだけを許す', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const classify = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('ClassifyFunctionServiceRole'));
+    expect(classify).toBeDefined();
+
+    const actions = (classify!.Properties.PolicyDocument.Statement as Record<string, unknown>[]).flatMap((statement) =>
+      Array.isArray(statement.Action) ? (statement.Action as string[]) : [statement.Action as string],
+    );
+    expect(actions).toContain('secretsmanager:GetSecretValue');
+    expect(actions.filter((action) => action.startsWith('dynamodb:') || action.startsWith('s3:') || action.startsWith('bedrock:'))).toEqual([]);
+  });
+
   it('CORS は渡した配信元だけを許す', () => {
     Template.fromStack(stacks().api).hasResourceProperties('AWS::ApiGatewayV2::Api', {
       CorsConfiguration: {
@@ -153,6 +185,7 @@ describe('ApiStack', () => {
 
     expect(keys).toContain('GET /{proxy+}');
     expect(keys).toContain('POST /receipts/analyze');
+    expect(keys).toContain('POST /classify');
     expect(keys.filter((key) => key.startsWith('OPTIONS ') || key.startsWith('ANY '))).toEqual([]);
   });
 
@@ -165,7 +198,7 @@ describe('ApiStack', () => {
   it('カスタムリソースを作らない（ロググループは明示して作る）', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
-    template.resourceCountIs('AWS::Logs::LogGroup', 3);
+    template.resourceCountIs('AWS::Logs::LogGroup', 4);
   });
 });
 
