@@ -32,8 +32,13 @@ sakekasu-builder には PR 作成直後に watch を促す `PostToolUse` フッ�
 npm run lint       # eslint
 npm run typecheck  # tsc -b
 npm test           # コアのロジックと画面
-cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
+cd infra && npx tsc --noEmit && npm test && npx cdk synth -q  # 型・アサーション・合成
 ```
+
+infra の型検査を別に打つのは、ルートの `tsc -b` が `infra/lambda` を見ないため。
+Lambda だけで型が壊れていても手元では通ってしまい、CI（`test.yml` のインフラのジョブ）で
+初めて落ちる。`cdk synth` は esbuild のバンドルまで通すので、Lambda の import の
+解決漏れもここで出る。
 
 `packages/core` を触ったら、画面と Lambda の両方に影響が出る。どちらからも同じコードを
 読んでいるので、テストは core に厚く置いてある。内訳の合計が明細の金額に一致するという
