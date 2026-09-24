@@ -175,6 +175,17 @@ export function DashboardPage() {
                   detail={`着地見込み ${formatYen(row.projected)}`}
                   onClick={() => navigate(`#/transactions?month=${month}&filter=${row.categoryId}`)}
                 />
+                {/* 小カテゴリを作ってある大カテゴリは、中身も出す。ここが「何に散財したか」の答え */}
+                {row.children && row.children.length > 0 && (
+                  <ul className="mt-1 space-y-0.5 pl-3">
+                    {row.children.map((child) => (
+                      <li key={child.categoryId} className="flex items-baseline justify-between gap-2 text-xs text-ink-2">
+                        <span className="truncate">{child.label}</span>
+                        <span className="tnum shrink-0">{formatYen(child.actual)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>
