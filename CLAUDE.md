@@ -62,12 +62,15 @@ Cognito ユーザー・SSM パラメータは IAM 側で拒否される。
 
 ## デプロイ
 
-**デプロイは main へのマージ経由。手元からの `cdk deploy` は原則打たない。**
+**デプロイは main へのマージ経由。手元からの `cdk deploy` も `cdkd deploy` も原則打たない。**
 例外は 2 つだけで、`npx cdk bootstrap` と、Actions 用のロールを作る
 `npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true`。
 どちらも Actions にロールを触らせないため、手で打つ。
 
-確かめたいだけなら `cdk diff` までにとどめる。手順は
+アプリ本体のスタックは CloudFormation ではなく [cdkd](https://github.com/go-to-k/cdkd) で出している。
+状態は S3 の `cdkd-state-232791540685` にあり、CloudFormation のスタックは無い。
+`cdk diff` は CloudFormation のスタックと比べるので、もう当てにならない。
+確かめたいだけなら `cdkd diff` までにとどめる。手順は
 [docs/operations.md](docs/operations.md) にある。
 
 Lambda と Bedrock のモデル ID を差し替えるときは、IAM に推論プロファイルと振り先の
