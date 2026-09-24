@@ -1,5 +1,15 @@
 import { fetchAuthSession } from 'aws-amplify/auth';
-import type { Budget, Category, CategoryRule, MonthlyReport, Receipt, RecurringPayment, Transaction } from '@kakeibo/core';
+import type {
+  Budget,
+  Category,
+  CategoryRule,
+  ClassifyTarget,
+  MonthlyReport,
+  Receipt,
+  RecurringPayment,
+  Transaction,
+  Verdict,
+} from '@kakeibo/core';
 import { config } from '../config';
 import type { KakeiboApi, ReceiptDraft, SavedMapping, Snapshot, UploadTarget } from './types';
 
@@ -45,6 +55,10 @@ export const remoteApi: KakeiboApi = {
   deleteReceipt: (id: string) => request<void>('DELETE', `/receipts/${encodeURIComponent(id)}`),
   requestUpload: (contentType: string) => request<UploadTarget>('POST', '/uploads', { contentType }),
   analyzeReceipt: (input: { key?: string; dataUrl?: string }) => request<ReceiptDraft>('POST', '/receipts/analyze', input),
+  classify: async (target: ClassifyTarget) => {
+    const result = await request<{ verdicts?: Record<string, Verdict> }>('POST', '/classify', target);
+    return result?.verdicts ?? {};
+  },
   getReport: (month: string) => request<MonthlyReport | undefined>('GET', `/reports/${month}`),
 };
 
