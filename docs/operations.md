@@ -323,7 +323,7 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 
 ### ジョブを 2 つに分けている理由
 
-`infra` ジョブが `cdk deploy --all` を打ち、スタックの出力（API の URL、UserPool の ID、
+`infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、UserPool の ID、
 配信先のバケットとディストリビューション）をジョブの出力に載せる。`site` ジョブがそれを受けて
 フロントをビルドし、S3 へ同期して `index.html` を無効化する。
 
