@@ -17,6 +17,7 @@ import {
   type SourceKind,
   type Transaction,
 } from '@kakeibo/core';
+import { judgeUnmatchedMerchants } from '../../api/classify';
 import { useStore } from '../../api/store';
 import { Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { DUPLICATES_FILTER, navigate } from '../../lib/router';
@@ -38,7 +39,7 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 ];
 
 export function ImportPage() {
-  const { snapshot, rules, saveTransactions, saveMapping } = useStore();
+  const { snapshot, rules, saveTransactions, saveMapping, saveRules } = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [loaded, setLoaded] = useState<Loaded | undefined>();
@@ -113,7 +114,18 @@ export function ImportPage() {
     try {
       const merge = mergeImported(snapshot.transactions, result.transactions);
       const fresh = result.transactions.filter((txn) => !snapshot.transactions.some((known) => known.id === txn.id));
-      await saveTransactions(fresh);
+
+      /**
+       * ルールに当たらなかった店だけを判定（Jev）に回す。ルールが先で判定が後なのは、
+       * 覚えた店は聞き直す必要が無いから。確信が高かった店はルールとして覚えるので、
+       * 来月の取り込みでは同じ店を聞かなくなる。
+       */
+      const judged = await judgeUnmatchedMerchants(fresh, snapshot.categories);
+      await saveTransactions(judged.transactions);
+      if (judged.learned.length > 0) {
+        const learnedIds = new Set(judged.learned.map((rule) => rule.id));
+        await saveRules([...snapshot.rules.filter((rule) => !learnedIds.has(rule.id)), ...judged.learned]);
+      }
       await saveMapping({
         sourceId: source,
         label: sourceLabel || SOURCE_OPTIONS.find((option) => option.value === source)!.label,
@@ -130,6 +142,9 @@ export function ImportPage() {
       setMessage(
         `${merge.added} 件を取り込みました。` +
           (merge.kept > 0 ? `${merge.kept} 件は既にあったので飛ばしました。` : '') +
+          (judged.judged > 0 ? `初めての店 ${judged.judged} 件にカテゴリを当てました` : '') +
+          (judged.learned.length > 0 ? `（${judged.learned.length} 件はルールとして覚えました）` : '') +
+          (judged.judged > 0 ? '。' : '') +
           (suspects.length > 0 ? `重複の可能性が ${suspects.length} 組あります。` : ''),
       );
       setLoaded(undefined);
@@ -160,7 +175,10 @@ export function ImportPage() {
         >
           <Upload size={20} className="mx-auto text-muted" aria-hidden />
           <p className="mt-2 text-sm text-ink">CSV か PDF をここに落とす</p>
-          <p className="mt-1 text-xs text-muted">Shift_JIS の CSV もそのまま読めます。解析はブラウザの中だけで行います</p>
+          <p className="mt-1 text-xs text-muted">
+            Shift_JIS の CSV もそのまま読めます。ファイルの解析はブラウザの中だけで行い、
+            ルールに無い店の名前だけカテゴリ判定に送ります
+          </p>
           <Button className="mt-3" onClick={() => inputRef.current?.click()} disabled={busy}>
             ファイルを選ぶ
           </Button>

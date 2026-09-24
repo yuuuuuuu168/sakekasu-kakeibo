@@ -2,6 +2,7 @@ import type {
   Budget,
   Category,
   CategoryRule,
+  ClassifyTarget,
   ColumnMapping,
   MonthlyReport,
   Receipt,
@@ -9,6 +10,7 @@ import type {
   RecurringPayment,
   SourceKind,
   Transaction,
+  Verdict,
 } from '@kakeibo/core';
 
 /** CSV の列の対応をソースごとに覚えておく。2 回目以降は指定し直さなくて済む */
@@ -61,6 +63,11 @@ export interface KakeiboApi {
   requestUpload(contentType: string): Promise<UploadTarget>;
   /** Bedrock で画像を読む。ローカルモードでは使えない */
   analyzeReceipt(input: { key?: string; dataUrl?: string }): Promise<ReceiptDraft>;
+  /**
+   * 品目名や店舗名のカテゴリを判定する（Jev）。ローカルモードでは使えない。
+   * 返るのは投げた key ごとの結論。呼び出し側は落ちても進めること
+   */
+  classify(target: ClassifyTarget): Promise<Record<string, Verdict>>;
   getReport(month: string): Promise<MonthlyReport | undefined>;
 }
 

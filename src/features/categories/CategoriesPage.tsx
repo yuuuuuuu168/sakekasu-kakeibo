@@ -5,9 +5,12 @@ import {
   UNCATEGORIZED_ID,
   activeCategories,
   aggregateMonth,
+  canAdopt,
   carryOverBudget,
+  childCategories,
   formatYen,
   mergeCategoryInSplits,
+  topLevelCategories,
   type Budget,
   type Category,
 } from '@kakeibo/core';
@@ -24,6 +27,7 @@ export function CategoriesPage() {
   const { snapshot, saveCategories, saveBudget, saveTransactions } = useStore();
   const [month, setMonth] = useState(currentMonth());
   const [newLabel, setNewLabel] = useState('');
+  const [newParentId, setNewParentId] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | undefined>();
 
@@ -31,6 +35,22 @@ export function CategoriesPage() {
   // 振替・チャージは支出ではなく、集計にも上限にも出てこない。
   // ここに並べると実績 0 のまま上限だけ入れられるし、統合すると過去のチャージが支出に戻る
   const categories = activeCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID);
+
+  /** 大カテゴリの下に小カテゴリを並べた順。上限を入れるのは大カテゴリの行だけ */
+  const rows = useMemo(() => {
+    const ordered: { category: Category; child: boolean }[] = [];
+    for (const parent of topLevelCategories(snapshot.categories)) {
+      if (parent.id === TRANSFER_ID) continue;
+      ordered.push({ category: parent, child: false });
+      for (const child of childCategories(snapshot.categories, parent.id)) ordered.push({ category: child, child: true });
+    }
+    return ordered;
+  }, [snapshot.categories]);
+
+  const parentOptions = useMemo(
+    () => topLevelCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID && category.id !== UNCATEGORIZED_ID),
+    [snapshot.categories],
+  );
 
   const summary = useMemo(
     () =>
@@ -60,8 +80,27 @@ export function CategoriesPage() {
     if (!label) return;
     const id = `c-${Date.now().toString(36)}`;
     const order = Math.max(0, ...snapshot.categories.filter((item) => item.id !== UNCATEGORIZED_ID).map((item) => item.order)) + 1;
-    await saveCategories([...snapshot.categories, { id, label, order }]);
+    const parentId = parentOptions.some((item) => item.id === newParentId) ? newParentId : '';
+    await saveCategories([...snapshot.categories, { id, label, order, ...(parentId ? { parentId } : {}) }]);
     setNewLabel('');
+  }
+
+  /**
+   * カテゴリを小カテゴリにする、または大カテゴリに戻す。
+   * 置ける場所かどうかは core の canAdopt に聞く（3 段目や循環を作らせない）。
+   */
+  async function reparent(categoryId: string, parentId: string) {
+    if (parentId !== '' && !canAdopt(snapshot.categories, categoryId, parentId)) {
+      setMessage('そのカテゴリの下には置けません。小カテゴリの下に小カテゴリは作れません。');
+      return;
+    }
+    await saveCategories(
+      snapshot.categories.map((item) => {
+        if (item.id !== categoryId) return item;
+        const { parentId: _current, ...rest } = item;
+        return parentId ? { ...rest, parentId } : rest;
+      }),
+    );
   }
 
   async function merge(fromId: string, toId: string) {
@@ -75,7 +114,23 @@ export function CategoriesPage() {
       const moved = mergeCategoryInSplits(snapshot.transactions, fromId, toId);
       const changed = moved.filter((txn, index) => txn !== snapshot.transactions[index]);
       if (changed.length > 0) await saveTransactions(changed);
-      await saveCategories(snapshot.categories.map((item) => (item.id === fromId ? { ...item, archived: true } : item)));
+
+      /**
+       * 小カテゴリを持っているカテゴリを寄せたら、子も一緒に連れていく。
+       * 置いていくと、寄せたはずの中身が別の行として残る。
+       * 寄せ先が小カテゴリだったときは 3 段目になってしまうので、子は大カテゴリに戻す。
+       */
+      const orphans = childCategories(snapshot.categories, fromId);
+      const nextParentId = orphans.length > 0 && canAdopt(snapshot.categories, orphans[0].id, toId) ? toId : undefined;
+
+      await saveCategories(
+        snapshot.categories.map((item) => {
+          if (item.id === fromId) return { ...item, archived: true };
+          if (item.parentId !== fromId) return item;
+          const { parentId: _current, ...rest } = item;
+          return nextParentId ? { ...rest, parentId: nextParentId } : rest;
+        }),
+      );
       setMessage(`${changed.length} 件の明細を付け替えました。`);
     } finally {
       setBusy(false);
@@ -111,36 +166,48 @@ export function CategoriesPage() {
         action={<span className="tnum text-sm text-ink-2">合計 {formatYen(summary.limitTotal)}</span>}
       >
         <ul className="divide-y divide-grid">
-          {categories.map((category) => {
-            const row = summary.categories.find((item) => item.categoryId === category.id);
+          {rows.map(({ category, child }) => {
+            // 小カテゴリの実績は、親の行の children に入っている
+            const row = summary.categories.find((item) => item.categoryId === (child ? category.parentId : category.id));
+            const actual = child ? row?.children?.find((item) => item.categoryId === category.id)?.actual ?? 0 : row?.actual ?? 0;
+
             return (
-              <li key={category.id} className="flex flex-wrap items-center gap-2 py-2">
+              <li key={category.id} className={`flex flex-wrap items-center gap-2 py-2 ${child ? 'pl-4 sm:pl-6' : ''}`}>
                 <Input
                   value={category.label}
                   onChange={(event) => void rename(category.id, event.target.value)}
-                  className="w-40 sm:w-48"
+                  className={child ? 'w-36 sm:w-44' : 'w-40 sm:w-48'}
                   aria-label="カテゴリ名"
                   disabled={category.id === UNCATEGORIZED_ID}
                 />
-                <span className="tnum w-24 text-right text-xs text-ink-2">実績 {formatYen(row?.actual ?? 0)}</span>
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="上限なし"
-                  defaultValue={budget?.limits?.[category.id] ?? ''}
-                  onBlur={(event) => void setLimit(category.id, Math.round(Number(event.target.value) || 0))}
-                  className="tnum w-28 text-right"
-                  aria-label={`${category.label} の上限`}
-                />
+                <span className="tnum w-24 text-right text-xs text-ink-2">実績 {formatYen(actual)}</span>
+                {child ? (
+                  // 上限は大カテゴリで持つ。小カテゴリは「食費の中で何に使ったか」を見るための分解
+                  <span className="w-28 text-right text-xs text-muted">小カテゴリ</span>
+                ) : (
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="上限なし"
+                    defaultValue={budget?.limits?.[category.id] ?? ''}
+                    onBlur={(event) => void setLimit(category.id, Math.round(Number(event.target.value) || 0))}
+                    // sm: を付けないと Input 側の w-full に負けて、上限だけが行いっぱいに伸びる
+                    className="tnum w-28 text-right sm:w-28"
+                    aria-label={`${category.label} の上限`}
+                  />
+                )}
                 {category.id !== UNCATEGORIZED_ID && (
-                  <MergeControl category={category} categories={categories} disabled={busy} onMerge={merge} />
+                  <>
+                    <ParentControl category={category} parents={parentOptions} disabled={busy} onChange={reparent} />
+                    <MergeControl category={category} categories={categories} disabled={busy} onMerge={merge} />
+                  </>
                 )}
               </li>
             );
           })}
         </ul>
 
-        <div className="mt-4 flex items-end gap-2 border-t border-grid pt-3">
+        <div className="mt-4 flex flex-wrap items-end gap-2 border-t border-grid pt-3">
           <Field label="カテゴリを足す">
             <Input
               value={newLabel}
@@ -151,11 +218,26 @@ export function CategoriesPage() {
               }}
             />
           </Field>
+          <Field label="どこに">
+            <Select value={newParentId} onChange={(event) => setNewParentId(event.target.value)} aria-label="追加する先">
+              <option value="">大カテゴリとして</option>
+              {parentOptions.map((parent) => (
+                <option key={parent.id} value={parent.id}>
+                  {parent.label} の中に
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Button variant="primary" onClick={() => void add()} disabled={!newLabel.trim()}>
             <Plus size={14} />
             追加
           </Button>
         </div>
+
+        <p className="mt-2 text-xs text-muted">
+          小カテゴリを作ると、レシートの品目は大カテゴリを決めたあとに小カテゴリまで判定します。
+          上限と月末のレポートは大カテゴリのままです。
+        </p>
       </Card>
 
       <Card title="使わなくなったカテゴリ">
@@ -182,6 +264,41 @@ export function CategoriesPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * そのカテゴリを誰の下に置くか。ここが「小カテゴリの仕組み」の入口で、
+ * 大カテゴリとして立てるか、どれかの中に入れるかを 1 つの選択で決める。
+ */
+function ParentControl({
+  category,
+  parents,
+  disabled,
+  onChange,
+}: {
+  category: Category;
+  parents: Category[];
+  disabled: boolean;
+  onChange: (categoryId: string, parentId: string) => Promise<void>;
+}) {
+  return (
+    <Select
+      value={category.parentId ?? ''}
+      disabled={disabled}
+      onChange={(event) => void onChange(category.id, event.target.value)}
+      className="text-xs"
+      aria-label={`${category.label} の親カテゴリ`}
+    >
+      <option value="">大カテゴリ</option>
+      {parents
+        .filter((parent) => parent.id !== category.id)
+        .map((parent) => (
+          <option key={parent.id} value={parent.id}>
+            {parent.label} の中
+          </option>
+        ))}
+    </Select>
   );
 }
 

@@ -8,6 +8,7 @@ import {
   type Receipt,
   type RecurringPayment,
   type Transaction,
+  type Verdict,
 } from '@kakeibo/core';
 import { ApiUnavailable, type KakeiboApi, type ReceiptDraft, type SavedMapping, type Snapshot, type UploadTarget } from './types';
 
@@ -117,6 +118,14 @@ export const localApi: KakeiboApi = {
 
   async analyzeReceipt(): Promise<ReceiptDraft> {
     throw new ApiUnavailable('OCR には AWS 側が必要です。レシートは品目を手で入れてください。');
+  },
+
+  /**
+   * カテゴリ判定も AWS 側が要る。呼び出し側はこれを飲み込んで、
+   * キーワード表とルールの答えで進む（判定が無くても家計簿は使える）。
+   */
+  async classify(): Promise<Record<string, Verdict>> {
+    throw new ApiUnavailable('カテゴリの判定には AWS 側が必要です。');
   },
 
   /** ローカルモードでは月次レポートをその場で組む。Lambda の代わり */
