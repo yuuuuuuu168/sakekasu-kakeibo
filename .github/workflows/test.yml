@@ -72,3 +72,10 @@ jobs:
         working-directory: infra
         env:
           CDK_DEFAULT_ACCOUNT: '000000000000'
+      # deploy ワークフローが CloudFormation で入れる cdkd 用ロールのスタックも合成しておく
+      - run: npx cdk synth -q -c cdkd-deploy=true
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: '000000000000'
+      - run: bash -n scripts/migrate-to-cdkd.sh
+        working-directory: infra

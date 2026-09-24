@@ -40,6 +40,8 @@ inclusion: always
 - **バックエンド**: AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
 - **認証**: Amazon Cognito（UserPool、セルフサインアップ無効）
 - **配信**: S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中
+- **デプロイ**: アプリ本体のスタックは cdkd（CloudFormation を通さない CDK のデプロイツール）で出す。
+  cdkd 用ロールと Actions 用ロールのスタックだけは CloudFormation
 - **AI**: Amazon Bedrock（Claude Haiku 4.5）※レシートの OCR
 - **テスト**: Vitest + Testing Library + fast-check（プロパティベーステスト）
 
