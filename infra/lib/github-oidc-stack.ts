@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
+import { githubMainBranchPrincipal } from './github-principal';
 
 export interface GithubOidcStackProps extends cdk.StackProps {
   /** 信頼する GitHub リポジトリ（owner/repo 形式） */
@@ -16,10 +17,8 @@ export interface GithubOidcStackProps extends cdk.StackProps {
  * 違いが 2 つある。
  *
  * 1. OIDC プロバイダーを作らず、既にあるものを参照する。
- *    1 つの AWS アカウントに同じ URL のプロバイダーは 1 つしか置けず、
- *    token.actions.githubusercontent.com のものは sakekasu-builder の
- *    `sakekasu-github-oidc` スタックが持っている。ここで作ろうとすると
- *    EntityAlreadyExists でデプロイが落ちる
+ *    ここで作ろうとすると EntityAlreadyExists でデプロイが落ちる。
+ *    信頼条件の中身は github-principal.ts にある
  * 2. diff 用のロールを作っていない。PR に `cdk diff` を出すワークフローを
  *    まだ持っていないため。作るときに足す
  *
@@ -32,54 +31,11 @@ export class GithubOidcStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: GithubOidcStackProps) {
     super(scope, id, props);
 
-    const githubDomain = 'token.actions.githubusercontent.com';
-
-    const provider = iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(
-      this,
-      'GithubOidcProvider',
-      `arn:${this.partition}:iam::${this.account}:oidc-provider/${githubDomain}`,
-    );
-
-    const [owner, repo] = props.repository.split('/');
-
-    /*
-     * sub の照合を StringLike で 2 通り書いてあるのは、GitHub が発行する sub に
-     * 2 つの形式があるため。実測（2026-09-12、このリポジトリの push）はこちら。
-     *
-     *   repo:yuuuuuuu168@173623628/sakekasu-kakeibo@1367094471:ref:refs/heads/main
-     *
-     * オーナー名とリポジトリ名のうしろに数値 ID が付く。名前を変えても同一性が
-     * 保たれるようにする新しい形式で、GitHub API が返すオーナー ID と
-     * リポジトリ ID がそのまま入る。旧形式は ID の付かない次の形。
-     *
-     *   repo:yuuuuuuu168/sakekasu-kakeibo:ref:refs/heads/main
-     *
-     * 旧形式だけを StringEquals で書いていたために、assume が
-     * 「Not authorized to perform sts:AssumeRoleWithWebIdentity」で落ち続けた。
-     * AWS はロールが存在しない場合にも同じエラーを返すので、原因が見えにくい。
-     *
-     * ID の部分をワイルドカードにしてあるのは、リポジトリを作り直したときに
-     * 同じ落ち方をしないため。`@` の前を固定しているので、オーナー名と
-     * リポジトリ名は厳密に一致する必要がある（どちらも `@` を含められない）。
-     */
-    const subjects = [
-      `repo:${owner}@*/${repo}@*:ref:refs/heads/main`,
-      `repo:${owner}/${repo}:ref:refs/heads/main`,
-    ];
-
     const deployRole = new iam.Role(this, 'DeployRole', {
       roleName: 'sakekasu-kakeibo-github-actions-deploy',
       // IAM の description は ASCII + Latin-1 のみ。日本語を入れるとデプロイが 400 で落ちる
       description: 'CDK deploy from GitHub Actions (main branch only)',
-      assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
-        StringEquals: {
-          [`${githubDomain}:aud`]: 'sts.amazonaws.com',
-        },
-        // main への push と、main から起動した workflow_dispatch だけがこの sub になる
-        StringLike: {
-          [`${githubDomain}:sub`]: subjects,
-        },
-      }),
+      assumedBy: githubMainBranchPrincipal(this, props.repository),
     });
 
     /*

@@ -2,6 +2,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { ApiStack } from '../lib/api-stack';
 import { AuthStack } from '../lib/auth-stack';
+import { CdkdDeployStack } from '../lib/cdkd-deploy-stack';
 import { GithubOidcStack } from '../lib/github-oidc-stack';
 import { CertStack } from '../lib/cert-stack';
 import { DataStack } from '../lib/data-stack';
@@ -32,11 +33,21 @@ const env: cdk.Environment = { account, region: REGION };
  *
  * 使用例: npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
  */
+const REPOSITORY = 'yuuuuuuu168/sakekasu-kakeibo';
+
 if (app.node.tryGetContext('github-oidc')) {
-  new GithubOidcStack(app, 'sakekasu-kakeibo-github-oidc', {
-    repository: 'yuuuuuuu168/sakekasu-kakeibo',
-    env,
-  });
+  new GithubOidcStack(app, 'sakekasu-kakeibo-github-oidc', { repository: REPOSITORY, env });
+} else if (app.node.tryGetContext('cdkd-deploy')) {
+  /*
+   * アプリ本体を cdkd でデプロイするためのロール（環境に紐づかない単一のスタック）。
+   *
+   * これだけは CloudFormation で入れるので、cdkd の対象（`cdkd deploy --all`）に
+   * 混ざらないよう、github-oidc と同じくフラグで切り分ける。deploy ワークフローが
+   * cdkd を動かす前に毎回打つ。理由は cdkd-deploy-stack.ts にある。
+   *
+   * 使用例: npx cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true
+   */
+  new CdkdDeployStack(app, 'sakekasu-kakeibo-cdkd-deploy', { repository: REPOSITORY, env });
 } else {
   buildApplicationStacks();
 }
