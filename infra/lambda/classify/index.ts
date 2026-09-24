@@ -34,7 +34,7 @@ const SECRET_ID = requireEnv('TYPESAFE_SECRET_ID');
  */
 const MODEL_ID = requireEnv('TYPESAFE_MODEL_ID');
 
-/** 1 リクエストに載せる質問の数。刻んでおくと、1 回失敗しても全部やり直しにならない */
+/** 1 リクエストに載せる質問の数。刻んでおくと、束が 1 つ落ちても残りの答えは活きる */
 const QUESTIONS_PER_REQUEST = 20;
 /** 1 回の呼び出しで見る対象の上限。明細を一気に取り込んでも、ここで止める */
 const MAX_SUBJECTS = 100;
@@ -132,22 +132,49 @@ export function buildState(target: ClassifyTarget): Record<string, JsonValue> {
   };
 }
 
-async function ask(
-  client: TypeSafeClient,
+/** ask が要るのは systemOne だけ。テストから差し替えられるように、この形で受ける */
+export type AskClient = Pick<TypeSafeClient, 'systemOne'>;
+
+/**
+ * 1 段ぶんの質問を投げて、答えを集める。
+ *
+ * 束は同時に投げる。直列にすると、明細を一気に取り込んだとき（`MAX_SUBJECTS` で 5 束）に
+ * 1 段で 5 往復ぶん待つことになり、2 段で 10 往復。1 往復の最悪が
+ * `timeout × (maxRetries + 1)` なので、Lambda の制限時間（30 秒）に収まらなくなる。
+ * 同時に投げれば 1 段の待ち時間は 1 往復ぶんで済む。
+ *
+ * 束が 1 つ落ちても、その束の質問が未分類に落ちるだけで残りは活きる。
+ * 全部落ちたときだけ投げ直して、502 として外に出す（判定できなかったことを黙らせない）。
+ */
+export async function ask(
+  client: AskClient,
   state: Record<string, JsonValue>,
   specs: ChoiceSpec[],
 ): Promise<Record<string, ChoiceAnswer | undefined>> {
-  const answers: Record<string, ChoiceAnswer | undefined> = {};
-
+  const batches: ChoiceSpec[][] = [];
   for (let start = 0; start < specs.length; start += QUESTIONS_PER_REQUEST) {
-    const batch = specs.slice(start, start + QUESTIONS_PER_REQUEST);
-    const questions: Record<string, ChoiceQuestion> = Object.fromEntries(
-      batch.map((spec) => [spec.name, choice(spec.instructions, spec.criteria)]),
-    );
-
-    const result = await client.systemOne({ state, questions });
-    Object.assign(answers, toAnswers(result.answers));
+    batches.push(specs.slice(start, start + QUESTIONS_PER_REQUEST));
   }
+  if (batches.length === 0) return {};
+
+  const settled = await Promise.allSettled(
+    batches.map((batch) => {
+      const questions: Record<string, ChoiceQuestion> = Object.fromEntries(
+        batch.map((spec) => [spec.name, choice(spec.instructions, spec.criteria)]),
+      );
+      return client.systemOne({ state, questions });
+    }),
+  );
+
+  const answers: Record<string, ChoiceAnswer | undefined> = {};
+  const failures: unknown[] = [];
+  for (const result of settled) {
+    if (result.status === 'fulfilled') Object.assign(answers, toAnswers(result.value.answers));
+    else failures.push(result.reason);
+  }
+
+  if (failures.length > 0) console.warn('[classify] 束が落ちました', { 落ちた数: failures.length, 束の数: batches.length }, failures[0]);
+  if (failures.length === batches.length) throw failures[0];
 
   return answers;
 }
@@ -192,8 +219,17 @@ async function buildClient(): Promise<TypeSafeClient> {
   return new TypeSafeClient({
     apiKey,
     defaultModel: MODEL_ID,
-    // Jev は 1 秒を切って返る。待ち続けるより、待たせずに諦めてキーワード表に落とす方がいい
-    timeout: 8_000,
+    /*
+     * Jev は 1 秒を切って返る。待ち続けるより、待たせずに諦めてキーワード表に落とす方がいい。
+     *
+     * 1 往復の最悪は timeout × (maxRetries + 1) + 待ち時間で、ここでは 10 秒強。
+     * 判定は 2 段あるので最悪 21 秒ほどになり、Lambda の制限時間（30 秒）の内側に収まる。
+     * この 3 つ（timeout・maxRetries・関数の timeout）は連動しているので、
+     * 片方だけ動かさないこと。
+     */
+    timeout: 5_000,
+    retry: { maxRetries: 1 },
+    // debug にするとリクエストの本文とヘッダが CloudWatch に出る。鍵が載る
     logLevel: 'warn',
   });
 }

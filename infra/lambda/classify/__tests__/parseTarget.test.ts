@@ -1,9 +1,11 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import type { AskClient } from '../index';
 
 /** モジュールの読み込み時に環境変数を見るので、先に置いてから動的に読み込む */
 let parseTarget: typeof import('../index')['parseTarget'];
 let buildState: typeof import('../index')['buildState'];
 let toAnswers: typeof import('../index')['toAnswers'];
+let ask: typeof import('../index')['ask'];
 
 const CATEGORIES = [
   { id: 'food', label: '食費', order: 1 },
@@ -18,6 +20,7 @@ beforeAll(async () => {
   parseTarget = module.parseTarget;
   buildState = module.buildState;
   toAnswers = module.toAnswers;
+  ask = module.ask;
 });
 
 describe('parseTarget', () => {
@@ -102,6 +105,70 @@ describe('buildState', () => {
   it('店舗名の判定だと種類が変わる', () => {
     const target = parseTarget({ kind: 'merchant', subjects: [{ key: 'm0', text: 'ローソン' }], categories: CATEGORIES })!;
     expect((buildState(target) as { 種類: string }).種類).toContain('明細');
+  });
+});
+
+describe('ask', () => {
+  const specs = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      name: `s${index}`,
+      instructions: `質問${index}`,
+      criteria: { food: '食費', daily: '日用品' },
+    }));
+
+  /** 質問の名前ごとに food を高い確信度で返す、Jev の代わり */
+  function fakeClient(onCall?: (batch: string[]) => Promise<unknown> | undefined) {
+    const calls: string[][] = [];
+    const systemOne = vi.fn((request: { questions: Record<string, unknown> }) => {
+      const names = Object.keys(request.questions);
+      calls.push(names);
+      const override = onCall?.(names);
+      if (override) return override;
+      return Promise.resolve({
+        answers: Object.fromEntries(names.map((name) => [name, { type: 'choice', choice: 'food', confidence: 0.9 }])),
+      });
+    });
+    return { client: { systemOne } as unknown as AskClient, calls, systemOne };
+  }
+
+  it('質問を 20 問ずつの束に切る', async () => {
+    const { client, calls } = fakeClient();
+    const answers = await ask(client, {}, specs(45));
+    expect(calls.map((batch) => batch.length)).toEqual([20, 20, 5]);
+    expect(Object.keys(answers)).toHaveLength(45);
+  });
+
+  it('束は同時に投げる（直列にすると Lambda の制限時間を超える）', async () => {
+    let running = 0;
+    let peak = 0;
+    const { client } = fakeClient(async (names) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      running -= 1;
+      return { answers: Object.fromEntries(names.map((name) => [name, { choice: 'food', confidence: 0.9 }])) };
+    });
+
+    await ask(client, {}, specs(60));
+    expect(peak).toBe(3);
+  });
+
+  it('束が 1 つ落ちても残りの答えは活きる', async () => {
+    const { client } = fakeClient((names) => (names.includes('s0') ? Promise.reject(new Error('429')) : undefined));
+    const answers = await ask(client, {}, specs(40));
+    expect(answers.s0).toBeUndefined();
+    expect(answers.s20).toEqual({ choice: 'food', confidence: 0.9 });
+  });
+
+  it('全部落ちたら投げ直す（判定できなかったことを黙らせない）', async () => {
+    const { client } = fakeClient(() => Promise.reject(new Error('鍵が違う')));
+    await expect(ask(client, {}, specs(40))).rejects.toThrow('鍵が違う');
+  });
+
+  it('質問が無ければ呼ばない', async () => {
+    const { client, systemOne } = fakeClient();
+    expect(await ask(client, {}, [])).toEqual({});
+    expect(systemOne).not.toHaveBeenCalled();
   });
 });
 
