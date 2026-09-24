@@ -6,6 +6,7 @@ let parseTarget: typeof import('../index')['parseTarget'];
 let buildState: typeof import('../index')['buildState'];
 let toAnswers: typeof import('../index')['toAnswers'];
 let ask: typeof import('../index')['ask'];
+let describeFailure: typeof import('../index')['describeFailure'];
 
 const CATEGORIES = [
   { id: 'food', label: '食費', order: 1 },
@@ -21,6 +22,7 @@ beforeAll(async () => {
   buildState = module.buildState;
   toAnswers = module.toAnswers;
   ask = module.ask;
+  describeFailure = module.describeFailure;
 });
 
 describe('parseTarget', () => {
@@ -169,6 +171,17 @@ describe('ask', () => {
     const { client, systemOne } = fakeClient();
     expect(await ask(client, {}, [])).toEqual({});
     expect(systemOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('describeFailure', () => {
+  it('例外から要るものだけ取り出す（そのままログに流さない）', () => {
+    expect(describeFailure(new Error('落ちた'))).toBe('Error: 落ちた');
+    expect(describeFailure(Object.assign(new Error('多すぎ'), { name: 'RateLimitError', status: 429 }))).toBe(
+      'RateLimitError(429): 多すぎ',
+    );
+    expect(describeFailure('文字列')).toBe('不明な失敗');
+    expect(describeFailure(undefined)).toBe('不明な失敗');
   });
 });
 

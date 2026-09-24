@@ -179,10 +179,28 @@ export async function ask(
     else failures.push(result.reason);
   }
 
-  if (failures.length > 0) console.warn('[classify] 束が落ちました', { 落ちた数: failures.length, 束の数: batches.length }, failures[0]);
+  if (failures.length > 0) {
+    console.warn('[classify] 束が落ちました', {
+      落ちた数: failures.length,
+      束の数: batches.length,
+      理由: describeFailure(failures[0]),
+    });
+  }
   if (failures.length === batches.length) throw failures[0];
 
   return answers;
+}
+
+/**
+ * 落ちた理由をログに残す形にする。例外をそのまま console に渡さないのは、
+ * 何が入っているかが外の SDK の都合で決まるため。型の上では応答側（status・
+ * ヘッダ・本文）しか持っていないが、ここは鍵を読んだクライアントの例外なので、
+ * 要るものだけ取り出す方に倒す。
+ */
+export function describeFailure(cause: unknown): string {
+  if (!(cause instanceof Error)) return '不明な失敗';
+  const status = (cause as { status?: unknown }).status;
+  return typeof status === 'number' ? `${cause.name}(${status}): ${cause.message}` : `${cause.name}: ${cause.message}`;
 }
 
 /**
