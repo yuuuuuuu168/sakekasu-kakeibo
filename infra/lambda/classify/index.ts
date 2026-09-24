@@ -59,9 +59,15 @@ export async function handler(
   try {
     return json(200, { verdicts: await classify(target) });
   } catch (cause) {
+    /*
+     * 外に返すのは固定の文言だけにする。鍵が入っていないときの例外には
+     * シークレットの ARN（アカウント ID・リージョン・名前）が載っていて、
+     * そのまま返すと画面に出る。詳しい理由は CloudWatch Logs の側に残す。
+     * 呼び出し側はどの失敗も同じように飲み込んでキーワード表に落ちるので、
+     * 文言を分ける意味も無い。
+     */
     console.error('[classify] failed', cause);
-    const message = cause instanceof Error ? cause.message : 'カテゴリの判定に失敗しました';
-    return json(502, { message });
+    return json(502, { message: 'カテゴリの判定に失敗しました' });
   }
 }
 

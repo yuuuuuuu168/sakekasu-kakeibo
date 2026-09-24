@@ -37,6 +37,22 @@ export type JudgedItems = {
 };
 
 /**
+ * 使える答えかどうかを確かめる。手元にあるカテゴリを指していない答えは捨てる。
+ *
+ * 同じ検査は判定の側（`decideVerdict`）でもしているが、こちらは受け取った ID を
+ * 内訳とルールに書き込む側なので、書き込む直前にもう一度見る。画面が知らない
+ * カテゴリが内訳に入ると、どの行にも出てこない額ができて、集計が静かに狂う。
+ * ルールとして覚えてしまえば、以降の取り込み全部に効き続ける。
+ */
+function usable(verdict: Verdict | undefined, known: Set<string>): verdict is Verdict {
+  return verdict !== undefined && verdict.status !== 'unresolved' && known.has(verdict.categoryId);
+}
+
+function knownIds(categories: Category[]): Set<string> {
+  return new Set(categories.filter((category) => !category.archived).map((category) => category.id));
+}
+
+/**
  * レシートの品目にカテゴリを当てる。判定が届かなかった品目は、
  * OCR の関数がキーワード表で付けた答えをそのまま残す。
  */
@@ -55,10 +71,11 @@ export async function judgeReceiptItems(
     })),
   });
 
+  const known = knownIds(categories);
   const warnings: string[] = [];
   const judged = items.map((item, index) => {
     const verdict = verdicts[String(index)];
-    if (!verdict || verdict.status === 'unresolved') return item;
+    if (!usable(verdict, known)) return item;
     if (verdict.status === 'review') {
       warnings.push(`「${item.name}」は ${categoryLabel(categories, verdict.categoryId)} と見ましたが、確信は高くありません。`);
     }
@@ -102,16 +119,19 @@ export async function judgeUnmatchedMerchants(
     subjects: keys.map((key) => ({ key, text: unknown.get(key) ?? key })),
   });
 
+  const known = knownIds(categories);
   const learned: CategoryRule[] = [];
   for (const key of keys) {
     const verdict = verdicts[key];
-    if (verdict?.status === 'accepted') learned.push(learnRule(unknown.get(key) ?? key, verdict.categoryId));
+    if (usable(verdict, known) && verdict.status === 'accepted') {
+      learned.push(learnRule(unknown.get(key) ?? key, verdict.categoryId));
+    }
   }
 
   const judged = transactions.map((txn) => {
     if (!isUnclassified(txn)) return txn;
     const verdict = verdicts[normalizeMerchant(txn.rawMerchant)];
-    if (!verdict || verdict.status === 'unresolved') return txn;
+    if (!usable(verdict, known)) return txn;
     return {
       ...txn,
       splits: txn.splits.map((split) => ({ ...split, categoryId: verdict.categoryId })),
@@ -121,7 +141,7 @@ export async function judgeUnmatchedMerchants(
   return {
     transactions: judged,
     learned,
-    judged: keys.filter((key) => verdicts[key] && verdicts[key].status !== 'unresolved').length,
+    judged: keys.filter((key) => usable(verdicts[key], known)).length,
   };
 }
 
