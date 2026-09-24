@@ -1,5 +1,5 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { TypeSafeClient, choice, type ChoiceQuestion } from '@typesafe-ai/sdk';
+import { TypeSafeClient, choice, type ChoiceQuestion, type JsonValue } from '@typesafe-ai/sdk';
 import {
   childChoiceSpecs,
   decideVerdicts,
@@ -121,7 +121,7 @@ async function classify(target: ClassifyTarget): Promise<Record<string, Verdict>
  * モデルに見せるデータ。1 枚のレシートの品目を全部入れてあるのは、
  * 他に何を買ったかが品目 1 つの判断を助けるため（惣菜と洗剤が並んでいればスーパー）。
  */
-export function buildState(target: ClassifyTarget): Record<string, unknown> {
+export function buildState(target: ClassifyTarget): Record<string, JsonValue> {
   return {
     種類: target.kind === 'merchant' ? 'クレジットカードや PayPay の明細に並んだ店舗名' : 'レシートから読み取った品目名',
     対象: target.subjects.map((subject) => ({
@@ -134,7 +134,7 @@ export function buildState(target: ClassifyTarget): Record<string, unknown> {
 
 async function ask(
   client: TypeSafeClient,
-  state: Record<string, unknown>,
+  state: Record<string, JsonValue>,
   specs: ChoiceSpec[],
 ): Promise<Record<string, ChoiceAnswer | undefined>> {
   const answers: Record<string, ChoiceAnswer | undefined> = {};
