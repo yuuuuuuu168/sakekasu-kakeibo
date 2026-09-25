@@ -44,6 +44,10 @@ const BEDROCK_INFERENCE_REGIONS = ['ap-northeast-1', 'ap-northeast-3'];
  */
 const TYPESAFE_MODEL_ID = 'jev-latest';
 
+/** カテゴリ判定の経路に掛ける流量の上限（毎秒の回数と瞬間の回数）。理由は経路を足すところにある */
+export const CLASSIFY_RATE_LIMIT = 1;
+export const CLASSIFY_BURST_LIMIT = 5;
+
 /**
  * AWS SDK も含めて 1 ファイルに固める。
  * Node.js の実行環境にも SDK v3 は入っているが、どのパッケージがどの版で入るかは
@@ -226,6 +230,22 @@ export class ApiStack extends cdk.Stack {
       methods: [apigwv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration('ClassifyIntegration', classifyFunction),
     });
+
+    /*
+     * カテゴリ判定の経路だけ流量を絞る。1 回の呼び出しが外部の有料モデルを 10 回近く叩くので、
+     * サインインした利用者がループで叩き続けると請求が青天井になる。同時実行の 3 は
+     * 「同時に走る数」の上限で、回数や累計の費用は抑えない。
+     *
+     * 画面は取り込み 1 回・レシート 1 枚につき 1 回しか呼ばないので、毎秒 1 回・瞬間 5 回で
+     * 普段の使い方には当たらない。ステージ全体ではなくこの経路だけに掛ける。
+     *
+     * CfnStage の routeSettings は型が any で、CDK が中のキーを CloudFormation の綴りに
+     * 直さない。camelCase で書くとそのままテンプレートに出て、黙って効かなくなる。
+     */
+    const stage = this.httpApi.defaultStage!.node.defaultChild as apigwv2.CfnStage;
+    stage.routeSettings = {
+      'POST /classify': { ThrottlingRateLimit: CLASSIFY_RATE_LIMIT, ThrottlingBurstLimit: CLASSIFY_BURST_LIMIT },
+    };
 
     /*
      * メソッドを並べて書くのは、OPTIONS をこのルートに含めないため。

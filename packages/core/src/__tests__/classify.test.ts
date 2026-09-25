@@ -120,6 +120,20 @@ describe('decideVerdict', () => {
     expect(decideVerdict(NESTED, answer('food', 0.95), answer('rice', 0.3)).categoryId).toBe('food');
   });
 
+  /*
+   * 明細の文字列はそのまま問いに入るので、2 段目の答えが選んだ大カテゴリの外を指すことがある。
+   * 通すと親子の食い違った結論が「採用」として学習されるので、大カテゴリで止める
+   */
+  it.each([
+    ['別の大カテゴリそのもの', 'daily'],
+    ['未分類', UNCATEGORIZED_ID],
+    ['別の大カテゴリの子', 'soap'],
+  ])('2 段目が選んだ大カテゴリの外（%s）を指したら大カテゴリで止める', (_label, choice) => {
+    const categories: Category[] = [...NESTED, { id: 'soap', label: '洗剤', order: 103, parentId: 'daily' }];
+    const verdict = decideVerdict(categories, answer('food', 0.97), answer(choice, 0.99));
+    expect(verdict).toEqual({ categoryId: 'food', confidence: 0.97, status: 'accepted' });
+  });
+
   it('2 つの積が線を下回れば大カテゴリで止める', () => {
     // 0.6 × 0.6 = 0.36。小カテゴリまで下りると確信が足りない
     const verdict = decideVerdict(NESTED, answer('food', 0.6), answer('rice', 0.6));

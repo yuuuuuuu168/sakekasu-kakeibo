@@ -175,11 +175,7 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 スタックを合成しないため）。ルートの `npm ci` を忘れていても、ここだけは通る。
 
 ロールができたら main へマージするか、Actions の画面から deploy を手で起動する。
-手元から全部入れることもできる。こちらはバンドルが走るので、ルートの `npm ci` が要る。
-
-```sh
-npx cdk deploy --all -c env=dev
-```
+アプリ本体のスタックは cdkd で入る（下の「cdkd で出している理由と仕組み」を参照）。
 
 スタックは 4 つ。`-auth` `-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
 
@@ -299,9 +295,57 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 `.github/workflows/deploy.yml` が main への push で走る。対象は `infra/**` `src/**` `packages/**`
 と設定ファイル。手で起動することもできる（Actions の画面から環境を選ぶ）。
 
+### cdkd で出している理由と仕組み
+
+アプリ本体のスタック（`-dns` `-auth` `-data` `-api` `-cert` `-site`）は
+[cdkd](https://github.com/go-to-k/cdkd) で出している。CDK のコードはそのままで、
+合成したテンプレートを CloudFormation に渡す代わりに、cdkd が依存関係を読んで AWS の API を
+直接並列に叩く。CloudFormation の変更セットの作成と、変更の無いスタックの確認待ちが無くなる。
+
+- **状態**：S3 の `cdkd-state-<アプリのアカウント ID>` に `cdkd/{スタック名}/{リージョン}/state.json` として
+  置く。スタックの出力もここにある。CloudFormation のコンソールにはアプリ本体のスタックが出ない
+- **Lambda のコード**：`cdkd-assets-<アプリのアカウント ID>-{リージョン}` に置く。証明書の `-cert` スタックの
+  カスタムリソース用に us-east-1 にも作る
+- **ロール**：cdkd は CDK bootstrap の `cdk-hnb659fds-*` ロールを使えない（CloudFormation に
+  権限を委ねる前提の作りのため）。そこで `sakekasu-kakeibo-cdkd-deploy` スタックが
+  `sakekasu-kakeibo-github-actions-cdkd` ロールを作り、Actions はこれを引き受けて cdkd を動かす。
+  権限は AdministratorAccess。main の Actions は以前から CloudFormation 経由で
+  `cdk-hnb659fds-cfn-exec-role`（bootstrap の既定で AdministratorAccess）を使えていたので、
+  main から届く権限の上限は変わらない。引き受けられるのは deploy ロールと同じく main だけ
+- **ロールのスタック**：これだけは CloudFormation で入れる。deploy ワークフローが毎回、
+  deploy ロールで `cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true` を打つ。
+  cdkd に自分の権限の出どころを管理させると、壊したときに直す手段が無くなるため。
+  ここを壊しても deploy ロールは無傷で残るので、次の push で直せる
+
+`infra` ジョブの流れは次のとおり。
+
+1. deploy ロールで cdkd 用ロールのスタックを入れる
+2. cdkd ロールに切り替え、初回だけ `cdkd bootstrap` を打つ（ap-northeast-1 と us-east-1）
+3. `infra/scripts/migrate-to-cdkd.sh` で、まだ CloudFormation にあるスタックを cdkd へ移す。
+   移し終えていれば何もしない
+4. `cdkd deploy --all`
+5. スタックの出力を cdkd の状態から読み、`site` ジョブへ渡す
+
+### CloudFormation から cdkd への移行
+
+`infra/scripts/migrate-to-cdkd.sh` が deploy のたびに走り、CloudFormation のスタックが
+残っていれば cdkd へ移す。人が打つものは無い。
+
+- 先に全スタックを `cdkd import --dry-run` で調べ、全リソースを取り込めると分かったときだけ移す。
+  1 つでも取り込めないものがあれば、どのスタックにも手を付けず、その回は `cdk deploy`
+  （CloudFormation）で出す。ワークフローに警告が出る
+- 移すときは `cdkd import --migrate-from-cloudformation` を使う。全リソースに
+  `DeletionPolicy: Retain` を付けてから CloudFormation のスタックを消すので、AWS 上の
+  リソースは消えない。消えるのはスタックの記録だけ
+- 使う側から順に移す（site → api → cert → auth → data → dns）。CloudFormation は、
+  他のスタックが `Fn::ImportValue` で読んでいる export を持つスタックを消せないため
+- 「CloudFormation のスタックが残っていて、cdkd の状態が無い」スタックは cdkd に渡さない。
+  cdkd はそれを新規作成とみなし、テーブルやバケットは名前の衝突で落ち、Cognito の
+  UserPool は 2 つ目を黙って作る
+
 ### ジョブを 2 つに分けている理由
 
-`infra` ジョブが `cdk deploy --all` を打ち、スタックの出力（API の URL、UserPool の ID、
+`infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、UserPool の ID、
 配信先のバケットとディストリビューション）をジョブの出力に載せる。`site` ジョブがそれを受けて
 フロントをビルドし、S3 へ同期して `index.html` を無効化する。
 
@@ -349,14 +393,18 @@ OIDC プロバイダー自体は作らない。1 つの AWS アカウントに�
 ### 手元から打ってよい例外
 
 1. 上の `sakekasu-kakeibo-github-oidc`（Actions に自分のロールを触らせないため）
-2. `npx cdk bootstrap`（ロールを作る前に必要）
+2. `npx cdk bootstrap`（ロールを作る前に必要。cdkd 用ロールのスタックがまだ使う）
 
-それ以外は main へマージする。急ぎで確かめたいときは `cdk diff` までにとどめる。
+それ以外は main へマージする。急ぎで確かめたいときは `cdkd diff` までにとどめる。
+アプリ本体に CloudFormation のスタックはもう無いので、`cdk diff` は全部を新規作成と表示する。
 
 ```sh
 cd infra
-npx cdk diff -c env=dev --profile sakekasu-builder
+npx cdkd diff -c env=dev --profile sakekasu-builder
 ```
+
+`cdkd diff` は S3 の状態ファイルを読むので、読み取り専用の `verify` プロファイルでは
+通らない（S3 のオブジェクト本文を読めない）。
 
 ## PR のセキュリティレビュー
 
@@ -461,6 +509,31 @@ git ls-remote https://github.com/anthropics/claude-code-action.git refs/tags/v1
 ```
 
 ## よくある詰まり
+
+### cdkd への移行が途中で止まった
+
+deploy ワークフローが「cdkd の状態と CloudFormation のスタックの両方を持っています」で落ちたら、
+`cdkd import --migrate-from-cloudformation` が状態を書いた後、CloudFormation のスタックを
+消すところで止まっている。リソースは cdkd の状態に載っているので、残りは
+CloudFormation のスタックの記録を消すだけでよい。
+
+```sh
+# 全リソースに Retain が付いているかを先に見る。付いていないものがあれば消さない
+aws cloudformation get-template --stack-name <スタック名> --query 'TemplateBody' \
+  | jq '.Resources | to_entries[] | select(.value.DeletionPolicy != "Retain") | .key'
+aws cloudformation delete-stack --stack-name <スタック名>
+```
+
+Retain が付いていないリソースがあるときは、`delete-stack` を打つと AWS 上のリソースごと消える。
+その場合は `npx cdkd import <スタック名> --migrate-from-cloudformation --force --yes` を
+打ち直して、Retain を付けるところからやり直す。
+
+### `cdkd deploy` が作成済みのはずのリソースを作ろうとする
+
+cdkd の状態に載っていないリソースは、新規として扱われる。移行の前検査を通っていれば
+起きないはずだが、起きたら `npx cdkd state resources <スタック名>` で状態に載っている
+リソースを確かめ、足りないものを `npx cdkd import <スタック名> --resource <論理ID>=<物理ID>`
+で取り込む。
 
 ### `npx canceled due to missing packages` で `Failed to bundle asset`
 
@@ -692,5 +765,5 @@ Bedrock の OCR がその次で、同時実行を 3 に絞ってあるので暴�
 ## 消すとき
 
 DynamoDB のテーブル、レシート用バケット、配信用バケット、Cognito のユーザープールは
-`RemovalPolicy.RETAIN` にしてある。`cdk destroy` しても家計簿のデータは残る。
+`RemovalPolicy.RETAIN` にしてある。`cdkd destroy` しても家計簿のデータは残る。
 本当に消すなら、スタックを消した後にコンソールか CLI で個別に消す。
