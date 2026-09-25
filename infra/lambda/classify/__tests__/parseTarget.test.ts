@@ -80,6 +80,26 @@ describe('parseTarget', () => {
     expect(target?.subjects[0].context).toHaveLength(200);
   });
 
+  /*
+   * ID も問いに入るので長さを見る。ただし切ると送り手の ID と食い違うので、長すぎるものは捨てる
+   */
+  it('長すぎる ID を持つカテゴリと対象は捨てる', () => {
+    const long = 'x'.repeat(1000);
+    const target = parseTarget({
+      subjects: [
+        { key: 's0', text: '品目' },
+        { key: long, text: '品目' },
+      ],
+      categories: [
+        { id: 'food', label: '食費' },
+        { id: long, label: '長い' },
+        { id: 'rice', label: '米', parentId: long },
+      ],
+    });
+    expect(target?.subjects.map((subject) => subject.key)).toEqual(['s0']);
+    expect(target?.categories.map((category) => category.id)).toEqual(['food']);
+  });
+
   it('order が無いカテゴリも受ける', () => {
     const target = parseTarget({ subjects: [{ key: 's0', text: 'おにぎり' }], categories: [{ id: 'food', label: '食費' }] });
     expect(target?.categories[0].order).toBe(0);
