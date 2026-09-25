@@ -46,6 +46,14 @@ const MAX_SUBJECTS = 100;
 const MAX_CATEGORIES = 200;
 const MAX_LABEL_LENGTH = 50;
 const MAX_TEXT_LENGTH = 200;
+/**
+ * ID（カテゴリの id と parentId、対象の key）も問いに入るので長さを見る。
+ * こちらは切らずに捨てる。切ると答えの ID が送り手の持つ ID と食い違い、
+ * 取り違えた結論を返すことになる。カテゴリの id は `c-` + 時刻で 11 文字ほど、
+ * 対象の key は連番か正規化した店舗名なので、どちらもこの上限には届かない
+ */
+const MAX_ID_LENGTH = 64;
+const MAX_KEY_LENGTH = MAX_TEXT_LENGTH;
 
 const secrets = new SecretsManagerClient({});
 
@@ -88,7 +96,14 @@ export function parseTarget(body: Record<string, unknown>): ClassifyTarget | und
 
   const categories = asArray(body.categories)
     .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
-    .filter((value) => typeof value.id === 'string' && value.id !== '' && typeof value.label === 'string')
+    .filter(
+      (value) =>
+        typeof value.id === 'string' &&
+        value.id !== '' &&
+        value.id.length <= MAX_ID_LENGTH &&
+        typeof value.label === 'string' &&
+        (value.parentId === undefined || (typeof value.parentId === 'string' && value.parentId.length <= MAX_ID_LENGTH)),
+    )
     .map(
       (value): Category => ({
         id: value.id as string,
@@ -106,7 +121,7 @@ export function parseTarget(body: Record<string, unknown>): ClassifyTarget | und
     .map((value): ClassifySubject | undefined => {
       const key = typeof value.key === 'string' ? value.key : '';
       const text = typeof value.text === 'string' ? value.text.trim().slice(0, MAX_TEXT_LENGTH) : '';
-      if (key === '' || text === '' || seen.has(key)) return undefined;
+      if (key === '' || key.length > MAX_KEY_LENGTH || text === '' || seen.has(key)) return undefined;
       seen.add(key);
       const context = typeof value.context === 'string' ? value.context.trim().slice(0, MAX_TEXT_LENGTH) : '';
       return { key, text, ...(context ? { context } : {}) };

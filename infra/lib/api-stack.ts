@@ -242,7 +242,7 @@ export class ApiStack extends cdk.Stack {
      * CfnStage の routeSettings は型が any で、CDK が中のキーを CloudFormation の綴りに
      * 直さない。camelCase で書くとそのままテンプレートに出て、黙って効かなくなる。
      */
-    const stage = this.httpApi.defaultStage?.node.defaultChild as apigwv2.CfnStage;
+    const stage = this.httpApi.defaultStage!.node.defaultChild as apigwv2.CfnStage;
     stage.routeSettings = {
       'POST /classify': { ThrottlingRateLimit: CLASSIFY_RATE_LIMIT, ThrottlingBurstLimit: CLASSIFY_BURST_LIMIT },
     };
