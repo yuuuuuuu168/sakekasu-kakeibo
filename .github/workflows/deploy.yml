@@ -1,6 +1,15 @@
 # main へのマージでリソースをデプロイする。
-# 認証はアクセスキーではなく GitHub OIDC（sakekasu-kakeibo-github-oidc スタックの
-# deploy ロール）を使う。リポジトリにアクセスキーは置かない。
+# 認証はアクセスキーではなく GitHub OIDC を使う。リポジトリにアクセスキーは置かない。
+#
+# アプリ本体のスタックは cdkd（CloudFormation を通さず AWS の API を直接叩く CDK の
+# デプロイツール）で出す。ロールは 2 つを使い分ける。
+#
+# - deploy ロール（sakekasu-kakeibo-github-oidc スタック。手で入れる）
+#   cdkd 用ロールのスタックを CloudFormation で入れるのと、フロントの配信に使う
+# - cdkd ロール（sakekasu-kakeibo-cdkd-deploy スタック。このワークフローが入れる）
+#   cdkd がアプリ本体を作る・変えるのに使う。理由は infra/lib/cdkd-deploy-stack.ts
+#
+# CloudFormation から cdkd への移行は infra/scripts/migrate-to-cdkd.sh が初回に済ませる。
 #
 # ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。
 # ビルドにはスタックの出力（API の URL、UserPool の ID）が要るので、infra ジョブの
@@ -41,11 +50,12 @@ concurrency:
 env:
   AWS_REGION: ap-northeast-1
   DEPLOY_ROLE: arn:aws:iam::232791540685:role/sakekasu-kakeibo-github-actions-deploy
+  CDKD_ROLE: arn:aws:iam::232791540685:role/sakekasu-kakeibo-github-actions-cdkd
   TARGET_ENV: ${{ inputs.env || 'dev' }}
 
 jobs:
   infra:
-    name: CDK デプロイ
+    name: インフラのデプロイ
     runs-on: ubuntu-latest
     outputs:
       apiUrl: ${{ steps.outputs.outputs.apiUrl }}
@@ -84,25 +94,82 @@ jobs:
           role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: cdk deploy
+      # cdkd 用ロールのスタック。ここだけは CloudFormation で入れる（理由は
+      # infra/lib/cdkd-deploy-stack.ts）。変更が無ければ数秒で抜ける
+      - name: cdkd 用ロールを入れる
+        working-directory: infra
+        run: npx cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true --require-approval never
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.CDKD_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 状態を置く S3 バケットと、Lambda のコードを置く場所を作る。初回だけ動く。
+      # 証明書の -cert スタックが us-east-1 にあるので、そちらにも置き場所を作る
+      - name: cdkd bootstrap
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          bucket="cdkd-state-$(aws sts get-caller-identity --query Account --output text)"
+          for region in ap-northeast-1 us-east-1; do
+            if ! aws s3api head-object --bucket "$bucket" --key "cdkd-bootstrap/${region}.json" >/dev/null 2>&1; then
+              npx cdkd bootstrap --region "$region"
+            fi
+          done
+
+      - name: CloudFormation から cdkd へ移す
+        id: migrate
+        working-directory: infra
+        run: bash scripts/migrate-to-cdkd.sh
+
+      - name: cdkd deploy
+        if: steps.migrate.outputs.engine == 'cdkd'
+        working-directory: infra
+        run: npx cdkd deploy --all --yes -c env=${{ env.TARGET_ENV }}
+
+      # 移行の前検査で引っかかったときだけ通る。スタックはまだ CloudFormation の管理下に
+      # あるので、これまでどおり出す。cdkd ロールでも bootstrap ロールを引き受けられる
+      - name: cdk deploy（cdkd へ移せなかったとき）
+        if: steps.migrate.outputs.engine == 'cfn'
         working-directory: infra
         run: npx cdk deploy --all --require-approval never -c env=${{ env.TARGET_ENV }}
 
+      # 出力は cdkd の状態から読む。移せなかったときは CloudFormation から読む
       - name: スタックの出力を読む
         id: outputs
+        working-directory: infra
+        env:
+          ENGINE: ${{ steps.migrate.outputs.engine }}
         run: |
           set -euo pipefail
           prefix="sakekasu-kakeibo-${TARGET_ENV}"
           read_output() {
-            aws cloudformation describe-stacks --stack-name "$1" \
-              --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
+            local value
+            if [ "$ENGINE" = cdkd ]; then
+              value="$(npx cdkd state show "$1" --stack-region "$AWS_REGION" --json | jq -r --arg k "$2" '.state.outputs[$k] // empty')"
+            else
+              value="$(aws cloudformation describe-stacks --stack-name "$1" \
+                --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text)"
+            fi
+            if [ -z "$value" ] || [ "$value" = None ]; then
+              echo "$1 の出力 $2 が読めません" >&2
+              exit 1
+            fi
+            echo "$value"
           }
+          # 一度変数に受ける。echo の引数の中で失敗しても set -e は効かず、空のまま進んでしまう
+          api_url="$(read_output "$prefix-api" ApiUrl)"
+          user_pool_id="$(read_output "$prefix-auth" UserPoolId)"
+          user_pool_client_id="$(read_output "$prefix-auth" UserPoolClientId)"
+          site_bucket="$(read_output "$prefix-site" SiteBucketName)"
+          distribution_id="$(read_output "$prefix-site" DistributionId)"
           {
-            echo "apiUrl=$(read_output "$prefix-api" ApiUrl)"
-            echo "userPoolId=$(read_output "$prefix-auth" UserPoolId)"
-            echo "userPoolClientId=$(read_output "$prefix-auth" UserPoolClientId)"
-            echo "siteBucket=$(read_output "$prefix-site" SiteBucketName)"
-            echo "distributionId=$(read_output "$prefix-site" DistributionId)"
+            echo "apiUrl=$api_url"
+            echo "userPoolId=$user_pool_id"
+            echo "userPoolClientId=$user_pool_client_id"
+            echo "siteBucket=$site_bucket"
+            echo "distributionId=$distribution_id"
           } >> "$GITHUB_OUTPUT"
 
   site:

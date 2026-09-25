@@ -38,6 +38,22 @@ const MODEL_ID = requireEnv('TYPESAFE_MODEL_ID');
 const QUESTIONS_PER_REQUEST = 20;
 /** 1 回の呼び出しで見る対象の上限。明細を一気に取り込んでも、ここで止める */
 const MAX_SUBJECTS = 100;
+/**
+ * カテゴリの数と文字列の長さの上限。問いの大きさは「対象の数 × カテゴリの数 × 文字の長さ」で
+ * 膨らみ、そのまま有料モデルの料金になるので、対象の数だけでなくこちらも切る。
+ * 画面から来る値はどれもこの半分にも届かない（初期のカテゴリは 13、名前は数文字〜数十文字）
+ */
+const MAX_CATEGORIES = 200;
+const MAX_LABEL_LENGTH = 50;
+const MAX_TEXT_LENGTH = 200;
+/**
+ * ID（カテゴリの id と parentId、対象の key）も問いに入るので長さを見る。
+ * こちらは切らずに捨てる。切ると答えの ID が送り手の持つ ID と食い違い、
+ * 取り違えた結論を返すことになる。カテゴリの id は `c-` + 時刻で 11 文字ほど、
+ * 対象の key は連番か正規化した店舗名なので、どちらもこの上限には届かない
+ */
+const MAX_ID_LENGTH = 64;
+const MAX_KEY_LENGTH = MAX_TEXT_LENGTH;
 
 const secrets = new SecretsManagerClient({});
 
@@ -80,26 +96,34 @@ export function parseTarget(body: Record<string, unknown>): ClassifyTarget | und
 
   const categories = asArray(body.categories)
     .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
-    .filter((value) => typeof value.id === 'string' && value.id !== '' && typeof value.label === 'string')
+    .filter(
+      (value) =>
+        typeof value.id === 'string' &&
+        value.id !== '' &&
+        value.id.length <= MAX_ID_LENGTH &&
+        typeof value.label === 'string' &&
+        (value.parentId === undefined || (typeof value.parentId === 'string' && value.parentId.length <= MAX_ID_LENGTH)),
+    )
     .map(
       (value): Category => ({
         id: value.id as string,
-        label: value.label as string,
+        label: (value.label as string).slice(0, MAX_LABEL_LENGTH),
         order: typeof value.order === 'number' && Number.isFinite(value.order) ? value.order : 0,
         ...(value.archived === true ? { archived: true } : {}),
         ...(typeof value.parentId === 'string' && value.parentId !== '' ? { parentId: value.parentId } : {}),
       }),
-    );
+    )
+    .slice(0, MAX_CATEGORIES);
 
   const seen = new Set<string>();
   const subjects = asArray(body.subjects)
     .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
     .map((value): ClassifySubject | undefined => {
       const key = typeof value.key === 'string' ? value.key : '';
-      const text = typeof value.text === 'string' ? value.text.trim() : '';
-      if (key === '' || text === '' || seen.has(key)) return undefined;
+      const text = typeof value.text === 'string' ? value.text.trim().slice(0, MAX_TEXT_LENGTH) : '';
+      if (key === '' || key.length > MAX_KEY_LENGTH || text === '' || seen.has(key)) return undefined;
       seen.add(key);
-      const context = typeof value.context === 'string' ? value.context.trim() : '';
+      const context = typeof value.context === 'string' ? value.context.trim().slice(0, MAX_TEXT_LENGTH) : '';
       return { key, text, ...(context ? { context } : {}) };
     })
     .filter((subject): subject is ClassifySubject => subject !== undefined)
