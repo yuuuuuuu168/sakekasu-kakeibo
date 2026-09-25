@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { ApiStack } from '../lib/api-stack';
+import { ApiStack, CLASSIFY_BURST_LIMIT, CLASSIFY_RATE_LIMIT } from '../lib/api-stack';
 import { AuthStack } from '../lib/auth-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
@@ -187,6 +187,22 @@ describe('ApiStack', () => {
     expect(keys).toContain('POST /receipts/analyze');
     expect(keys).toContain('POST /classify');
     expect(keys.filter((key) => key.startsWith('OPTIONS ') || key.startsWith('ANY '))).toEqual([]);
+  });
+
+  /*
+   * 1 回の呼び出しが外部の有料モデルを何度も叩くので、ループで叩かれたときに請求が
+   * 青天井にならないよう、この経路だけ流量を絞っている。キーは RouteKey と一字一句
+   * 同じでないと効かない（食い違っても CloudFormation は黙って受け付ける）。
+   */
+  it('カテゴリ判定の経路に流量の上限を掛ける', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      RouteSettings: {
+        'POST /classify': { ThrottlingRateLimit: CLASSIFY_RATE_LIMIT, ThrottlingBurstLimit: CLASSIFY_BURST_LIMIT },
+      },
+    });
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    expect(Object.values(routes).map((route) => route.Properties.RouteKey)).toContain('POST /classify');
   });
 
   it('毎月 1 日にレポートを作る', () => {

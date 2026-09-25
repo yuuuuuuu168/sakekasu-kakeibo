@@ -154,10 +154,14 @@ export function decideVerdict(
     return { categoryId: UNCATEGORIZED_ID, confidence: parent?.confidence ?? 0, status: 'unresolved' };
   }
 
+  // 小カテゴリの答えは、選んだ大カテゴリの直下にあるものだけ受け取る。
+  // 明細の文字列はそのまま問いに入るので、答えが別の大カテゴリの子や未分類を指すことがあり、
+  // それを通すと親子の食い違った結論がルールとして学習されてしまう
+  const siblings = new Set(childCategories(categories, parent.choice).map((category) => category.id));
   const useChild =
     child !== undefined &&
     child.choice !== NONE_OF_CHILDREN &&
-    known.has(child.choice) &&
+    siblings.has(child.choice) &&
     child.confidence >= REVIEW_CONFIDENCE;
 
   if (!useChild) {
