@@ -38,6 +38,14 @@ const MODEL_ID = requireEnv('TYPESAFE_MODEL_ID');
 const QUESTIONS_PER_REQUEST = 20;
 /** 1 回の呼び出しで見る対象の上限。明細を一気に取り込んでも、ここで止める */
 const MAX_SUBJECTS = 100;
+/**
+ * カテゴリの数と文字列の長さの上限。問いの大きさは「対象の数 × カテゴリの数 × 文字の長さ」で
+ * 膨らみ、そのまま有料モデルの料金になるので、対象の数だけでなくこちらも切る。
+ * 画面から来る値はどれもこの半分にも届かない（初期のカテゴリは 13、名前は数文字〜数十文字）
+ */
+const MAX_CATEGORIES = 200;
+const MAX_LABEL_LENGTH = 50;
+const MAX_TEXT_LENGTH = 200;
 
 const secrets = new SecretsManagerClient({});
 
@@ -84,22 +92,23 @@ export function parseTarget(body: Record<string, unknown>): ClassifyTarget | und
     .map(
       (value): Category => ({
         id: value.id as string,
-        label: value.label as string,
+        label: (value.label as string).slice(0, MAX_LABEL_LENGTH),
         order: typeof value.order === 'number' && Number.isFinite(value.order) ? value.order : 0,
         ...(value.archived === true ? { archived: true } : {}),
         ...(typeof value.parentId === 'string' && value.parentId !== '' ? { parentId: value.parentId } : {}),
       }),
-    );
+    )
+    .slice(0, MAX_CATEGORIES);
 
   const seen = new Set<string>();
   const subjects = asArray(body.subjects)
     .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
     .map((value): ClassifySubject | undefined => {
       const key = typeof value.key === 'string' ? value.key : '';
-      const text = typeof value.text === 'string' ? value.text.trim() : '';
+      const text = typeof value.text === 'string' ? value.text.trim().slice(0, MAX_TEXT_LENGTH) : '';
       if (key === '' || text === '' || seen.has(key)) return undefined;
       seen.add(key);
-      const context = typeof value.context === 'string' ? value.context.trim() : '';
+      const context = typeof value.context === 'string' ? value.context.trim().slice(0, MAX_TEXT_LENGTH) : '';
       return { key, text, ...(context ? { context } : {}) };
     })
     .filter((subject): subject is ClassifySubject => subject !== undefined)
