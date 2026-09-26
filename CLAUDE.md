@@ -22,9 +22,8 @@ PR を作成したら、ユーザーの指示を待たずにそのまま `subscr
 - レビューコメントは対応するか、対応しない理由を返す。黙って終わらせない
 - watch はマージまたはクローズまで続ける。止めるのはユーザーに言われたときだけ
 
-sakekasu-builder には PR 作成直後に watch を促す `PostToolUse` フック
-（`scripts/pr-watch-reminder.mjs`）があるが、こちらにはまだ持ってきていない。
-長いセッションでこの節が押し流されたら、それはそれとして watch を思い出すこと。
+PR 作成の直後には [scripts/pr-watch-reminder.mjs](scripts/pr-watch-reminder.mjs)（`PostToolUse`
+フック）が PR 番号つきで watch を促す。長いセッションでこの節が押し流されても効く。
 
 ## 変更を入れる前に通すもの
 
@@ -46,24 +45,52 @@ Lambda だけで型が壊れていても手元では通ってしまい、CI（`t
 
 画面を変えたら、ローカルモード（`npm run dev`）で通しで動かして確かめる。AWS は要らない。
 
+## 応答の言語
+
+応答は日本語で書く。[scripts/japanese-guard/](scripts/japanese-guard/)（`Stop` フック）が
+ターンの最終回答を検査し、英語主体なら日本語で書き直させる。コードブロック・インラインコード・
+URL は数えないので、英語のコマンドや英文の下書きはコードブロックに入れて見せる。
+
 ## AWS 確認作業の認証フロー
 
 デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）で、
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けている。
 
-クラウドセッションから AWS を読むための読み取り専用プロファイル（`verify`、Permission Set
-`AgentVerifyAccess`）の用意は、sakekasu-builder の `scripts/aws-sso-login.sh` と
-`scripts/setup-aws-profile.sh` が担っている。このリポジトリには写していない。
-同じ内容のシェルスクリプトを 2 つのリポジトリで抱えると、片方だけ直して気づけなくなるため。
-このリポジトリのセッションで AWS を見る必要が出たら、そのときに 2 つを持ってくる。
+AWS環境の確認が必要になったら、ユーザーの指示を待たずに次を実行する。
 
-プロファイルが用意できたら、AWS CLI の操作には必ず `--profile verify` を付ける。
-このプロファイルは読み取り専用で、create / update / delete / put 系の変更操作はできない。
+```sh
+bash scripts/aws-sso-login.sh
+```
+
+AWS CLI v2 の導入、読み取り専用プロファイルの配置、SSO ログインの開始までをこれ一つで行う。
+認証済みなら何もせず終わる。出力された確認URLとコードは、ツールを呼ぶ前にそのまま
+ユーザーへの返答として提示し、承認されたと言われてから
+`bash scripts/aws-sso-login.sh --wait` で完了を確かめる。
+
+以降のAWS CLI操作には必ず次のどれかのプロファイルを付ける。1回の承認で全部に入れる。
+
+| プロファイル | アカウント | 使いどころ |
+| --- | --- | --- |
+| `verify` | <アプリのアカウント ID>（Web アプリのデプロイ先） | アプリのログ・メトリクス・リソースの確認 |
+| `verify-org` | <管理アカウント ID>（Organization の管理アカウント） | 組織・請求・Identity Center の確認 |
+| `verify-ops` | <運用アカウント ID>（運用ツール用） | Security Agent / DevOps Agent の確認 |
+
+接続先は [scripts/aws-verify.conf](scripts/aws-verify.conf) にある。どれも Permission Set
+`AgentVerifyAccess` で、create / update / delete / put 系の変更操作はできない。変更操作は
+[scripts/deny-aws-writes.sh](scripts/deny-aws-writes.sh)（`PreToolUse` フック）も止める。
 CloudWatch Logs とメトリクスは読めるが、S3 オブジェクト本文・DynamoDB レコード・
 Cognito ユーザー・SSM パラメータは IAM 側で拒否される。
 
+セッション開始の時点でログインまで済ませたい場合は、クラウド環境の Environment
+variables に `SAKEKASU_AWS_LOGIN=1` を設定する。
+
 認証エラーに見える失敗が出たら、まずクラウド環境のネットワーク設定で `awsapps.com` と
-`*.amazonaws.com` への到達が許可されているかを疑う。
+`*.amazonaws.com` への到達が許可されているかを疑う。`No access` が返るときは、承認した
+Identity Center のユーザーがグループ `sakekasu` に入っているかを疑う。
+
+`aws-sso-login.sh` と `setup-aws-profile.sh` は `~/.aws/config` を上書きするため、
+クラウドセッション（`CLAUDE_CODE_REMOTE=true`）でのみ動作する。ローカルでは何もせず終了する。
+これらのスクリプトとフックは sakekasu-template から取り込んだもの。直すときはテンプレート側も直す。
 
 ## デプロイ
 
