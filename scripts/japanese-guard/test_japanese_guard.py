@@ -1,4 +1,4 @@
-"""python3 tests/test_japanese_guard.py で実行する"""
+"""python3 scripts/japanese-guard/test_japanese_guard.py で実行する"""
 
 import json
 import subprocess
