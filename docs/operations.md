@@ -343,6 +343,16 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
   cdkd はそれを新規作成とみなし、テーブルやバケットは名前の衝突で落ち、Cognito の
   UserPool は 2 つ目を黙って作る
 
+cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 つあり、スクリプトで避けている。
+どちらも cdkd 側で直ったら回避を消す。
+
+- CloudFormation を読むクライアントが、スタックのリージョンではなく実行時の `AWS_REGION` で
+  作られる。us-east-1 の `-cert` スタックが見つからず、全リソースが「not found」になる。
+  スタックごとに `AWS_REGION` を合わせて打つ
+- Cognito の UserPoolClient の ID を CloudFormation の値（ClientId だけ）のまま渡すので、
+  Cloud Control が求める `UserPoolId|ClientId` の形にならず取り込みに失敗する。
+  CloudFormation から両方を引いて `--resource` で明示する
+
 ### ジョブを 2 つに分けている理由
 
 `infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、UserPool の ID、

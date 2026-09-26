@@ -63,6 +63,44 @@ cdkd_state_exists() {
   aws s3api head-object --bucket "$state_bucket" --key "cdkd/${name}/${region}/state.json" >/dev/null 2>&1
 }
 
+# Cognito の UserPoolClient の ID を cdkd の形（`<UserPoolId>|<ClientId>`）で明示する。
+#
+# cdkd（0.291.16）は CloudFormation の PhysicalResourceId をそのまま使うが、UserPoolClient の
+# それは ClientId だけで、Cloud Control が求める `UserPoolId|ClientId` の組にならない。
+# そのままだと「Identifier ... is not valid for identifier [/properties/UserPoolId,
+# /properties/ClientId]」で取り込みに失敗する。cdkd 側で直ったら消す。
+#
+# 出力は `--resource <論理ID>=<pool>|<client>` を 1 引数ずつ改行で区切ったもの。
+# 対象が無ければ何も出さない。UserPool が同じスタックに無ければ組めないので出さない
+# （前検査で落ち、CloudFormation のまま出す側に倒れる）
+cognito_client_overrides() {
+  local name="$1" region="$2" resources pool
+  resources="$(aws cloudformation describe-stack-resources --stack-name "$name" --region "$region" --output json)"
+  pool="$(jq -r '[.StackResources[] | select(.ResourceType == "AWS::Cognito::UserPool")][0].PhysicalResourceId // empty' <<<"$resources")"
+  [ -n "$pool" ] || return 0
+  jq -r --arg pool "$pool" '
+    [.StackResources[] | select(.ResourceType == "AWS::Cognito::UserPoolClient")]
+    | if length == 0 then empty
+      else (map("--resource", "\(.LogicalResourceId)=\($pool)|\(.PhysicalResourceId)") + ["--auto"])[]
+      end' <<<"$resources"
+}
+
+# cdkd import をスタックのリージョンで動かす。
+#
+# cdkd（0.291.16）の import は、CloudFormation を読むクライアントを実行時のリージョン
+# （AWS_REGION）で作り、スタックのリージョンを見ない。us-east-1 にある証明書の -cert
+# スタックを ap-northeast-1 で探して見つけられず、全リソースが「not found」になる。
+# スタックごとに AWS_REGION を合わせて打つ。状態のバケットは別のリージョンにあっても
+# cdkd が向き先を直すので、こちらは気にしなくてよい。cdkd 側で直ったら消す
+cdkd_import() {
+  local name="$1" region="$2"
+  shift 2
+  local -a overrides=()
+  mapfile -t overrides < <(cognito_client_overrides "$name" "$region")
+  AWS_REGION="$region" AWS_DEFAULT_REGION="$region" \
+    npx cdkd import "$name" "${overrides[@]}" "$@" -c "env=${TARGET_ENV}"
+}
+
 # 取り込みが要るスタックを集める
 pending=()
 for entry in "${stacks[@]}"; do
@@ -88,9 +126,9 @@ echo "cdkd へ移すスタック: ${pending[*]}"
 # 1. 前検査。どのスタックにも手を付けない
 ok=true
 for entry in "${pending[@]}"; do
-  read -r name _ <<<"$entry"
+  read -r name region <<<"$entry"
   echo "::group::cdkd import --dry-run ${name}"
-  log="$(npx cdkd import "$name" --dry-run -c "env=${TARGET_ENV}" 2>&1)" || {
+  log="$(cdkd_import "$name" "$region" --dry-run 2>&1)" || {
     echo "$log"
     echo "::endgroup::"
     echo "::warning::${name} の import --dry-run が失敗しました"
@@ -114,9 +152,9 @@ fi
 
 # 2. 移行
 for entry in "${pending[@]}"; do
-  read -r name _ <<<"$entry"
+  read -r name region <<<"$entry"
   echo "::group::cdkd import --migrate-from-cloudformation ${name}"
-  npx cdkd import "$name" --migrate-from-cloudformation --yes -c "env=${TARGET_ENV}"
+  cdkd_import "$name" "$region" --migrate-from-cloudformation --yes
   echo "::endgroup::"
 done
 
