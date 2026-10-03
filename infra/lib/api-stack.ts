@@ -4,7 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import type * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
@@ -15,6 +15,7 @@ import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 import { lambdaLogGroup } from './log-group';
+import { userPoolRegion, type SharedAuth } from './shared-auth';
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, '..', '..');
@@ -60,8 +61,8 @@ export interface ApiStackProps extends cdk.StackProps {
   envName: string;
   table: dynamodb.ITableV2;
   receiptBucket: s3.IBucket;
-  userPool: cognito.IUserPool;
-  userPoolClient: cognito.IUserPoolClient;
+  /** 4 アプリ共通のログイン。API はこのプールが kakeibo のクライアントに出したトークンだけを通す */
+  sharedAuth: SharedAuth;
   /** CORS で許す配信元。本番のドメインと開発用の localhost */
   allowedOrigins: string[];
 }
@@ -197,8 +198,22 @@ export class ApiStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(reportFunction)],
     });
 
-    const authorizer = new HttpUserPoolAuthorizer('Authorizer', props.userPool, {
-      userPoolClients: [props.userPoolClient],
+    /*
+     * JWT の検証は共通ログインのユーザープールに向ける。発行者（iss）がそのプール、
+     * audience（aud）が kakeibo のクライアントのトークンだけを通す。ほかの 3 アプリの
+     * クライアントに出たトークンは、同じプールでも aud が違うので弾かれる。
+     *
+     * 画面が送るのは ID トークン（aud が kakeibo のクライアント ID）。Lambda はその sub で
+     * データを分けている。sub はプールごとに違うので、旧プールのデータは付け替えが要る
+     * （infra/scripts/copy-user-data/）。
+     *
+     * プールとクライアントは ID から引くだけで、このスタックでは作らない（共通基盤の持ち物）。
+     */
+    const sharedUserPool = cognito.UserPool.fromUserPoolId(this, 'SharedUserPool', props.sharedAuth.userPoolId);
+    const sharedClient = cognito.UserPoolClient.fromUserPoolClientId(this, 'SharedUserPoolClient', props.sharedAuth.clientId);
+    const authorizer = new HttpUserPoolAuthorizer('Authorizer', sharedUserPool, {
+      userPoolClients: [sharedClient],
+      userPoolRegion: userPoolRegion(props.sharedAuth.userPoolId),
     });
 
     this.httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
@@ -272,5 +287,14 @@ export class ApiStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: this.httpApi.apiEndpoint });
     new cdk.CfnOutput(this, 'MonthlyReportFunctionName', { value: reportFunction.functionName });
+
+    /*
+     * 画面のビルドに渡すログインの値。deploy ワークフローがここから読む。
+     * cdk.json の値をそのまま出しているだけだが、API が検証に使っている値と画面が使う値を
+     * 同じ出どころにそろえるため、ワークフローでは cdk.json を直接読まずにこちらを読む。
+     */
+    new cdk.CfnOutput(this, 'AuthUserPoolId', { value: props.sharedAuth.userPoolId });
+    new cdk.CfnOutput(this, 'AuthClientId', { value: props.sharedAuth.clientId });
+    new cdk.CfnOutput(this, 'AuthDomain', { value: props.sharedAuth.domain });
   }
 }

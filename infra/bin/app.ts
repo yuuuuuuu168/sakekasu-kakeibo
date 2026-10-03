@@ -8,6 +8,7 @@ import { CertStack } from '../lib/cert-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
+import { parseSharedAuth, userPoolRegion } from '../lib/shared-auth';
 
 const app = new cdk.App();
 
@@ -82,7 +83,19 @@ function buildApplicationStacks(): void {
     new DnsStack(app, `${prefix}-dns`, { zoneName: dnsZone, env });
   }
 
-  const authStack = new AuthStack(app, `${prefix}-auth`, { envName, env });
+  /*
+   * ログインは 4 アプリ共通のユーザープール（sakekasu-integrated_environment）を使う。
+   * 値は cdk.json の context `sharedAuth` に書いてあり、スタックの参照ではつながない。
+   */
+  const sharedAuth = parseSharedAuth(app.node.tryGetContext('sharedAuth'));
+
+  /*
+   * 旧ユーザープール（このアプリ専用）。共通ログインへ移った後も、切り戻しのために残す。
+   * API も画面ももう参照しない。データを新しい sub へ移し終えたら、別の PR で外す
+   * （プールは RETAIN なので、スタックを外してもプール自体は残る）。
+   * cdkd の状態を持っているので、スタック名や論理 ID は変えないこと。
+   */
+  new AuthStack(app, `${prefix}-auth`, { envName, env });
 
   const dataStack = new DataStack(app, `${prefix}-data`, {
     envName,
@@ -112,8 +125,7 @@ function buildApplicationStacks(): void {
     env,
     table: dataStack.table,
     receiptBucket: dataStack.receiptBucket,
-    userPool: authStack.userPool,
-    userPoolClient: authStack.userPoolClient,
+    sharedAuth,
     allowedOrigins,
   });
 
@@ -138,6 +150,7 @@ function buildApplicationStacks(): void {
     ...(zoneName ? { zoneName } : {}),
     apiUrl: apiStack.httpApi.apiEndpoint,
     receiptBucketDomain: dataStack.receiptBucket.bucketRegionalDomainName,
-    cognitoRegion: REGION,
+    cognitoRegion: userPoolRegion(sharedAuth.userPoolId),
+    authDomain: sharedAuth.domain,
   });
 }
