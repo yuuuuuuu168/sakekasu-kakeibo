@@ -1,4 +1,4 @@
-# Claude Code 用のフック（scripts/）のテスト。
+# Claude Code 用のフック（scripts/）と共通テーマ（theme/）のテスト。
 #
 # AWS の変更操作を止めるガード（deny-aws-writes）は、壊れても何も言わずに
 # 素通りさせる側に倒れうる。アプリのコードとは別に、ここで毎回確かめる。
@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - 'scripts/**'
+      - 'theme/**'
       - '.claude/settings.json'
       - '.template-sync.json'
       - '.github/workflows/claude-hooks.yml'
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/**'
+      - 'theme/**'
       - '.claude/settings.json'
       - '.template-sync.json'
       - '.github/workflows/claude-hooks.yml'
@@ -40,3 +42,5 @@ jobs:
         run: node -e "JSON.parse(require('fs').readFileSync('.template-sync.json','utf8'))"
       - name: japanese-guard のテスト
         run: python3 scripts/japanese-guard/test_japanese_guard.py
+      - name: 共通テーマのテスト（ダークの値の一致とコントラスト）
+        run: node --test theme/sakekasu-theme.test.mjs

@@ -1,69 +1,36 @@
 @import 'tailwindcss';
 
+@import '../theme/sakekasu-theme.css';
+
 /*
- * 配色は検証済みの既定パレットをそのまま使っている。
+ * 色とフォントは共通テーマ（theme/sakekasu-theme.css、sakekasu-template から同期）の
+ * --sk-* を、このアプリの色名に割り当てて使う。ライト/ダークの切り替えも共通テーマが持つ。
  * 上限の達成状況は status の 4 色（good / warning / serious / critical）で表し、
- * 色だけで意味を持たせないようにアイコンと文字を必ず添える。
- * 金額の棒は単一色相（青）の magnitude 表現で、系列の色分けはしない。
+ * 色だけで意味を持たせないようにアイコンと文字を必ず添える。status は家計簿の判定の色なので、
+ * 共通テーマに寄せずここで持つ。
+ * 金額の棒は単一色相（アクセント）の magnitude 表現で、系列の色分けはしない。
  */
 @theme {
-  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+  --font-sans: var(--sk-font-sans);
 
-  --color-surface: #fcfcfb;
-  --color-plane: #f9f9f7;
-  --color-ink: #0b0b0b;
-  --color-ink-2: #52514e;
-  --color-muted: #898781;
-  --color-grid: #e1e0d9;
-  --color-axis: #c3c2b7;
+  --color-surface: var(--sk-surface);
+  --color-plane: var(--sk-bg);
+  --color-ink: var(--sk-ink);
+  --color-ink-2: var(--sk-ink-2);
+  --color-muted: var(--sk-muted);
+  --color-grid: var(--sk-border);
+  --color-axis: color-mix(in srgb, var(--sk-muted) 45%, var(--sk-border));
 
-  --color-accent: #2a78d6;
-  --color-accent-weak: #cde2fb;
-  --color-accent-mid: #86b6ef;
+  --color-accent: var(--sk-accent);
+  --color-accent-ink: var(--sk-accent-ink);
+  --color-accent-weak: var(--sk-accent-weak);
+  --color-accent-mid: color-mix(in srgb, var(--sk-accent) 55%, var(--sk-surface));
 
   --color-good: #0ca30c;
   --color-warning: #fab219;
   --color-serious: #ec835a;
   --color-critical: #d03b3b;
-  --color-success-text: #006300;
-}
-
-@layer theme {
-  :root {
-    color-scheme: light;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) {
-      color-scheme: dark;
-      --color-surface: #1a1a19;
-      --color-plane: #0d0d0d;
-      --color-ink: #ffffff;
-      --color-ink-2: #c3c2b7;
-      --color-muted: #898781;
-      --color-grid: #2c2c2a;
-      --color-axis: #383835;
-      --color-accent: #3987e5;
-      --color-accent-weak: #184f95;
-      --color-accent-mid: #256abf;
-      --color-success-text: #0ca30c;
-    }
-  }
-
-  :root[data-theme='dark'] {
-    color-scheme: dark;
-    --color-surface: #1a1a19;
-    --color-plane: #0d0d0d;
-    --color-ink: #ffffff;
-    --color-ink-2: #c3c2b7;
-    --color-muted: #898781;
-    --color-grid: #2c2c2a;
-    --color-axis: #383835;
-    --color-accent: #3987e5;
-    --color-accent-weak: #184f95;
-    --color-accent-mid: #256abf;
-    --color-success-text: #0ca30c;
-  }
+  --color-success-text: var(--sk-success);
 }
 
 html,
@@ -74,18 +41,10 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-plane);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
 /* 金額の桁が縦に揃わないと比べられないので、表と目盛りだけ等幅の数字にする */
 .tnum {
   font-variant-numeric: tabular-nums;
-}
-
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
 }

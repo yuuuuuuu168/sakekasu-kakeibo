@@ -23,6 +23,7 @@ on:
       - 'infra/**'
       - 'packages/**'
       - 'src/**'
+      - 'theme/**'
       - 'index.html'
       - 'package.json'
       - 'package-lock.json'
