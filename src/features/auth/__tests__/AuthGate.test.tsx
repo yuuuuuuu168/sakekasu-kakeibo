@@ -1,154 +1,156 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 /*
- * MFA を必須にしたので、登録していないユーザーはサインインの途中で登録の段に入る。
- * その段を画面が扱えないとサインインする手段が無くなるため、段の遷移をここで見張る。
- *
- * QR の生成は動的 import。jsdom では canvas が無く落ちるので、鍵の併記だけで
- * 行き止まりにならないことも見る。
+ * ログインは共通のマネージドログインへリダイレクトして行う。この画面が受け持つのは
+ * 「送り出す」「戻ってきたら中身を出す」「失敗を見せる」の 3 つだけなので、そこを見張る。
  */
 
-const signIn = vi.fn();
-const confirmSignIn = vi.fn();
+const signInWithRedirect = vi.fn();
 const getCurrentUser = vi.fn();
 const signOut = vi.fn();
 
 vi.mock('aws-amplify/auth', () => ({
-  signIn: (...args: unknown[]) => signIn(...args),
-  confirmSignIn: (...args: unknown[]) => confirmSignIn(...args),
+  signInWithRedirect: (...args: unknown[]) => signInWithRedirect(...args),
   getCurrentUser: (...args: unknown[]) => getCurrentUser(...args),
   signOut: (...args: unknown[]) => signOut(...args),
 }));
 
-vi.mock('../../../config', () => ({ config: { mode: 'remote', apiUrl: 'https://example.test' } }));
+/* Hub の auth チャンネルはアプリから流せないので、聞き手を捕まえて手で流す */
+type HubCallback = (capsule: { payload: { event: string; data?: { error?: unknown } } }) => void;
+const listeners: HubCallback[] = [];
+const unsubscribe = vi.fn();
+vi.mock('aws-amplify/utils', () => ({
+  Hub: {
+    listen: (_channel: string, callback: HubCallback) => {
+      listeners.push(callback);
+      return unsubscribe;
+    },
+  },
+}));
+
+function emit(event: string, data?: { error?: unknown }) {
+  act(() => {
+    for (const listener of listeners) listener({ payload: { event, data } });
+  });
+}
+
+const mockConfig = vi.hoisted(() => ({ config: { mode: 'remote' as 'remote' | 'local', apiUrl: 'https://example.test' } }));
+vi.mock('../../../config', () => mockConfig);
 
 const { AuthGate } = await import('../AuthGate');
 
-const totpSetupDetails = {
-  sharedSecret: 'JBSWY3DPEHPK3PXP',
-  getSetupUri: () => new URL('otpauth://totp/sakekasu-kakeibo:me?secret=JBSWY3DPEHPK3PXP'),
-};
-
 function renderGate() {
-  return render(<AuthGate>{() => <p>ダッシュボード</p>}</AuthGate>);
-}
-
-/** サインインの画面が出るまで待つ（初回に現在のユーザーを見にいくため） */
-async function signInAs(name: string, pass: string) {
-  renderGate();
-  const nameInput = await screen.findByLabelText('ユーザー名');
-  fireEvent.change(nameInput, { target: { value: name } });
-  fireEvent.change(screen.getByLabelText('パスワード'), { target: { value: pass } });
-  fireEvent.click(screen.getByRole('button', { name: 'サインイン' }));
-}
-
-/*
- * 値を入れて「決定」を押す。
- *
- * Field は hint も label の中に入れるので、入力の読み上げ名が「ラベル＋補足」になる。
- * 前方一致で引く。
- */
-function answer(label: string, value: string) {
-  fireEvent.change(screen.getByLabelText(new RegExp(`^${label}`)), { target: { value } });
-  fireEvent.click(screen.getByRole('button', { name: '決定' }));
+  return render(
+    <AuthGate>
+      {(signOutFn) => (
+        <div>
+          <p>ダッシュボード</p>
+          <button onClick={() => void signOutFn()}>サインアウト</button>
+        </div>
+      )}
+    </AuthGate>,
+  );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  listeners.length = 0;
+  mockConfig.config.mode = 'remote';
   getCurrentUser.mockRejectedValue(new Error('未サインイン'));
+  signInWithRedirect.mockResolvedValue(undefined);
+  signOut.mockResolvedValue(undefined);
 });
 
 describe('AuthGate', () => {
-  it('登録済みならコードを入れて入れる', async () => {
-    signIn.mockResolvedValue({ isSignedIn: false, nextStep: { signInStep: 'CONFIRM_SIGN_IN_WITH_TOTP_CODE' } });
-    confirmSignIn.mockResolvedValue({ isSignedIn: true, nextStep: { signInStep: 'DONE' } });
-
-    await signInAs('me', 'Password1234');
-
-    await screen.findByLabelText('認証アプリのコード');
-    answer('認証アプリのコード', '123456');
-
-    await waitFor(() => expect(screen.getByText('ダッシュボード')).toBeInTheDocument());
-    expect(confirmSignIn).toHaveBeenCalledWith({ challengeResponse: '123456' });
-  });
-
-  it('未登録なら鍵を見せて、コードで登録を完了できる', async () => {
-    signIn.mockResolvedValue({
-      isSignedIn: false,
-      nextStep: { signInStep: 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP', totpSetupDetails },
-    });
-    confirmSignIn.mockResolvedValue({ isSignedIn: true, nextStep: { signInStep: 'DONE' } });
-
-    await signInAs('me', 'Password1234');
-
-    // QR が出せない環境でも、鍵が見えていれば手で登録できる
-    expect(await screen.findByDisplayValue('JBSWY3DPEHPK3PXP')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '認証アプリで開く' })).toHaveAttribute(
-      'href',
-      'otpauth://totp/sakekasu-kakeibo:me?secret=JBSWY3DPEHPK3PXP',
-    );
-
-    answer('認証アプリに出た 6 桁', '654321');
-
-    await waitFor(() => expect(screen.getByText('ダッシュボード')).toBeInTheDocument());
-    expect(confirmSignIn).toHaveBeenCalledWith({ challengeResponse: '654321' });
-  });
-
-  /*
-   * 手で作ったユーザーの初回はこの順になる。パスワードを変えた直後に登録の段が来るので、
-   * 応答を 1 回しか見ない作りだとここで止まる。
-   */
-  it('パスワード変更のあとに登録の段が来ても続けられる', async () => {
-    signIn.mockResolvedValue({
-      isSignedIn: false,
-      nextStep: { signInStep: 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED' },
-    });
-    confirmSignIn
-      .mockResolvedValueOnce({
-        isSignedIn: false,
-        nextStep: { signInStep: 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP', totpSetupDetails },
-      })
-      .mockResolvedValueOnce({ isSignedIn: true, nextStep: { signInStep: 'DONE' } });
-
-    await signInAs('me', 'Temp12345678');
-
-    await screen.findByLabelText(/^新しいパスワード/);
-    answer('新しいパスワード', 'Password1234');
-
-    expect(await screen.findByDisplayValue('JBSWY3DPEHPK3PXP')).toBeInTheDocument();
-
-    answer('認証アプリに出た 6 桁', '111222');
-
-    await waitFor(() => expect(screen.getByText('ダッシュボード')).toBeInTheDocument());
-  });
-
-  /* 認証アプリしか有効にしていないので、選ばせる画面を出す意味が無い */
-  it('二要素の選択を求められたら認証アプリで自動的に答える', async () => {
-    signIn.mockResolvedValue({
-      isSignedIn: false,
-      nextStep: { signInStep: 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION', allowedMFATypes: ['TOTP'] },
-    });
-    confirmSignIn.mockResolvedValue({ isSignedIn: false, nextStep: { signInStep: 'CONFIRM_SIGN_IN_WITH_TOTP_CODE' } });
-
-    await signInAs('me', 'Password1234');
-
-    await waitFor(() => expect(confirmSignIn).toHaveBeenCalledWith({ challengeResponse: 'TOTP' }));
-    expect(await screen.findByLabelText('認証アプリのコード')).toBeInTheDocument();
-  });
-
-  it('知らない段が来たら何が来たかを画面に出す', async () => {
-    signIn.mockResolvedValue({ isSignedIn: false, nextStep: { signInStep: 'CONFIRM_SIGN_IN_WITH_SMS_CODE' } });
-
-    await signInAs('me', 'Password1234');
-
-    expect(await screen.findByText(/CONFIRM_SIGN_IN_WITH_SMS_CODE/)).toBeInTheDocument();
-  });
-
   it('サインイン済みならそのまま中身を出す', async () => {
-    getCurrentUser.mockResolvedValue({ username: 'me' });
+    getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
     renderGate();
-    await waitFor(() => expect(screen.getByText('ダッシュボード')).toBeInTheDocument());
-    expect(signIn).not.toHaveBeenCalled();
+    expect(await screen.findByText('ダッシュボード')).toBeInTheDocument();
+    expect(signInWithRedirect).not.toHaveBeenCalled();
+  });
+
+  it('未サインインならボタンでマネージドログインへ送る', async () => {
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'ログイン画面へ' }));
+    await waitFor(() => expect(signInWithRedirect).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('ダッシュボード')).not.toBeInTheDocument();
+  });
+
+  /* ユーザー名もパスワードも MFA もこの画面では聞かない（マネージドログインの仕事） */
+  it('独自の入力欄を出さない', async () => {
+    renderGate();
+    await screen.findByRole('button', { name: 'ログイン画面へ' });
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(document.querySelector('input')).toBeNull();
+  });
+
+  it('戻ってきてトークンに換え終わったら中身を出す', async () => {
+    renderGate();
+    await screen.findByRole('button', { name: 'ログイン画面へ' });
+
+    getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
+    emit('signInWithRedirect');
+
+    expect(await screen.findByText('ダッシュボード')).toBeInTheDocument();
+  });
+
+  it('戻ってきて失敗したら理由を出し、もう一度送り出せる', async () => {
+    renderGate();
+    await screen.findByRole('button', { name: 'ログイン画面へ' });
+
+    emit('signInWithRedirect_failure', { error: new Error('invalid_grant') });
+
+    expect(await screen.findByText(/invalid_grant/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'ログイン画面へ' }));
+    await waitFor(() => expect(signInWithRedirect).toHaveBeenCalledTimes(1));
+  });
+
+  it('送り出しに失敗したら理由を出してボタンに戻す', async () => {
+    signInWithRedirect.mockRejectedValue(new Error('OAuth の設定がありません'));
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'ログイン画面へ' }));
+    expect(await screen.findByText(/OAuth の設定がありません/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ログイン画面へ' })).toBeEnabled();
+  });
+
+  it('既にサインイン済みと言われたら中身を出す', async () => {
+    const error = Object.assign(new Error('already'), { name: 'UserAlreadyAuthenticatedException' });
+    signInWithRedirect.mockRejectedValue(error);
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'ログイン画面へ' }));
+    expect(await screen.findByText('ダッシュボード')).toBeInTheDocument();
+  });
+
+  it('サインアウトで signOut を呼び、ボタンの画面に戻る', async () => {
+    getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'サインアウト' }));
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'ログイン画面へ' })).toBeInTheDocument();
+  });
+
+  /* ログイン中のユーザー名・メールは出さない（要望） */
+  it('ユーザー名を画面に出さない', async () => {
+    getCurrentUser.mockResolvedValue({ username: 'someone@example.com', userId: 'sub' });
+    renderGate();
+    await screen.findByText('ダッシュボード');
+    expect(screen.queryByText(/someone@example.com/)).not.toBeInTheDocument();
+  });
+
+  it('画面を閉じたら Hub の購読を外す', async () => {
+    const { unmount } = renderGate();
+    await screen.findByRole('button', { name: 'ログイン画面へ' });
+    unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  /* ローカルモードは Cognito を一切呼ばずに中身を出す */
+  it('ローカルモードでは何も呼ばずに中身を出す', async () => {
+    mockConfig.config.mode = 'local';
+    renderGate();
+    expect(screen.getByText('ダッシュボード')).toBeInTheDocument();
+    expect(getCurrentUser).not.toHaveBeenCalled();
+    expect(listeners).toHaveLength(0);
   });
 });

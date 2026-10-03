@@ -178,46 +178,38 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 アプリ本体のスタックは cdkd で入る（下の「cdkd で出している理由と仕組み」を参照）。
 
 スタックは 4 つ。`-auth` `-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
+`-auth` は旧ユーザープール（このアプリ専用）で、ログインを共通ログインへ移した後は
+切り戻しのためだけに残している（下の「共通ログインへの切り替え」）。
 
 `cdk.json` に `domainName` を書き戻すと 5 つになり、証明書の `-cert` だけが CloudFront の
 制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
-### 4. 自分のユーザーを 1 つ作る
+### 4. ログインのユーザー（共通ログイン）
 
-セルフサインアップは閉じてある。
+ログインは 4 アプリ（reinvent、builder、kakeibo、learning）共通のユーザープールで行う。
+共通基盤のリポジトリ sakekasu-integrated_environment がデプロイしていて、
+このリポジトリではユーザーもプールも作らない。使う値は `infra/cdk.json` の context `sharedAuth` にある。
 
-**`--username` にメールアドレスは渡せない。** UserPool はメールアドレスをエイリアスに
-してある（`signInAliases: { email: true, username: true }`）ので、username 自体が
-メール形式だと Cognito が弾く。
+| 項目 | 値 |
+| --- | --- |
+| ユーザープール ID | `sharedAuth.userPoolId`（`ap-northeast-1_yw1VDKtxW`） |
+| マネージドログインのドメイン | `sharedAuth.domain`（`https://auth.sakekasu-builder.com`） |
+| kakeibo のアプリクライアント ID | `sharedAuth.clientId`（認可コード + PKCE のみ。シークレットなし） |
+| 戻り先として登録済みの URL | `https://kakeibo.sakekasu-builder.com/` と `http://localhost:5173/`（末尾の `/` まで一致させる） |
 
-```
-InvalidParameterException: Username cannot be of email format,
-since user pool is configured for email alias
-```
+ユーザーの作り方は共通基盤の `docs/identity.md` の「ユーザーを作る」にある。
+セルフサインアップは無く、パスワードは 16 文字以上、MFA（認証アプリの TOTP）は必須。
 
-username は記号なしの短い名前にして、メールアドレスは属性で渡す。
+画面の「ログイン画面へ」を押すとマネージドログインへ移り、そこでパスワードと 6 桁を入れる。
+初回はパスワードの変更と認証アプリの登録もマネージドログインの画面が行う。この画面には
+ユーザー名やパスワードの入力欄は無い。ほかのアプリで先にログインしていれば、入力なしで戻ってくる。
 
-```sh
-aws cognito-idp admin-create-user \
-  --user-pool-id <UserPoolId> \
-  --username <メールを含まない名前> \
-  --user-attributes Name=email,Value=<メールアドレス> Name=email_verified,Value=true \
-  --desired-delivery-mediums EMAIL \
-  --region ap-northeast-1
-```
-
-仮パスワードがメールで届く（迷惑メールに入りやすい。下の「よくある詰まり」にある）。
-
-**初回サインインは 2 段ある。** 新しいパスワードを決めたあと、続けて認証アプリの登録に入る。
-MFA は必須にしてあるので飛ばせない。画面に QR と鍵が出るので、認証アプリ（Google
-Authenticator、1Password、iOS のパスワードなど TOTP に対応したもの）に登録して、
-表示された 6 桁を入れる。スマートフォンなら「認証アプリで開く」を押すほうが早い。
-
-2 回目以降は、ユーザー名とパスワードのあとに 6 桁を聞かれる。
-
-サインインはメールアドレスでもこの username でも通る。エイリアスにしてあるのはそのため。
+共通ログインのスコープは `openid` `email` `profile` だけで、`aws.cognito.signin.user.admin` は無い。
+Amplify の `fetchUserAttributes`、`setUpTOTP`、`updateMFAPreference`、`updatePassword` など、
+そのスコープが要る API は画面から呼べない。ユーザーの情報が要るときは `fetchAuthSession` の
+トークンのクレームから読む（いまはユーザー名もメールも画面に出していない）。
 
 ### 5. API の CORS に配信元を入れる
 
@@ -268,24 +260,118 @@ JSON ではなく鍵の文字列そのままを入れること。`{"apiKey": "..
 
 ### 7. フロントを置く
 
+ふだんは deploy ワークフローが行う。手で置くときは次のとおり。ログインの値（共通ログイン）は
+API スタックの出力にあり、旧ユーザープールの `-auth` スタックの出力は使わない。
+
 ```sh
+cd infra
 prefix=sakekasu-kakeibo-dev
-export VITE_API_URL=$(aws cloudformation describe-stacks --stack-name $prefix-api \
-  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
-export VITE_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name $prefix-auth \
-  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
-export VITE_USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name $prefix-auth \
-  --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text)
+out() { npx cdkd state show "$1" --stack-region ap-northeast-1 --json | jq -r --arg k "$2" '.state.outputs[$k]'; }
+export VITE_API_URL=$(out $prefix-api ApiUrl)
+export VITE_USER_POOL_ID=$(out $prefix-api AuthUserPoolId)
+export VITE_USER_POOL_CLIENT_ID=$(out $prefix-api AuthClientId)
+export VITE_AUTH_DOMAIN=$(out $prefix-api AuthDomain)
+bucket=$(out $prefix-site SiteBucketName)
+cd ..
 
 npx vite build
-bucket=$(aws cloudformation describe-stacks --stack-name $prefix-site \
-  --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text)
 aws s3 sync dist/ "s3://$bucket/" --delete --exclude index.html \
   --cache-control "public,max-age=31536000,immutable"
 aws s3 cp dist/index.html "s3://$bucket/index.html" --cache-control "no-cache"
 ```
 
+4 つの `VITE_*` のどれかが欠けると、画面はローカルモード（localStorage）で動く。
+`VITE_AUTH_DOMAIN` は `https://` を付けないホスト名（`auth.sakekasu-builder.com`）。
+
+手元の `npm run dev`（`http://localhost:5173/`）でも同じ 4 つを入れれば共通ログインで入れる。
+戻り先に localhost を登録してあるため。
+
 CloudFront の無効化は `index.html` だけでよい。ほかの資産はファイル名にハッシュが付く。
+
+## 共通ログインへの切り替え
+
+ログインをこのアプリ専用のユーザープール（旧プール、`-auth` スタック）から、4 アプリ共通の
+ユーザープールへ移した。API の JWT の検証と画面のログインは共通ログインに向いていて、
+旧プールはどこからも参照していない。
+
+データは Cognito の `sub` で分けている（DynamoDB の `pk` が `USER#<sub>`、レシート画像が
+`receipts/<sub>/...`）。`sub` はユーザープールごとに違うので、共通ログインで入ると最初は
+家計簿が空に見える。旧 sub の下のデータを新 sub の下へ写すスクリプトを用意してある
+（`infra/scripts/copy-user-data/`）。
+
+### 手順
+
+スクリプトは Mac から、書き込み権限のあるプロファイルで流す（Actions や Claude のセッションからは
+流さない）。読み取り専用の `verify` プロファイルでは DynamoDB の項目も S3 の本文も読めないので通らない。
+
+1. PR を main へマージする。deploy ワークフローが API と画面を共通ログインに向けて出す
+2. `https://kakeibo.sakekasu-builder.com/` を開き、「ログイン画面へ」から共通ログインで入る。
+   **入った後は何も操作しない**（カテゴリの保存や取り込みをすると、新 sub の下に項目ができ、
+   旧データの同じ項目が写らなくなる。スクリプトは上書きしないため）。画面が空なのはこの時点では正しい
+3. 旧 sub を旧プールで調べる。旧プールの ID は `-auth` スタックの出力 `UserPoolId`
+   （`ap-northeast-1_O1PQB99IK`）
+
+   ```sh
+   export AWS_PROFILE=<管理者権限のプロファイル>   # 例: sakekasu-builder
+   aws cognito-idp list-users --user-pool-id ap-northeast-1_O1PQB99IK --region ap-northeast-1 \
+     --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
+     --output table
+   ```
+
+4. 新 sub を共通プールで調べる
+
+   ```sh
+   aws cognito-idp list-users --user-pool-id ap-northeast-1_yw1VDKtxW --region ap-northeast-1 \
+     --filter 'email = "<メールアドレス>"' \
+     --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
+     --output table
+   ```
+
+5. dry-run で件数と例を見る（何も書かない）
+
+   ```sh
+   cd infra
+   npm ci   # 済んでいれば不要
+   account=$(aws sts get-caller-identity --query Account --output text)
+   npx tsx scripts/copy-user-data/index.ts \
+     --table sakekasu-kakeibo-dev \
+     --bucket sakekasu-kakeibo-dev-receipts-$account \
+     --from <旧 sub> --to <新 sub>
+   ```
+
+   「写す」の件数が旧データの件数（明細・レシート・設定・上限・取り込みの対応・月次レポート）に
+   見合っていること、「新しい側に既にある」が 0 件であることを確かめる。「写す」が 0 件なら
+   `--from` の sub を取り違えている。旧 sub を含む値が規則の外に残っていれば警告が出る
+
+6. 同じコマンドに `--apply` を付けて流す。画面を読み直すと家計簿が戻っている
+
+スクリプトの性質。
+
+- 既定は dry-run。`--apply` のときだけ書き込む
+- 書き込みは条件付き。新しいキーに既にある項目（`attribute_not_exists(pk)`）・画像（先に
+  `HeadObject` で確かめる）は上書きしない。途中で落ちても、何度流しても安全
+- 旧データは消さない
+- 写すのは `USER#<旧 sub>` の全項目（`TXN#` `CONFIG#` `BUDGET#` `MAPPING#` `RECEIPT#` `REPORT#`）と、
+  `receipts/<旧 sub>/` の下の画像。レシートの項目の `imageKey` も新しいキーに書き換える。
+  テーブルに GSI は無く、sk に sub は入っていない
+- 画像のコピーは S3 では新しいオブジェクトになるので、90 日で消すライフサイクルの起算日が
+  コピーした日に戻る（画像は OCR の後は使っていないので実害は無い）
+- レシート画像を扱わないときは `--bucket` の代わりに `--skip-s3`
+
+### 切り戻し
+
+旧プールと旧データは残してある。この PR を revert してマージすれば、API と画面は旧プールに戻り、
+旧 sub のデータがそのまま見える。ただし切り替えの後に共通ログインで入れた変更は新 sub の下にあり、
+旧 sub には戻らない。
+
+### 後片付け（別の PR）
+
+データを移し終えて落ち着いたら、別の PR で次を行う。
+
+- `-auth` スタック（旧プール）を `bin/app.ts` から外す。プールは RETAIN なので、外しても
+  プールは AWS に残る。不要ならコンソールか CLI で消す
+- 旧 sub の下のデータ（`USER#<旧 sub>`、`receipts/<旧 sub>/`）を消す。それまでは月次レポートの
+  Lambda が旧 sub の分も毎月作るが、読まれないだけで害は無い
 
 ## GitHub Actions からデプロイする
 
@@ -355,7 +441,7 @@ cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 
 
 ### ジョブを 2 つに分けている理由
 
-`infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、UserPool の ID、
+`infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、共通ログインの値、
 配信先のバケットとディストリビューション）をジョブの出力に載せる。`site` ジョブがそれを受けて
 フロントをビルドし、S3 へ同期して `index.html` を無効化する。
 
@@ -653,19 +739,20 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 
 ### 認証アプリを失くしてサインインできない
 
-MFA は必須なので、認証アプリを消してしまうと自分では戻せない。管理者の操作で登録を
-解除すると、次のサインインで登録の段からやり直せる。
+ログインは共通ログインなので、MFA の登録も共通のユーザープール（`ap-northeast-1_yw1VDKtxW`）にある。
+解除すると 4 アプリすべてに効く。管理者の操作で登録を外すと、次のログインでマネージドログインが
+認証アプリの登録からやり直させる。
 
 ```sh
 aws cognito-idp admin-set-user-mfa-preference \
-  --user-pool-id ap-northeast-1_O1PQB99IK \
-  --username <ユーザー名> \
+  --user-pool-id ap-northeast-1_yw1VDKtxW \
+  --username <共通プールのユーザー名> \
   --software-token-mfa-settings Enabled=false,PreferredMfa=false \
   --region ap-northeast-1
 ```
 
-これで登録が外れる。UserPool 側は必須のままなので、次にサインインすると認証アプリの
-登録を求められ、新しい端末で登録し直せる。パスワードは変わらない。
+ユーザー名は「共通ログインへの切り替え」の手順 4 の `list-users` で分かる。プール側は必須のままなので、
+登録を外しても MFA なしでは入れない。パスワードは変わらない。
 
 AWS に入る手段まで失うと手が無くなるので、認証アプリのバックアップ（1Password などの
 同期するもの、または復旧コードの保管）は用意しておく。
@@ -707,43 +794,26 @@ preflight に直接応える。`infra/__tests__/stacks.test.ts` にルートキ�
 
 ### 仮パスワードのメールが届かない
 
-`admin-create-user` は通って `UserStatus` が `FORCE_CHANGE_PASSWORD` になっているのに、
-メールが来ない。
+ユーザーは共通のユーザープールにあるので、作り方も仮パスワードの扱いも共通基盤の
+`docs/identity.md` に従う。ここには詰まったときの見どころだけを書く。
 
-**まず迷惑メールフォルダを見る。** 初回はここに入っていた。UserPool に SES を繋いでいないので
-送信元は Cognito 既定の `no-reply@verificationemail.com` になり、こちらのドメインで
-認証されていないため迷惑メール扱いされやすい。
+**まず迷惑メールフォルダを見る。** ユーザープールに SES を繋いでいないので、送信元は
+Cognito 既定の `no-reply@verificationemail.com` になり、迷惑メール扱いされやすい。
 
-そこにも無ければ、宛先に受信の用意が無い可能性がある。ドメインを持っているだけでは
-受け取れず、MX レコードをメールのサービスに向ける必要がある。このリポジトリはそこまで
-面倒を見ていないので、`dig MX <ドメイン>` で確かめる。
-
-いずれにしても、利用者は本人ひとりなのでメールを待つ必要は無い。パスワードを直接入れる。
+そこにも無ければ、利用者は本人なのでパスワードを直接入れてよい（共通プールは 16 文字以上）。
 
 ```sh
 read -rs "?パスワード: " pw; echo   # bash なら read -rsp "パスワード: " pw; echo
 aws cognito-idp admin-set-user-password \
-  --user-pool-id <UserPoolId> \
-  --username <ユーザー名> \
+  --user-pool-id ap-northeast-1_yw1VDKtxW \
+  --username <共通プールのユーザー名> \
   --password "$pw" \
   --permanent \
   --region ap-northeast-1
 unset pw
 ```
 
-`--permanent` を付けると `UserStatus` が `CONFIRMED` になり、初回のパスワード変更を
-求められなくなる。付けなければ仮パスワード扱いになり、画面の変更フローに入る（対応済み）。
-
-パスワードを忘れたときの復旧はメールだけに設定してある（`accountRecovery: EMAIL_ONLY`）。
-受け取れないアドレスを入れたままだと復旧できないので、届くアドレスに直しておく。
-
-```sh
-aws cognito-idp admin-update-user-attributes \
-  --user-pool-id <UserPoolId> \
-  --username <ユーザー名> \
-  --user-attributes Name=email,Value=<届くアドレス> Name=email_verified,Value=true \
-  --region ap-northeast-1
-```
+`--permanent` を付けなければ仮パスワード扱いになり、マネージドログインがパスワードの変更を求める。
 
 ## 月次レポートを手で作り直す
 
@@ -774,6 +844,7 @@ Bedrock の OCR がその次で、同時実行を 3 に絞ってあるので暴�
 
 ## 消すとき
 
-DynamoDB のテーブル、レシート用バケット、配信用バケット、Cognito のユーザープールは
+DynamoDB のテーブル、レシート用バケット、配信用バケット、旧ユーザープール（`-auth`）は
 `RemovalPolicy.RETAIN` にしてある。`cdkd destroy` しても家計簿のデータは残る。
 本当に消すなら、スタックを消した後にコンソールか CLI で個別に消す。
+ログインに使っている共通のユーザープールは共通基盤の持ち物なので、ここからは消さない。
