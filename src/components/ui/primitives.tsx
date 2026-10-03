@@ -27,7 +27,7 @@ export function Button({ variant = 'ghost', size = 'md', className, ...rest }: B
       className={cn(
         'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm',
-        variant === 'primary' && 'bg-accent text-white hover:brightness-110',
+        variant === 'primary' && 'bg-accent text-accent-ink hover:brightness-110',
         variant === 'ghost' && 'bg-plane text-ink ring-1 ring-black/10 hover:bg-grid dark:ring-white/10',
         variant === 'danger' && 'bg-plane text-critical ring-1 ring-critical/40 hover:bg-critical/10',
         className,
