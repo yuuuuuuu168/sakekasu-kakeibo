@@ -7,6 +7,13 @@ export interface AuthStackProps extends cdk.StackProps {
 }
 
 /**
+ * 旧ユーザープール（このアプリ専用）。
+ *
+ * ログインは 4 アプリ共通のユーザープール（sakekasu-integrated_environment）へ移した。
+ * このスタックは切り戻しとデータの付け替え（旧 sub を調べる）のためだけに残してあり、
+ * API も画面ももう参照しない。データを移し終えたら別の PR で外す。手順は docs/operations.md の
+ * 「共通ログインへの切り替え」にある。
+ *
  * 利用者は本人ひとり。セルフサインアップは閉じ、ユーザーは手で 1 つ作る。
  * 家計簿に他人が登録できる経路を残す理由が無いため。
  */
@@ -25,12 +32,8 @@ export class AuthStack extends cdk.Stack {
        * MFA は必須。二要素は認証アプリ（TOTP）だけで、SMS は使わない。SMS は電話番号を
        * 預かることになり、SIM の乗っ取りでも抜かれる。
        *
-       * 必須にすると、登録していないユーザーはサインインの途中で登録の段に入る。
-       * 画面側（src/features/auth/AuthGate.tsx）がその段を扱えないと、サインインする
-       * 手段が無くなる。両方を揃えて変えること。
-       *
-       * 端末を失くしたときは管理者が admin-set-user-mfa-preference で解除して
-       * 登録し直す。手順は docs/operations.md にある。
+       * 共通ログインへ移ったので、画面はもうこのプールでサインインしない
+       * （src/features/auth/AuthGate.tsx はマネージドログインへ送るだけになった）。
        */
       mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: { sms: false, otp: true },
@@ -54,6 +57,15 @@ export class AuthStack extends cdk.Stack {
       idTokenValidity: cdk.Duration.hours(8),
       refreshTokenValidity: cdk.Duration.days(30),
     });
+
+    /*
+     * API スタックが参照していたころの export を、同じ名前のまま出し続ける。
+     * 参照を外した回のデプロイで export まで消えると、使う側と出す側のどちらが先に
+     * 更新されるかで失敗しうる（CloudFormation の「使用中の export は消せない」と同じ問題）。
+     * このスタックの中身を一切変えずに済ませるためでもある。スタックを外す PR で一緒に消す。
+     */
+    this.exportValue(this.userPool.userPoolId);
+    this.exportValue(this.userPoolClient.userPoolClientId);
 
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });

@@ -20,6 +20,12 @@ export interface SiteStackProps extends cdk.StackProps {
   /** CSP の connect-src に入れるレシート用バケットのドメイン */
   receiptBucketDomain: string;
   cognitoRegion: string;
+  /**
+   * 共通ログインのマネージドログインのドメイン（https:// を付けない）。
+   * 画面はリダイレクトで戻った後に、このドメインの /oauth2/token へ認可コードを送って
+   * トークンに換えるので、connect-src に入れる
+   */
+  authDomain: string;
 }
 
 /**
@@ -60,7 +66,9 @@ export class SiteStack extends cdk.Stack {
       "font-src 'self'",
       "img-src 'self' data: blob:",
       "worker-src 'self' blob:",
-      `connect-src 'self' ${props.apiUrl} https://${props.receiptBucketDomain} https://cognito-idp.${props.cognitoRegion}.amazonaws.com`,
+      // cognito-idp はトークンの取り直しとサインアウト時の失効（Amplify が直接呼ぶ）、
+      // authDomain は認可コードの交換に使う
+      `connect-src 'self' ${props.apiUrl} https://${props.receiptBucketDomain} https://cognito-idp.${props.cognitoRegion}.amazonaws.com https://${props.authDomain}`,
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "object-src 'none'",

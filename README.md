@@ -46,7 +46,7 @@
 
 | 機能 | 補足 |
 |------|------|
-| Cognito 認証 | 利用者は本人ひとり。セルフサインアップは閉じ、ユーザーは手で 1 つ作る。MFA（認証アプリの TOTP）は必須 |
+| 共通ログイン | 4 アプリ共通の Cognito ユーザープールのマネージドログイン（`auth.sakekasu-builder.com`）へリダイレクトして入る（認可コード + PKCE）。セルフサインアップなし、MFA（認証アプリの TOTP）は必須 |
 | データ保護 | DynamoDB の PITR、S3 の公開禁止と暗号化、4 つの主要リソースは `RemovalPolicy.RETAIN` |
 | レシート画像の自動削除 | 90 日。OCR で品目を取り出した後の画像は残す意味が薄い |
 | 配信 | S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中に置いた |
@@ -112,7 +112,7 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 - Vite 7
 - Tailwind CSS v4（`@theme` ディレクティブ、`tailwind.config.js` 不使用）
 - AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
-- Amazon Cognito（UserPool）
+- Amazon Cognito（4 アプリ共通のユーザープールとマネージドログイン）
 - AWS S3 + CloudFront（フロントの配信、レシート画像の保管）
 - Amazon Bedrock（Claude Haiku 4.5）※レシートの OCR
 - EventBridge（毎月 1 日のレポート生成）
@@ -134,7 +134,7 @@ packages/core/     # AWS に依存しない純粋関数。画面と Lambda の�
     report.ts      # 月次レポートと叱りの生成
 src/
   features/
-    auth/          # サインイン（Cognito）
+    auth/          # 共通ログインへのリダイレクト（Cognito のマネージドログイン）
     dashboard/     # ダッシュボード
     import/        # 明細の取り込み（CSV / PDF）
     transactions/  # 明細一覧と内訳の分割

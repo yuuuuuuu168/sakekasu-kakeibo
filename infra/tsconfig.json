@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["bin", "lib", "lambda", "__tests__"]
+  "include": ["bin", "lib", "lambda", "scripts", "__tests__"]
 }
