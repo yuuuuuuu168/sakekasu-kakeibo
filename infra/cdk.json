@@ -11,6 +11,11 @@
     "hostedZoneId": "Z0667100181MY4RPHVIRO",
     "zoneName": "kakeibo.sakekasu-builder.com",
     "siteOrigin": "https://d6f8ub6380j2a.cloudfront.net",
+    "sharedAuth": {
+      "domain": "auth.sakekasu-builder.com",
+      "userPoolId": "ap-northeast-1_yw1VDKtxW",
+      "clientId": "2bsth1alaafgp1utsq3evraib5"
+    },
     "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }
 }

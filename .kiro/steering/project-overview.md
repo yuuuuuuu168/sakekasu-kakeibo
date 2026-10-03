@@ -38,7 +38,9 @@ inclusion: always
 - **ビルドツール**: Vite 7
 - **スタイリング**: Tailwind CSS v4（`@theme` ディレクティブ、`tailwind.config.js` 不使用）
 - **バックエンド**: AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
-- **認証**: Amazon Cognito（UserPool、セルフサインアップ無効）
+- **認証**: 4 アプリ共通の Amazon Cognito ユーザープール（sakekasu-integrated_environment）。
+  マネージドログイン（`auth.sakekasu-builder.com`）へリダイレクトし、認可コード + PKCE で入る。
+  値は `infra/cdk.json` の context `sharedAuth`。アプリ専用の旧プール（`-auth`）は切り戻し用に残している
 - **配信**: S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中
 - **デプロイ**: アプリ本体のスタックは cdkd（CloudFormation を通さない CDK のデプロイツール）で出す。
   cdkd 用ロールと Actions 用ロールのスタックだけは CloudFormation

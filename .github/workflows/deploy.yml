@@ -12,7 +12,7 @@
 # CloudFormation から cdkd への移行は infra/scripts/migrate-to-cdkd.sh が初回に済ませる。
 #
 # ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。
-# ビルドにはスタックの出力（API の URL、UserPool の ID）が要るので、infra ジョブの
+# ビルドにはスタックの出力（API の URL、共通ログインの値）が要るので、infra ジョブの
 # 出力として受け渡し、ビルドが終わってから配信用の認証情報を入れる。
 name: deploy
 
@@ -62,6 +62,7 @@ jobs:
       apiUrl: ${{ steps.outputs.outputs.apiUrl }}
       userPoolId: ${{ steps.outputs.outputs.userPoolId }}
       userPoolClientId: ${{ steps.outputs.outputs.userPoolClientId }}
+      authDomain: ${{ steps.outputs.outputs.authDomain }}
       siteBucket: ${{ steps.outputs.outputs.siteBucket }}
       distributionId: ${{ steps.outputs.outputs.distributionId }}
     steps:
@@ -161,14 +162,19 @@ jobs:
           }
           # 一度変数に受ける。echo の引数の中で失敗しても set -e は効かず、空のまま進んでしまう
           api_url="$(read_output "$prefix-api" ApiUrl)"
-          user_pool_id="$(read_output "$prefix-auth" UserPoolId)"
-          user_pool_client_id="$(read_output "$prefix-auth" UserPoolClientId)"
+          # ログインは共通のユーザープール（cdk.json の sharedAuth）。API スタックが
+          # JWT の検証に使っているのと同じ値を出しているので、そこから読む。
+          # 旧ユーザープールの -auth スタックの出力はもう使わない
+          user_pool_id="$(read_output "$prefix-api" AuthUserPoolId)"
+          user_pool_client_id="$(read_output "$prefix-api" AuthClientId)"
+          auth_domain="$(read_output "$prefix-api" AuthDomain)"
           site_bucket="$(read_output "$prefix-site" SiteBucketName)"
           distribution_id="$(read_output "$prefix-site" DistributionId)"
           {
             echo "apiUrl=$api_url"
             echo "userPoolId=$user_pool_id"
             echo "userPoolClientId=$user_pool_client_id"
+            echo "authDomain=$auth_domain"
             echo "siteBucket=$site_bucket"
             echo "distributionId=$distribution_id"
           } >> "$GITHUB_OUTPUT"
@@ -193,9 +199,13 @@ jobs:
           VITE_API_URL: ${{ needs.infra.outputs.apiUrl }}
           VITE_USER_POOL_ID: ${{ needs.infra.outputs.userPoolId }}
           VITE_USER_POOL_CLIENT_ID: ${{ needs.infra.outputs.userPoolClientId }}
+          VITE_AUTH_DOMAIN: ${{ needs.infra.outputs.authDomain }}
         run: |
           set -euo pipefail
-          test -n "$VITE_API_URL" || { echo "API の URL が取れていません" >&2; exit 1; }
+          # 1 つでも欠けると画面はローカルモード（localStorage）で配信されてしまうので止める
+          for name in VITE_API_URL VITE_USER_POOL_ID VITE_USER_POOL_CLIENT_ID VITE_AUTH_DOMAIN; do
+            test -n "${!name}" || { echo "$name が取れていません" >&2; exit 1; }
+          done
           npx vite build
 
       - uses: aws-actions/configure-aws-credentials@v6

@@ -6,8 +6,16 @@ import { AuthStack } from '../lib/auth-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
+import type { SharedAuth } from '../lib/shared-auth';
 
 const env = { account: '123456789012', region: 'ap-northeast-1' };
+
+/** テスト用の共通ログインの値。本物の値は cdk.json にある */
+const sharedAuth: SharedAuth = {
+  domain: 'auth.example.com',
+  userPoolId: 'ap-northeast-1_TestPool1',
+  clientId: 'testclientid0123456789',
+};
 
 function stacks() {
   const app = new cdk.App();
@@ -18,8 +26,7 @@ function stacks() {
     env,
     table: data.table,
     receiptBucket: data.receiptBucket,
-    userPool: auth.userPool,
-    userPoolClient: auth.userPoolClient,
+    sharedAuth,
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
   });
   const site = new SiteStack(app, 'test-site', {
@@ -28,6 +35,7 @@ function stacks() {
     apiUrl: 'https://example.execute-api.ap-northeast-1.amazonaws.com',
     receiptBucketDomain: 'bucket.s3.ap-northeast-1.amazonaws.com',
     cognitoRegion: 'ap-northeast-1',
+    authDomain: sharedAuth.domain,
   });
   return { auth, data, api, site };
 }
@@ -67,6 +75,16 @@ describe('AuthStack', () => {
       expect(client.Properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
       expect(client.Properties.ExplicitAuthFlows).not.toContain('ALLOW_ADMIN_USER_PASSWORD_AUTH');
     }
+  });
+
+  /*
+   * API が参照していたころの export を出し続ける。参照を外した回に export まで消すと、
+   * 使う側と出す側の更新の順番しだいで失敗しうるため。スタックを外す PR で一緒に消す。
+   */
+  it('旧ユーザープールの export を残す（API はもう読まない）', () => {
+    const outputs = Template.fromStack(stacks().auth).findOutputs('*');
+    const exported = Object.values(outputs).filter((output) => output.Export);
+    expect(exported).toHaveLength(2);
   });
 });
 
@@ -111,6 +129,34 @@ describe('ApiStack', () => {
     for (const route of Object.values(routes)) {
       expect(route.Properties.AuthorizationType).toBe('JWT');
     }
+  });
+
+  /*
+   * ログインは共通のユーザープールへ移した。発行者がそのプール、audience が kakeibo の
+   * クライアントのトークンだけを通す。旧プールに向いたままだと、共通ログインで入っても 401 になる。
+   */
+  it('JWT の検証を共通ログインのプールと kakeibo のクライアントに向ける', () => {
+    Template.fromStack(stacks().api).hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      AuthorizerType: 'JWT',
+      IdentitySource: ['$request.header.Authorization'],
+      JwtConfiguration: {
+        Issuer: 'https://cognito-idp.ap-northeast-1.amazonaws.com/ap-northeast-1_TestPool1',
+        Audience: ['testclientid0123456789'],
+      },
+    });
+  });
+
+  /* 旧プールのスタックを参照しない。参照が残ると、旧プールを外す PR で API まで巻き込む */
+  it('旧ユーザープールのスタックを参照しない', () => {
+    const template = JSON.stringify(Template.fromStack(stacks().api).toJSON());
+    expect(template).not.toContain('test-auth:');
+  });
+
+  it('画面のビルドに渡すログインの値を出力する', () => {
+    const outputs = Template.fromStack(stacks().api).findOutputs('*');
+    expect(outputs.AuthUserPoolId?.Value).toBe(sharedAuth.userPoolId);
+    expect(outputs.AuthClientId?.Value).toBe(sharedAuth.clientId);
+    expect(outputs.AuthDomain?.Value).toBe(sharedAuth.domain);
   });
 
   it('Bedrock は推論プロファイルと振り先の基盤モデルの両方を許可する', () => {
@@ -275,6 +321,15 @@ describe('SiteStack', () => {
     expect(csp.split(';').find((part) => part.includes('script-src'))).not.toContain('unsafe-inline');
   });
 
+  /* リダイレクトから戻った後、認可コードをマネージドログインの /oauth2/token で換える */
+  it('connect-src にマネージドログインのドメインを入れる', () => {
+    const template = Template.fromStack(stacks().site);
+    const policies = template.findResources('AWS::CloudFront::ResponseHeadersPolicy');
+    const csp = Object.values(policies)[0].Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig
+      .ContentSecurityPolicy.ContentSecurityPolicy as string;
+    expect(csp.split(';').find((part) => part.includes('connect-src'))).toContain('https://auth.example.com');
+  });
+
   it('403 と 404 を index.html の 200 に読み替える', () => {
     Template.fromStack(stacks().site).hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: {
@@ -308,6 +363,7 @@ describe('SiteStack', () => {
       apiUrl: 'https://example.execute-api.ap-northeast-1.amazonaws.com',
       receiptBucketDomain: 'bucket.s3.ap-northeast-1.amazonaws.com',
       cognitoRegion: 'ap-northeast-1',
+      authDomain: sharedAuth.domain,
     });
     const template = Template.fromStack(site);
 

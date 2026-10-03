@@ -5,9 +5,9 @@
 ```
 ブラウザ (React + Vite)
   │  CSV/PDF はブラウザ内で解析。確定した明細だけを送る
-  │  Cognito の JWT を Authorization ヘッダに付ける
+  │  共通ログイン（Cognito のマネージドログイン）で得た ID トークンを Authorization ヘッダに付ける
   ▼
-API Gateway (HTTP API) ── Cognito JWT オーソライザ
+API Gateway (HTTP API) ── Cognito JWT オーソライザ（共通ユーザープール + kakeibo のクライアント）
   ▼
 Lambda (api)  ──▶ DynamoDB (シングルテーブル)
   │
@@ -44,7 +44,7 @@ RPC の形をしていて、グラフで引く必要がないこと。試行錯�
 
 | スタック | 中身 |
 | --- | --- |
-| `sakekasu-kakeibo-{env}-auth` | Cognito UserPool、UserPoolClient。セルフサインアップは無効 |
+| `sakekasu-kakeibo-{env}-auth` | 旧 Cognito UserPool、UserPoolClient。共通ログインへ移った後は切り戻し用に残しているだけで、どこからも参照しない |
 | `sakekasu-kakeibo-{env}-data` | DynamoDB テーブル、レシート用 S3 バケット |
 | `sakekasu-kakeibo-{env}-api` | HTTP API、api Lambda、ocr-receipt Lambda、monthly-report Lambda、EventBridge ルール |
 | `sakekasu-kakeibo-{env}-site` | 静的サイト用 S3、CloudFront、ACM 証明書（us-east-1）、レスポンスヘッダポリシー |
