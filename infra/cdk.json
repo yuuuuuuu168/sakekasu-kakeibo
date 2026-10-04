@@ -10,6 +10,7 @@
     "domainName": "kakeibo.sakekasu-builder.com",
     "hostedZoneId": "Z0667100181MY4RPHVIRO",
     "zoneName": "kakeibo.sakekasu-builder.com",
+    "certificateArn": "arn:aws:acm:us-east-1:<アプリのアカウント ID>:certificate/cb0b73a2-b28c-487d-86c2-d737427ac6fe",
     "siteOrigin": "https://d6f8ub6380j2a.cloudfront.net",
     "sharedAuth": {
       "domain": "auth.sakekasu-builder.com",
