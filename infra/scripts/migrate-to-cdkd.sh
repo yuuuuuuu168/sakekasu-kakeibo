@@ -17,7 +17,7 @@
 #      1 つでも取り込めないものがあれば、どのスタックにも手を付けずに engine=cfn で抜ける
 #   2. 使う側から順に `cdkd import --migrate-from-cloudformation` で移す。
 #      CloudFormation は、他のスタックが Fn::ImportValue で読んでいる export を持つ
-#      スタックを消せない。site → api → cert → auth → data → dns の順なら、
+#      スタックを消せない。site → api → cert → data → dns の順なら、
 #      消す時点でそのスタックを読む CloudFormation スタックが残っていない
 #   3. 移した後に不変条件を確かめる。崩れていれば落とす（cdk deploy にも戻さない。
 #      半分移った状態で CloudFormation 側を更新すると、どちらの管理か分からなくなる）
@@ -38,7 +38,6 @@ stacks=(
   "${prefix}-site ap-northeast-1"
   "${prefix}-api ap-northeast-1"
   "${prefix}-cert us-east-1"
-  "${prefix}-auth ap-northeast-1"
   "${prefix}-data ap-northeast-1"
   "${prefix}-dns ap-northeast-1"
 )

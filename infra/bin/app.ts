@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import { ApiStack } from '../lib/api-stack';
-import { AuthStack } from '../lib/auth-stack';
 import { CdkdDeployStack } from '../lib/cdkd-deploy-stack';
 import { GithubOidcStack } from '../lib/github-oidc-stack';
 import { CertStack } from '../lib/cert-stack';
@@ -88,14 +87,6 @@ function buildApplicationStacks(): void {
    * 値は cdk.json の context `sharedAuth` に書いてあり、スタックの参照ではつながない。
    */
   const sharedAuth = parseSharedAuth(app.node.tryGetContext('sharedAuth'));
-
-  /*
-   * 旧ユーザープール（このアプリ専用）。共通ログインへ移った後も、切り戻しのために残す。
-   * API も画面ももう参照しない。データを新しい sub へ移し終えたら、別の PR で外す
-   * （プールは RETAIN なので、スタックを外してもプール自体は残る）。
-   * cdkd の状態を持っているので、スタック名や論理 ID は変えないこと。
-   */
-  new AuthStack(app, `${prefix}-auth`, { envName, env });
 
   const dataStack = new DataStack(app, `${prefix}-data`, {
     envName,

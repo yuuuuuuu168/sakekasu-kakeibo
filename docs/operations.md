@@ -177,11 +177,11 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ロールができたら main へマージするか、Actions の画面から deploy を手で起動する。
 アプリ本体のスタックは cdkd で入る（下の「cdkd で出している理由と仕組み」を参照）。
 
-スタックは 4 つ。`-auth` `-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
-`-auth` は旧ユーザープール（このアプリ専用）で、ログインを共通ログインへ移した後は
-切り戻しのためだけに残している（下の「共通ログインへの切り替え」）。
+スタックは 3 つ。`-data` `-api` `-site` がすべて ap-northeast-1 に立つ。
+ログインのユーザープールは共通基盤の持ち物なので、このリポジトリにはスタックが無い
+（以前あった旧ユーザープールの `-auth` は外した。下の「共通ログインへの切り替え（済み）」）。
 
-`cdk.json` に `domainName` を書き戻すと 5 つになり、証明書の `-cert` だけが CloudFront の
+`cdk.json` に `domainName` を書き戻すと 4 つになり、証明書の `-cert` だけが CloudFront の
 制約で us-east-1 に立つ。証明書の ARN はリージョンを跨ぐため、CDK が
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
@@ -261,7 +261,7 @@ JSON ではなく鍵の文字列そのままを入れること。`{"apiKey": "..
 ### 7. フロントを置く
 
 ふだんは deploy ワークフローが行う。手で置くときは次のとおり。ログインの値（共通ログイン）は
-API スタックの出力にあり、旧ユーザープールの `-auth` スタックの出力は使わない。
+API スタックの出力にある。
 
 ```sh
 cd infra
@@ -288,90 +288,147 @@ aws s3 cp dist/index.html "s3://$bucket/index.html" --cache-control "no-cache"
 
 CloudFront の無効化は `index.html` だけでよい。ほかの資産はファイル名にハッシュが付く。
 
-## 共通ログインへの切り替え
+## 共通ログインへの切り替え（済み）
 
-ログインをこのアプリ専用のユーザープール（旧プール、`-auth` スタック）から、4 アプリ共通の
-ユーザープールへ移した。API の JWT の検証と画面のログインは共通ログインに向いていて、
-旧プールはどこからも参照していない。
+ログインをこのアプリ専用のユーザープール（旧プール `ap-northeast-1_O1PQB99IK`、`-auth` スタック）から、
+4 アプリ共通のユーザープール（`ap-northeast-1_yw1VDKtxW`）へ移した。2026-10 に済んでいる。
 
-データは Cognito の `sub` で分けている（DynamoDB の `pk` が `USER#<sub>`、レシート画像が
-`receipts/<sub>/...`）。`sub` はユーザープールごとに違うので、共通ログインで入ると最初は
-家計簿が空に見える。旧 sub の下のデータを新 sub の下へ写すスクリプトを用意してある
-（`infra/scripts/copy-user-data/`）。
+- API の JWT の検証と画面のログインは共通ログインに向いている
+- データは Cognito の `sub` で分けていて（DynamoDB の `pk` が `USER#<sub>`、レシート画像が
+  `receipts/<sub>/...`）、`sub` はプールごとに違う。旧 sub の下の項目は新 sub の下へ写した
+  （レシート画像は 0 件だった）
+- 旧プールを作っていた `-auth` スタックは、`bin/app.ts` から外した。残りの後片付け
+  （cdkd の状態、旧プールそのもの、旧 sub の項目）は下の「後片付け」で手で行う
 
-### 手順
+写すのに使ったスクリプト（`infra/scripts/copy-user-data/`）は役目を終えたので消した。
+もう一度プールを替えることがあれば、コミット `ad0ba54` から取り出せる（既定は dry-run、
+`--apply` で条件付き書き込み、旧データは消さない）。
 
-スクリプトは Mac から、書き込み権限のあるプロファイルで流す（Actions や Claude のセッションからは
-流さない）。読み取り専用の `verify` プロファイルでは DynamoDB の項目も S3 の本文も読めないので通らない。
+共通プールのユーザー名と sub は次で調べられる。
 
-1. PR を main へマージする。deploy ワークフローが API と画面を共通ログインに向けて出す
-2. `https://kakeibo.sakekasu-builder.com/` を開き、「ログイン画面へ」から共通ログインで入る。
-   **入った後は何も操作しない**（カテゴリの保存や取り込みをすると、新 sub の下に項目ができ、
-   旧データの同じ項目が写らなくなる。スクリプトは上書きしないため）。画面が空なのはこの時点では正しい
-3. 旧 sub を旧プールで調べる。旧プールの ID は `-auth` スタックの出力 `UserPoolId`
-   （`ap-northeast-1_O1PQB99IK`）
+```sh
+aws cognito-idp list-users --user-pool-id ap-northeast-1_yw1VDKtxW --region ap-northeast-1 \
+  --filter 'email = "<メールアドレス>"' \
+  --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
+  --output table
+```
+
+切り戻し（旧プールへ戻す）は、旧プールを消した時点でできなくなる。
+
+### 後片付け
+
+`-auth` スタックを外す PR を main へマージし、**deploy ワークフローが成功したのを確かめてから**、
+Mac で次を順に打つ。マージ前やデプロイが落ちた状態で打たないこと（コードにスタックが残っている間に
+状態だけ消すと、次の `cdkd deploy --all` が旧プールを新しく作り直す）。
+
+スタックをアプリから外しただけでは、cdkd は何も消さない。`cdkd deploy --all` は合成した
+スタックだけを扱い、アプリに無いスタックの状態（S3 の `cdkd/sakekasu-kakeibo-dev-auth/ap-northeast-1/state.json`）
+には触らない。そのため状態の削除とプールの削除は人が打つ。
+
+旧プールには削除保護を掛けていない（CDK の既定のまま）し、ドメインも付けていないが、
+消す前に念のため確かめる手順を入れてある。どれも書き込みの権限が要るので、読み取り専用の
+`verify` プロファイルでは通らない。Claude のセッションからも打たない。
+
+```sh
+export AWS_PROFILE=sakekasu-builder   # 書き込みの権限があるプロファイル
+export AWS_REGION=ap-northeast-1
+old_pool=ap-northeast-1_O1PQB99IK
+table=sakekasu-kakeibo-dev
+```
+
+1. 旧 sub を旧プールから調べる。プールを消すと引けなくなるので、最初に行う。
+   ユーザーは 1 人だけのはずなので、表に 1 行だけ出ることを確かめてから変数に入れる
 
    ```sh
-   export AWS_PROFILE=<管理者権限のプロファイル>   # 例: sakekasu-builder
-   aws cognito-idp list-users --user-pool-id ap-northeast-1_O1PQB99IK --region ap-northeast-1 \
+   aws cognito-idp list-users --user-pool-id "$old_pool" \
      --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
      --output table
+   old_sub=$(aws cognito-idp list-users --user-pool-id "$old_pool" \
+     --query 'Users[0].Attributes[?Name==`sub`]|[0].Value' --output text)
+   echo "$old_sub"
    ```
 
-4. 新 sub を共通プールで調べる
+2. 旧 sub の下の項目を一覧で確かめる。写した明細などが並ぶ。月次レポートの Lambda は
+   テーブルにいる `pk` を全部回すので、1 日を跨ぐと `REPORT#<月>` が増えていることがある。
+   新 sub（上の共通プールの `list-users` で出る sub）と取り違えていないことも確かめる
 
    ```sh
-   aws cognito-idp list-users --user-pool-id ap-northeast-1_yw1VDKtxW --region ap-northeast-1 \
-     --filter 'email = "<メールアドレス>"' \
-     --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
-     --output table
+   aws dynamodb query --table-name "$table" \
+     --key-condition-expression 'pk = :pk' \
+     --expression-attribute-values "{\":pk\":{\"S\":\"USER#$old_sub\"}}" \
+     --projection-expression 'pk, sk' --output table
    ```
 
-5. dry-run で件数と例を見る（何も書かない）
+3. 一覧に出た項目を全部消す。2 と同じ問い合わせの結果を 1 件ずつ消す
+
+   ```sh
+   aws dynamodb query --table-name "$table" \
+     --key-condition-expression 'pk = :pk' \
+     --expression-attribute-values "{\":pk\":{\"S\":\"USER#$old_sub\"}}" \
+     --projection-expression 'pk, sk' --output json \
+     | jq -c '.Items[]' \
+     | while read -r key; do
+         echo "消す: $key"
+         aws dynamodb delete-item --table-name "$table" --key "$key"
+       done
+   ```
+
+   2 をもう一度打って、空になったことを確かめる。レシート画像は写した時点で 0 件だったが、
+   `aws s3 ls "s3://sakekasu-kakeibo-dev-receipts-$(aws sts get-caller-identity --query Account --output text)/receipts/$old_sub/"`
+   で何も出ないことも見ておく（出たら `aws s3 rm --recursive` で同じ場所を消す）
+
+4. cdkd の状態から `-auth` スタックを消す。アプリから外したスタックなので、`cdkd destroy`
+   （合成したアプリを読む）ではなく、状態だけで動く `cdkd state destroy` を使う。
+   確認を訊かれるので、対象が `sakekasu-kakeibo-dev-auth` だけであることを見て答える
 
    ```sh
    cd infra
-   npm ci   # 済んでいれば不要
-   account=$(aws sts get-caller-identity --query Account --output text)
-   npx tsx scripts/copy-user-data/index.ts \
-     --table sakekasu-kakeibo-dev \
-     --bucket sakekasu-kakeibo-dev-receipts-$account \
-     --from <旧 sub> --to <新 sub>
+   npx cdkd state resources sakekasu-kakeibo-dev-auth --stack-region ap-northeast-1
+   npx cdkd state destroy sakekasu-kakeibo-dev-auth --stack-region ap-northeast-1
+   npx cdkd state list   # sakekasu-kakeibo-dev-auth が消えていること
+   cd ..
    ```
 
-   「写す」の件数が旧データの件数（明細・レシート・設定・上限・取り込みの対応・月次レポート）に
-   見合っていること、「新しい側に既にある」が 0 件であることを確かめる。「写す」が 0 件なら
-   `--from` の sub を取り違えている。旧 sub を含む値が規則の外に残っていれば警告が出る
+   このとき cdkd（0.291.16）は、状態に記録された `DeletionPolicy` に従う。
 
-6. 同じコマンドに `--apply` を付けて流す。画面を読み直すと家計簿が戻っている
+   - UserPoolClient（`DeletionPolicy` なし）は**消す**
+   - UserPool（`RemovalPolicy.RETAIN` なので `DeletionPolicy: Retain`）は**消さずに残し**、
+     「retained — DeletionPolicy: Retain」と出す
+   - 全部が消えるか残されるかで終われば、スタックの状態ファイルを消す。1 つでも失敗すると状態は残る
+     ので、原因を直して同じコマンドを打ち直す
 
-スクリプトの性質。
+   `--remove-protection` は付けなくてよい。Retain のプールは削除の対象にならないので効かない。
+   状態だけを消してクライアントも残したいときは `cdkd state orphan` だが、どのみち次の手順で
+   プールごと消すので、ここでは `state destroy` にしている
 
-- 既定は dry-run。`--apply` のときだけ書き込む
-- 書き込みは条件付き。新しいキーに既にある項目（`attribute_not_exists(pk)`）・画像（先に
-  `HeadObject` で確かめる）は上書きしない。途中で落ちても、何度流しても安全
-- 旧データは消さない
-- 写すのは `USER#<旧 sub>` の全項目（`TXN#` `CONFIG#` `BUDGET#` `MAPPING#` `RECEIPT#` `REPORT#`）と、
-  `receipts/<旧 sub>/` の下の画像。レシートの項目の `imageKey` も新しいキーに書き換える。
-  テーブルに GSI は無く、sk に sub は入っていない
-- 画像のコピーは S3 では新しいオブジェクトになるので、90 日で消すライフサイクルの起算日が
-  コピーした日に戻る（画像は OCR の後は使っていないので実害は無い）
-- レシート画像を扱わないときは `--bucket` の代わりに `--skip-s3`
+5. 旧プールそのものを消す。削除保護とドメインを先に確かめる
 
-### 切り戻し
+   ```sh
+   aws cognito-idp describe-user-pool --user-pool-id "$old_pool" \
+     --query 'UserPool.{Name:Name,DeletionProtection:DeletionProtection,Domain:Domain,CustomDomain:CustomDomain,EstimatedNumberOfUsers:EstimatedNumberOfUsers}' \
+     --output table
+   ```
 
-旧プールと旧データは残してある。この PR を revert してマージすれば、API と画面は旧プールに戻り、
-旧 sub のデータがそのまま見える。ただし切り替えの後に共通ログインで入れた変更は新 sub の下にあり、
-旧 sub には戻らない。
+   `Name` が `sakekasu-kakeibo-dev` であることを確かめる（共通プールの `ap-northeast-1_yw1VDKtxW` と
+   取り違えない）。`Domain` か `CustomDomain` が出たら、先にドメインを外す
 
-### 後片付け（別の PR）
+   ```sh
+   aws cognito-idp delete-user-pool-domain --user-pool-id "$old_pool" --domain <出たドメイン>
+   ```
 
-データを移し終えて落ち着いたら、別の PR で次を行う。
+   `DeletionProtection` が `ACTIVE` なら外す。`update-user-pool` は渡さなかった設定を既定に戻すが、
+   消すプールなので構わない
 
-- `-auth` スタック（旧プール）を `bin/app.ts` から外す。プールは RETAIN なので、外しても
-  プールは AWS に残る。不要ならコンソールか CLI で消す
-- 旧 sub の下のデータ（`USER#<旧 sub>`、`receipts/<旧 sub>/`）を消す。それまでは月次レポートの
-  Lambda が旧 sub の分も毎月作るが、読まれないだけで害は無い
+   ```sh
+   aws cognito-idp update-user-pool --user-pool-id "$old_pool" --deletion-protection INACTIVE
+   ```
+
+   そのうえで消す。プールに残っているアプリクライアントとユーザーも一緒に消える
+
+   ```sh
+   aws cognito-idp delete-user-pool --user-pool-id "$old_pool"
+   aws cognito-idp describe-user-pool --user-pool-id "$old_pool"   # ResourceNotFoundException になること
+   ```
 
 ## GitHub Actions からデプロイする
 
@@ -383,7 +440,7 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 
 ### cdkd で出している理由と仕組み
 
-アプリ本体のスタック（`-dns` `-auth` `-data` `-api` `-cert` `-site`）は
+アプリ本体のスタック（`-dns` `-data` `-api` `-cert` `-site`）は
 [cdkd](https://github.com/go-to-k/cdkd) で出している。CDK のコードはそのままで、
 合成したテンプレートを CloudFormation に渡す代わりに、cdkd が依存関係を読んで AWS の API を
 直接並列に叩く。CloudFormation の変更セットの作成と、変更の無いスタックの確認待ちが無くなる。
@@ -423,7 +480,7 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 - 移すときは `cdkd import --migrate-from-cloudformation` を使う。全リソースに
   `DeletionPolicy: Retain` を付けてから CloudFormation のスタックを消すので、AWS 上の
   リソースは消えない。消えるのはスタックの記録だけ
-- 使う側から順に移す（site → api → cert → auth → data → dns）。CloudFormation は、
+- 使う側から順に移す（site → api → cert → data → dns）。CloudFormation は、
   他のスタックが `Fn::ImportValue` で読んでいる export を持つスタックを消せないため
 - 「CloudFormation のスタックが残っていて、cdkd の状態が無い」スタックは cdkd に渡さない。
   cdkd はそれを新規作成とみなし、テーブルやバケットは名前の衝突で落ち、Cognito の
@@ -767,7 +824,7 @@ aws cognito-idp admin-set-user-mfa-preference \
   --region ap-northeast-1
 ```
 
-ユーザー名は「共通ログインへの切り替え」の手順 4 の `list-users` で分かる。プール側は必須のままなので、
+ユーザー名は「共通ログインへの切り替え（済み）」にある `list-users` で分かる。プール側は必須のままなので、
 登録を外しても MFA なしでは入れない。パスワードは変わらない。
 
 AWS に入る手段まで失うと手が無くなるので、認証アプリのバックアップ（1Password などの
@@ -920,7 +977,7 @@ Bedrock の OCR がその次で、同時実行を 3 に絞ってあるので暴�
 
 ## 消すとき
 
-DynamoDB のテーブル、レシート用バケット、配信用バケット、旧ユーザープール（`-auth`）は
+DynamoDB のテーブル、レシート用バケット、配信用バケットは
 `RemovalPolicy.RETAIN` にしてある。`cdkd destroy` しても家計簿のデータは残る。
 本当に消すなら、スタックを消した後にコンソールか CLI で個別に消す。
 ログインに使っている共通のユーザープールは共通基盤の持ち物なので、ここからは消さない。
