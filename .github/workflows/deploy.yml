@@ -163,8 +163,7 @@ jobs:
           # 一度変数に受ける。echo の引数の中で失敗しても set -e は効かず、空のまま進んでしまう
           api_url="$(read_output "$prefix-api" ApiUrl)"
           # ログインは共通のユーザープール（cdk.json の sharedAuth）。API スタックが
-          # JWT の検証に使っているのと同じ値を出しているので、そこから読む。
-          # 旧ユーザープールの -auth スタックの出力はもう使わない
+          # JWT の検証に使っているのと同じ値を出しているので、そこから読む
           user_pool_id="$(read_output "$prefix-api" AuthUserPoolId)"
           user_pool_client_id="$(read_output "$prefix-api" AuthClientId)"
           auth_domain="$(read_output "$prefix-api" AuthDomain)"

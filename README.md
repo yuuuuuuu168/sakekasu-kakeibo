@@ -194,7 +194,7 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 
 Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。cdkd が使うロール（`sakekasu-kakeibo-cdkd-deploy`）と、CloudFormation から cdkd への移行は、deploy ワークフローが自分で済ませる。
 
-スタックは 5 つ。`-auth` `-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。
+スタックは 4 つ。`-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。ログインのユーザープールは共通基盤（sakekasu-integrated_environment）の持ち物で、このリポジトリでは作らない。
 
 ドメインはまだ付けていない。CloudFront の既定ドメインで配信している。`sakekasu-builder.com` の委任先ゾーンがデプロイ先のアカウントに無く、そのままでは証明書の DNS 検証が通らないため。経緯と、付けるときの手順（サブドメインの委任）は [docs/operations.md](docs/operations.md) にある。
 
