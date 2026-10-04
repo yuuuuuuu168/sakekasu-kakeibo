@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
+import { deployGuardrailStatements } from './deploy-guardrail';
 import { githubMainBranchPrincipal } from './github-principal';
 
 export interface CdkdDeployStackProps extends cdk.StackProps {
@@ -10,6 +11,9 @@ export interface CdkdDeployStackProps extends cdk.StackProps {
 
 /** cdkd でデプロイするときに GitHub Actions が引き受けるロールの名前 */
 export const CDKD_DEPLOY_ROLE_NAME = 'sakekasu-kakeibo-github-actions-cdkd';
+
+/** github-oidc スタックの deploy ロールの名前。cdkd 用ロールから書き換えさせない */
+export const GITHUB_DEPLOY_ROLE_NAME = 'sakekasu-kakeibo-github-actions-deploy';
 
 /**
  * アプリ本体を cdkd でデプロイするためのロール。
@@ -31,6 +35,9 @@ export const CDKD_DEPLOY_ROLE_NAME = 'sakekasu-kakeibo-github-actions-cdkd';
  * 管理させると、壊したときに直す手段が無くなるため。deploy ワークフローが毎回
  * deploy ロールで `cdk deploy -c cdkd-deploy=true` を打つので、手で打つ必要は無い。
  * github-oidc と違って、ここを壊しても deploy ロールは無傷で残り、次の push で直せる。
+ *
+ * 管理者権限の上から、他のアプリのリソースに触れないためのガードレール（Deny）を重ねる。
+ * 中身と、何を防げて何を防げないかは deploy-guardrail.ts にある。
  */
 export class CdkdDeployStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: CdkdDeployStackProps) {
@@ -42,6 +49,17 @@ export class CdkdDeployStack extends cdk.Stack {
       description: 'cdkd deploy from GitHub Actions (main branch only)',
       assumedBy: githubMainBranchPrincipal(this, props.repository),
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess')],
+    });
+
+    new iam.Policy(this, 'Guardrail', {
+      policyName: 'deploy-guardrail',
+      roles: [role],
+      statements: deployGuardrailStatements({
+        account: this.account,
+        app: 'kakeibo',
+        resourceNamePrefix: 'sakekasu-kakeibo-',
+        protectedRoleNames: [CDKD_DEPLOY_ROLE_NAME, GITHUB_DEPLOY_ROLE_NAME],
+      }),
     });
 
     new cdk.CfnOutput(this, 'CdkdDeployRoleArn', { value: role.roleArn });

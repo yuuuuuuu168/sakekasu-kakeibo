@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
+import { GITHUB_DEPLOY_ROLE_NAME } from './cdkd-deploy-stack';
 import { githubMainBranchPrincipal } from './github-principal';
 
 export interface GithubOidcStackProps extends cdk.StackProps {
@@ -32,7 +33,7 @@ export class GithubOidcStack extends cdk.Stack {
     super(scope, id, props);
 
     const deployRole = new iam.Role(this, 'DeployRole', {
-      roleName: 'sakekasu-kakeibo-github-actions-deploy',
+      roleName: GITHUB_DEPLOY_ROLE_NAME,
       // IAM の description は ASCII + Latin-1 のみ。日本語を入れるとデプロイが 400 で落ちる
       description: 'CDK deploy from GitHub Actions (main branch only)',
       assumedBy: githubMainBranchPrincipal(this, props.repository),
