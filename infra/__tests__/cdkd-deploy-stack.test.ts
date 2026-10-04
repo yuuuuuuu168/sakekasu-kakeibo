@@ -57,10 +57,57 @@ describe('CdkdDeployStack', () => {
     });
   });
 
-  it('権限は AdministratorAccess の管理ポリシーだけで、インラインのポリシーを持たない', () => {
+  it('許可は AdministratorAccess の管理ポリシーだけで、インラインのポリシーは Deny だけ', () => {
     const role = Object.values(template().findResources('AWS::IAM::Role'))[0];
     expect(JSON.stringify(role.Properties.ManagedPolicyArns)).toContain(':iam::aws:policy/AdministratorAccess');
     expect(role.Properties.ManagedPolicyArns).toHaveLength(1);
-    expect(Object.keys(template().findResources('AWS::IAM::Policy'))).toHaveLength(0);
+    const policies = Object.values(template().findResources('AWS::IAM::Policy'));
+    expect(policies).toHaveLength(1);
+    const statements = policies[0].Properties.PolicyDocument.Statement as { Effect: string }[];
+    expect(statements.every((s) => s.Effect === 'Deny')).toBe(true);
+  });
+
+  describe('ガードレール', () => {
+    function statement(sid: string) {
+      const policy = Object.values(template().findResources('AWS::IAM::Policy'))[0];
+      const found = (policy.Properties.PolicyDocument.Statement as { Sid: string }[]).find((s) => s.Sid === sid);
+      expect(found, sid).toBeDefined();
+      return found as Record<string, unknown>;
+    }
+
+    it('他のアプリの App タグが付いたリソースと、他のアプリの App タグの付与を拒否する', () => {
+      expect(statement('DenyOtherAppsResources').Condition).toEqual({
+        Null: { 'aws:ResourceTag/App': 'false' },
+        StringNotEquals: { 'aws:ResourceTag/App': 'kakeibo' },
+      });
+      expect(statement('DenyForeignAppTag').Condition).toEqual({
+        Null: { 'aws:RequestTag/App': 'false' },
+        StringNotEquals: { 'aws:RequestTag/App': 'kakeibo' },
+      });
+    });
+
+    it('IAM ロールはこのアプリの接頭辞の外では作り替えられない', () => {
+      expect(statement('DenyRolesOutsideApp').NotResource).toEqual([
+        `arn:aws:iam::${ACCOUNT}:role/sakekasu-kakeibo-*`,
+        `arn:aws:iam::${ACCOUNT}:policy/sakekasu-kakeibo-*`,
+      ]);
+    });
+
+    it('接頭辞の範囲に入る GitHub Actions のロールは別に守る', () => {
+      expect(statement('DenyTamperingWithGithubActionsRoles').Resource).toEqual([
+        `arn:aws:iam::${ACCOUNT}:role/sakekasu-kakeibo-github-actions-cdkd`,
+        `arn:aws:iam::${ACCOUNT}:role/sakekasu-kakeibo-github-actions-deploy`,
+      ]);
+    });
+
+    it('他のアプリの cdkd の状態は書き換えられず、自分の状態は書ける', () => {
+      const resources = statement('DenyWritingOtherAppsState').Resource as string[];
+      const state = `arn:aws:s3:::cdkd-state-${ACCOUNT}/cdkd/`;
+      expect(resources).toContain(`${state}sakekasu-learning-*`);
+      expect(resources).toContain(`${state}ReinventPlanner*`);
+      expect(resources).toContain(`${state}sakekasu-dev-*`);
+      expect(resources).toContain(`${state}sakekasu-integrated-*`);
+      expect(resources.some((r) => r.includes('kakeibo'))).toBe(false);
+    });
   });
 });
