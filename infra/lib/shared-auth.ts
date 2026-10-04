@@ -21,8 +21,8 @@ const CLIENT_ID = /^[a-z0-9]+$/;
 /**
  * context の値を確かめて SharedAuth に直す。
  *
- * 無いときも形が違うときも落とす。黙って旧ユーザープールに戻ったり、
- * 空の値で画面を作ってローカルモードに落ちたりするのを避けるため。
+ * 無いときも形が違うときも落とす。空の値で API の JWT 検証を作ったり、
+ * 画面をローカルモードに落としたりするのを避けるため。
  */
 export function parseSharedAuth(value: unknown): SharedAuth {
   if (typeof value !== 'object' || value === null) {

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { ApiStack, CLASSIFY_BURST_LIMIT, CLASSIFY_RATE_LIMIT } from '../lib/api-stack';
-import { AuthStack } from '../lib/auth-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
@@ -19,7 +18,6 @@ const sharedAuth: SharedAuth = {
 
 function stacks() {
   const app = new cdk.App();
-  const auth = new AuthStack(app, 'test-auth', { envName: 'test', env });
   const data = new DataStack(app, 'test-data', { envName: 'test', env, receiptRetentionDays: 90 });
   const api = new ApiStack(app, 'test-api', {
     envName: 'test',
@@ -37,56 +35,8 @@ function stacks() {
     cognitoRegion: 'ap-northeast-1',
     authDomain: sharedAuth.domain,
   });
-  return { auth, data, api, site };
+  return { data, api, site };
 }
-
-describe('AuthStack', () => {
-  it('セルフサインアップを閉じている', () => {
-    const template = Template.fromStack(stacks().auth);
-    template.hasResourceProperties('AWS::Cognito::UserPool', {
-      AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
-    });
-  });
-
-  /*
-   * 必須にしていないと、登録しないまま使い続けられてしまう。SMS を有効にしないのは、
-   * 電話番号を預かることになり SIM の乗っ取りでも抜かれるため。
-   */
-  it('MFA を必須にし、二要素は認証アプリだけにする', () => {
-    const template = Template.fromStack(stacks().auth);
-    template.hasResourceProperties('AWS::Cognito::UserPool', {
-      MfaConfiguration: 'ON',
-      EnabledMfas: ['SOFTWARE_TOKEN_MFA'],
-    });
-    const pools = template.findResources('AWS::Cognito::UserPool');
-    for (const pool of Object.values(pools)) {
-      expect(pool.Properties.EnabledMfas).not.toContain('SMS_MFA');
-    }
-  });
-
-  it('ブラウザ向けクライアントに SRP 以外の認証を持たせない', () => {
-    const template = Template.fromStack(stacks().auth);
-    template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
-      ExplicitAuthFlows: Match.arrayWith(['ALLOW_USER_SRP_AUTH']),
-      GenerateSecret: false,
-    });
-    const clients = template.findResources('AWS::Cognito::UserPoolClient');
-    for (const client of Object.values(clients)) {
-      expect(client.Properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
-      expect(client.Properties.ExplicitAuthFlows).not.toContain('ALLOW_ADMIN_USER_PASSWORD_AUTH');
-    }
-  });
-
-  /*
-   * API が参照していたころの export を出し続ける。参照を外した回に export まで消すと、
-   * 使う側と出す側の更新の順番しだいで失敗しうるため。スタックを外す PR で一緒に消す。
-   */
-  it('旧ユーザープールの export を残す（API はもう読まない）', () => {
-    const outputs = Template.fromStack(stacks().auth).findOutputs('*');
-    const exported = Object.values(outputs).filter((output) => output.Export);
-    expect(exported).toHaveLength(2);
-  });
-});
 
 describe('DataStack', () => {
   it('レシートのバケットを公開しない', () => {
@@ -144,12 +94,6 @@ describe('ApiStack', () => {
         Audience: ['testclientid0123456789'],
       },
     });
-  });
-
-  /* 旧プールのスタックを参照しない。参照が残ると、旧プールを外す PR で API まで巻き込む */
-  it('旧ユーザープールのスタックを参照しない', () => {
-    const template = JSON.stringify(Template.fromStack(stacks().api).toJSON());
-    expect(template).not.toContain('test-auth:');
   });
 
   it('画面のビルドに渡すログインの値を出力する', () => {
