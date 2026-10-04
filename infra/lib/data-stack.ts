@@ -1,7 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
+import { SharedAlarms } from './alarms';
 
 export interface DataStackProps extends cdk.StackProps {
   envName: string;
@@ -53,6 +55,34 @@ export class DataStack extends cdk.Stack {
         },
       ],
     });
+
+    /*
+     * テーブルの読み書きが弾かれていないか。オンデマンドなので容量の設定は無いが、
+     * 急な増加やパーティションの上限で弾かれることはある。ThrottledRequests は
+     * 操作（Operation）ごとの次元しか持たないので、テーブル単位で出る
+     * ReadThrottleEvents / WriteThrottleEvents を見る。通知先は共通基盤のトピック。
+     */
+    const alarms = new SharedAlarms(this);
+    const tableName = `sakekasu-kakeibo-${props.envName}`;
+    for (const [kind, label] of [
+      ['Read', '読み取り'],
+      ['Write', '書き込み'],
+    ] as const) {
+      alarms.add(`Table${kind}ThrottleAlarm`, {
+        alarmName: `${tableName}-dynamodb-${kind.toLowerCase()}-throttles`,
+        description:
+          `DynamoDB のテーブル ${tableName} の${label}がスロットリングされています。画面では保存や読み込みが失敗しています。` +
+          'まず API の CloudWatch Logs と、テーブルの消費キャパシティの推移（どの時間帯に急増したか）を見る。',
+        metric: new cloudwatch.Metric({
+          namespace: 'AWS/DynamoDB',
+          metricName: `${kind}ThrottleEvents`,
+          dimensionsMap: { TableName: this.table.tableName },
+          period: cdk.Duration.minutes(5),
+          statistic: 'Sum',
+        }),
+        threshold: 1,
+      });
+    }
 
     new cdk.CfnOutput(this, 'TableName', { value: this.table.tableName });
     new cdk.CfnOutput(this, 'ReceiptBucketName', { value: this.receiptBucket.bucketName });

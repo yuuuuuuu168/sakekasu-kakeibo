@@ -8,12 +8,15 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, type BundlingOptions } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
+import { SharedAlarms } from './alarms';
 import { lambdaLogGroup } from './log-group';
 import { userPoolRegion, type SharedAuth } from './shared-auth';
 
@@ -174,6 +177,7 @@ export class ApiStack extends cdk.Stack {
     typesafeApiKey.grantRead(classifyFunction);
 
     const reportFunctionName = `${prefix}-monthly-report`;
+    const reportLogGroup = lambdaLogGroup(this, 'MonthlyReportLogs', reportFunctionName);
     const reportFunction = new NodejsFunction(this, 'MonthlyReportFunction', {
       functionName: reportFunctionName,
       entry: path.join(repoRoot, 'infra/lambda/monthly-report/index.ts'),
@@ -184,15 +188,16 @@ export class ApiStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(2),
       depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
       bundling: BUNDLING,
-      logGroup: lambdaLogGroup(this, 'MonthlyReportLogs', reportFunctionName),
+      logGroup: reportLogGroup,
       environment: { TABLE_NAME: props.table.tableName },
     });
 
     props.table.grantReadWriteData(reportFunction);
 
     // 毎月 1 日 00:00 UTC = 09:00 JST に前月分を作る
+    const reportScheduleName = `${prefix}-monthly-report`;
     new events.Rule(this, 'MonthlyReportSchedule', {
-      ruleName: `${prefix}-monthly-report`,
+      ruleName: reportScheduleName,
       description: '前月の家計簿レポートを作る',
       schedule: events.Schedule.cron({ minute: '0', hour: '0', day: '1', month: '*', year: '*' }),
       targets: [new targets.LambdaFunction(reportFunction)],
@@ -285,6 +290,17 @@ export class ApiStack extends cdk.Stack {
       integration: new HttpLambdaIntegration('ApiIntegration', apiFunction),
     });
 
+    this.addAlarms(prefix, {
+      functions: [
+        { key: 'api', fn: apiFunction, what: 'API（明細・カテゴリ・上限の読み書き）' },
+        { key: 'ocr-receipt', fn: ocrFunction, what: 'レシートの OCR' },
+        { key: 'classify', fn: classifyFunction, what: 'カテゴリ判定（Jev）' },
+        { key: 'monthly-report', fn: reportFunction, what: '月次レポート' },
+      ],
+      reportLogGroup,
+      reportScheduleName,
+    });
+
     new cdk.CfnOutput(this, 'ApiUrl', { value: this.httpApi.apiEndpoint });
     new cdk.CfnOutput(this, 'MonthlyReportFunctionName', { value: reportFunction.functionName });
 
@@ -297,4 +313,105 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AuthClientId', { value: props.sharedAuth.clientId });
     new cdk.CfnOutput(this, 'AuthDomain', { value: props.sharedAuth.domain });
   }
+
+  /**
+   * 共通基盤の通知先（Slack）へ送るアラーム。一覧と考え方は docs/operations.md の「監視」にある。
+   *
+   * 3 つの関数（api / ocr-receipt / classify）は例外を握って 500 / 502 を返すので、
+   * 処理の失敗は Lambda の Errors には出ず、HTTP API の 5xx に出る。Errors に出るのは
+   * タイムアウト・メモリ不足・初期化の失敗など、関数そのものが落ちたときだけ。
+   * 月次レポートも利用者ごとの失敗を握って先へ進むので、ログから数える。
+   */
+  private addAlarms(
+    prefix: string,
+    props: {
+      functions: { key: string; fn: NodejsFunction; what: string }[];
+      reportLogGroup: logs.ILogGroup;
+      /** 月次レポートを呼ぶ EventBridge のルール名（説明文と次元に使う。トークンにしないため文字列で渡す） */
+      reportScheduleName: string;
+    },
+  ): void {
+    const alarms = new SharedAlarms(this);
+    const fiveMinutes = cdk.Duration.minutes(5);
+
+    for (const { key, fn, what } of props.functions) {
+      alarms.add(`${pascal(key)}ErrorsAlarm`, {
+        alarmName: `${prefix}-${key}-errors`,
+        description:
+          `${what} の Lambda が落ちています（タイムアウト・メモリ不足・初期化の失敗など）。` +
+          `まず CloudWatch Logs の /aws/lambda/${prefix}-${key} を見る。`,
+        metric: fn.metricErrors({ period: fiveMinutes, statistic: 'Sum' }),
+        threshold: 1,
+      });
+
+      alarms.add(`${pascal(key)}ThrottlesAlarm`, {
+        alarmName: `${prefix}-${key}-throttles`,
+        description:
+          `${what} の Lambda が同時実行の上限で弾かれています。` +
+          'まず関数の同時実行数（予約の上限、アカウントの上限）と、呼び出しが急に増えていないかを見る。',
+        metric: fn.metricThrottles({ period: fiveMinutes, statistic: 'Sum' }),
+        threshold: 1,
+      });
+    }
+
+    alarms.add('Api5xxAlarm', {
+      alarmName: `${prefix}-api-5xx`,
+      description:
+        'HTTP API が 5xx を返しています。画面では保存・OCR・カテゴリ判定のどれかが失敗しています。' +
+        'まず api / ocr-receipt / classify の CloudWatch Logs で ERROR を探す' +
+        '（OCR は読めない画像でも 502、カテゴリ判定は鍵が未設定でも 502 を返す）。',
+      metric: this.httpApi.metricServerError({ period: fiveMinutes, statistic: 'Sum' }),
+      threshold: 1,
+    });
+
+    /*
+     * 月次レポートの失敗は 2 通り拾う。
+     * - 利用者ごとの失敗: 関数は握って先へ進み、正常終了する。ログの行を数える
+     * - そもそも呼べなかった: EventBridge の FailedInvocations（権限が外れた、関数が無いなど）
+     * 関数そのものが落ちた場合は、上の monthly-report-errors が鳴る。
+     * 動かなかったこと（月 1 回の呼び出しが来なかったこと）は見ていない。月に 1 点しか出ない
+     * 指標を BREACHING で見ると、残りの期間ずっと鳴り続けるため。
+     */
+    const reportFailures = new logs.MetricFilter(this, 'MonthlyReportFailureFilter', {
+      logGroup: props.reportLogGroup,
+      // infra/lambda/monthly-report/index.ts の console.error の文言と合わせる
+      filterPattern: logs.FilterPattern.literal('"[monthly-report] failed"'),
+      metricNamespace: 'sakekasu-kakeibo',
+      metricName: `${prefix}-monthly-report-failures`,
+      metricValue: '1',
+    });
+
+    alarms.add('MonthlyReportFailuresAlarm', {
+      alarmName: `${prefix}-monthly-report-failures`,
+      description:
+        '月次レポートの生成に失敗した利用者がいます（関数は止まらずに先へ進んでいる）。' +
+        `まず CloudWatch Logs の /aws/lambda/${prefix}-monthly-report で「[monthly-report] failed」を探す。` +
+        '直したら docs/operations.md の「月次レポートを手で作り直す」で作り直す。',
+      metric: reportFailures.metric({ period: fiveMinutes, statistic: 'Sum' }),
+      threshold: 1,
+    });
+
+    alarms.add('MonthlyReportInvocationFailuresAlarm', {
+      alarmName: `${prefix}-monthly-report-invocation-failures`,
+      description:
+        'EventBridge が月次レポートの Lambda を呼べませんでした（関数の権限・存在を疑う）。' +
+        `まずルール ${props.reportScheduleName} のターゲットと、関数のリソースポリシーを見る。`,
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Events',
+        metricName: 'FailedInvocations',
+        dimensionsMap: { RuleName: props.reportScheduleName },
+        period: fiveMinutes,
+        statistic: 'Sum',
+      }),
+      threshold: 1,
+    });
+  }
+}
+
+/** `ocr-receipt` → `OcrReceipt`（論理 ID 用） */
+function pascal(key: string): string {
+  return key
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
 }
