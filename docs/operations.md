@@ -461,6 +461,11 @@ table=sakekasu-kakeibo-dev
   権限は AdministratorAccess。main の Actions は以前から CloudFormation 経由で
   `cdk-hnb659fds-cfn-exec-role`（bootstrap の既定で AdministratorAccess）を使えていたので、
   main から届く権限の上限は変わらない。引き受けられるのは deploy ロールと同じく main だけ
+- **ガードレール**：上の管理者権限に、Deny だけの inline ポリシー `deploy-guardrail` を重ねている。
+  同じアカウントにいる他のアプリ（App タグが kakeibo 以外のリソース、`sakekasu-kakeibo-` 以外の
+  IAM ロール、他のアプリの cdkd の状態）と、IAM ユーザー・Organizations などには触れない。
+  cdkd が誤った差分を出したときに、壊れるのを kakeibo の中に留めるためのもの。中身は
+  `infra/lib/deploy-guardrail.ts`。新しいリソースの作成で AccessDenied が出たら、まずここを疑う
 - **ロールのスタック**：これだけは CloudFormation で入れる。deploy ワークフローが毎回、
   deploy ロールで `cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true` を打つ。
   cdkd に自分の権限の出どころを管理させると、壊したときに直す手段が無くなるため。
