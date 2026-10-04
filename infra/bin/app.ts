@@ -11,6 +11,18 @@ import { parseSharedAuth, userPoolRegion } from '../lib/shared-auth';
 
 const app = new cdk.App();
 
+// 全リソースに App タグを付ける。アプリごとのコストを Cost Explorer で分けるため。
+// デプロイ用ロールに「他のアプリのタグが付いたリソースには触れない」ガードレールを足す
+// 予定で、その判定にもこのタグを使う。ガードレールはまだ無い（次の段で足す）ので、
+// それまではタグを付けただけでは何も守られない。4 アプリと共通基盤が同じアカウントに
+// 同居していて、名前の接頭辞では分けきれないためタグで見分ける。
+//
+// IAM ロールには付けない。CloudFormation から cdkd へ移したロールは物理名が CFN の命名のままで、
+// cdkd はロールを更新するたびに名前が変わったとみなして作り直す（2026-10-04 にタグを足しただけで
+// 作り直しが起き、Lambda が消えたロールを指して止まった）。ロールはガードレールでも
+// 名前の接頭辞で範囲を絞る
+cdk.Tags.of(app).add('App', 'kakeibo', { excludeResourceTypes: ['AWS::IAM::Role'] });
+
 const REGION = 'ap-northeast-1';
 const VALID_ENVS = ['dev', 'prod'] as const;
 
