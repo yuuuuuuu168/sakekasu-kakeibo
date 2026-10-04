@@ -815,6 +815,65 @@ unset pw
 
 `--permanent` を付けなければ仮パスワード扱いになり、マネージドログインがパスワードの変更を求める。
 
+## 監視
+
+アラームは CloudWatch に置き、ALARM と OK（復旧）の両方を共通基盤のトピック
+`sakekasu-integrated-alerts`（ap-northeast-1）へ送る。そこから Slack に流れる。
+トピックと Slack の通知は共通基盤（sakekasu-integrated_environment）の持ち物で、作りと約束は
+[共通基盤の docs/monitoring.md](https://github.com/yuuuuuuu168/sakekasu-integrated_environment/blob/main/docs/monitoring.md)
+の「各アプリからアラームを送る」にある。
+
+- トピックの ARN は `arn:aws:sns:ap-northeast-1:<アカウント ID>:sakekasu-integrated-alerts` と組み立てる。
+  共通基盤のスタックの出力は参照しない（参照でつなぐと、向こうのスタックを作り直せなくなる）
+- アラーム名は `sakekasu-kakeibo-` で始める。Slack の見出しのアプリ名はこの接頭辞から引かれる
+- アラームは監視対象と同じスタック（api / data）に置く。監視用のスタックを分けると、関数やテーブルを
+  スタック間の参照で渡すことになるため。作るのは `infra/lib/alarms.ts` の `SharedAlarms` で、
+  名前の接頭辞とリージョンが外れていると合成が止まる
+- 権限は足していない。トピックへの publish は共通基盤のトピックポリシーで許してあり、
+  cdkd 用ロール（AdministratorAccess）はアラームとメトリクスフィルタを作れる
+
+### アラーム一覧
+
+`<env>` は `dev` / `prod`。どれも 5 分間の合計が 1 以上で鳴り、1 期間で判定する。
+データが無い期間は `NOT_BREACHING`（起きたときだけ値が出る指標なので、使っていない夜中に鳴らさない）。
+
+| アラーム名 | スタック | 見ているもの |
+| --- | --- | --- |
+| `sakekasu-kakeibo-<env>-api-errors` | api | API の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-ocr-receipt-errors` | api | OCR の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-classify-errors` | api | カテゴリ判定の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-monthly-report-errors` | api | 月次レポートの Lambda の Errors |
+| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report}-throttles` | api | 上の 4 本の Throttles（4 個） |
+| `sakekasu-kakeibo-<env>-api-5xx` | api | HTTP API の `5xx`（次元 `ApiId`） |
+| `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
+| `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
+| `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
+| `sakekasu-kakeibo-<env>-dynamodb-write-throttles` | data | テーブルの `WriteThrottleEvents` |
+
+読むときの注意。
+
+- api / ocr-receipt / classify は例外を握って 500 / 502 を返す。処理の失敗は Lambda の Errors ではなく
+  `api-5xx` に出る。Errors が鳴るのは、タイムアウト・メモリ不足・初期化の失敗など関数そのものが落ちたとき
+- `api-5xx` は、OCR が読めない画像を受けたとき（502）と、カテゴリ判定の鍵が未設定のとき（502）にも鳴る
+- 月次レポートは利用者ごとの失敗を握って正常終了するので、`monthly-report-errors` では拾えない。
+  `monthly-report-failures` がその分を見る。ログの文言（`infra/lambda/monthly-report/index.ts`）を変えるときは、
+  `api-stack.ts` のフィルタも合わせる
+- 月 1 回の呼び出しが「来なかった」ことは見ていない。月に 1 点しか出ない指標を欠損で鳴らすと、
+  残りの期間ずっと鳴り続けるため
+- DynamoDB はオンデマンドなので容量の設定は無いが、急な増加では弾かれる。`ThrottledRequests` は
+  操作ごとの次元しか持たないので、テーブル単位の Read/WriteThrottleEvents を見ている
+
+### 届いているかを確かめる
+
+アラームの状態ではなく、アクションの履歴を見る（読み取り専用のプロファイルで足りる）。
+`Failed to execute action` が出ていれば、トピックポリシーで拒否されている。
+
+```sh
+aws cloudwatch describe-alarm-history --profile verify --region ap-northeast-1 \
+  --alarm-name sakekasu-kakeibo-dev-api-5xx --history-item-type Action \
+  --query 'AlarmHistoryItems[].[Timestamp,HistorySummary]'
+```
+
 ## 月次レポートを手で作り直す
 
 毎月 1 日の 09:00（JST）に EventBridge が Lambda を叩く。過去の月を作り直したいときは直接呼ぶ。
@@ -837,8 +896,9 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |
+| CloudWatch アラーム | 月 1.3 ドル。13 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
 
-既存のゾーンを使うなら、Secrets Manager の 0.4 ドルが一番重い項目になる。
+既存のゾーンを使うなら、アラームの 1.3 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
 Bedrock の OCR がその次で、同時実行を 3 に絞ってあるので暴走しても天井がある。
 カテゴリ判定は桁が 2 つ小さく、金額として数える意味がない。
 
