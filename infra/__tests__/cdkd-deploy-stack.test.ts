@@ -63,6 +63,8 @@ describe('CdkdDeployStack', () => {
     expect(role.Properties.ManagedPolicyArns).toHaveLength(1);
     const policies = Object.values(template().findResources('AWS::IAM::Policy'));
     expect(policies).toHaveLength(1);
+    // 境界の管理ポリシーはロールに付けない（cdkd 用ロール自身が境界に縛られると iam:* が拒否される）
+    expect(role.Properties.PermissionsBoundary).toBeUndefined();
     const statements = policies[0].Properties.PolicyDocument.Statement as { Effect: string }[];
     expect(statements.every((s) => s.Effect === 'Deny')).toBe(true);
   });
@@ -108,6 +110,60 @@ describe('CdkdDeployStack', () => {
       expect(resources).toContain(`${state}sakekasu-dev*`);
       expect(resources).toContain(`${state}sakekasu-integrated*`);
       expect(resources.some((r) => r.includes('kakeibo'))).toBe(false);
+    });
+  });
+
+  describe('Permissions Boundary', () => {
+    const boundaryArn = `:iam::${ACCOUNT}:policy/sakekasu-kakeibo-role-boundary`;
+
+    function guardStatement(sid: string) {
+      const policy = Object.values(template().findResources('AWS::IAM::Policy'))[0];
+      const found = (policy.Properties.PolicyDocument.Statement as { Sid: string }[]).find((s) => s.Sid === sid);
+      expect(found, sid).toBeDefined();
+      return found as Record<string, unknown>;
+    }
+
+    it('境界の管理ポリシーを名前で作り、IAM と STS を天井から外す', () => {
+      const t = template();
+      t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'sakekasu-kakeibo-role-boundary' });
+      const policy = Object.values(t.findResources('AWS::IAM::ManagedPolicy'))[0];
+      const statements = policy.Properties.PolicyDocument.Statement as { Sid: string; Effect: string; Action: string[] }[];
+      const deny = statements.find((s) => s.Sid === 'DenyIdentityAndAccountControl');
+      expect(deny?.Action).toEqual(expect.arrayContaining(['iam:*', 'sts:*', 'organizations:*']));
+      expect(statements.find((s) => s.Sid === 'DenyOtherAppsResources')).toMatchObject({
+        Effect: 'Deny',
+        Condition: { StringNotEquals: { 'aws:ResourceTag/App': 'kakeibo' } },
+      });
+    });
+
+    it('このアプリのロールは境界なしでは作れず、境界も信頼ポリシーも外せない', () => {
+      const withoutBoundary = guardStatement('DenyRoleWritesWithoutBoundary');
+      expect(withoutBoundary.Resource).toBe(`arn:aws:iam::${ACCOUNT}:role/sakekasu-kakeibo-*`);
+      expect(JSON.stringify(withoutBoundary.Condition)).toContain(boundaryArn);
+      expect(JSON.stringify(withoutBoundary.Condition)).toContain('ArnNotEquals');
+      expect(guardStatement('DenyRemovingBoundaryAndTrust').Action).toEqual([
+        'iam:DeleteRolePermissionsBoundary',
+        'iam:UpdateAssumeRolePolicy',
+      ]);
+      expect(JSON.stringify(guardStatement('DenyRewritingBoundary').Resource)).toContain(boundaryArn);
+    });
+
+    /*
+     * iam:PermissionsBoundary を渡さないアクションに条件付きの Deny を付けると、
+     * 境界が正しく付いていても常に拒否される
+     */
+    it('条件付きの Deny には iam:PermissionsBoundary を渡すアクションだけを並べる', () => {
+      const supported = [
+        'iam:CreateRole',
+        'iam:PutRolePolicy',
+        'iam:DeleteRolePolicy',
+        'iam:AttachRolePolicy',
+        'iam:DetachRolePolicy',
+        'iam:PutRolePermissionsBoundary',
+        'iam:DeleteRolePermissionsBoundary',
+      ];
+      const actions = [guardStatement('DenyRoleWritesWithoutBoundary').Action].flat() as string[];
+      expect(actions.every((a) => supported.includes(a))).toBe(true);
     });
   });
 });

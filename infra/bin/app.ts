@@ -7,6 +7,7 @@ import { CertStack } from '../lib/cert-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
+import { applyRoleBoundary } from '../lib/role-boundary';
 import { parseSharedAuth, userPoolRegion } from '../lib/shared-auth';
 import { parseAnthropicFederation } from '../lib/anthropic-federation';
 
@@ -65,6 +66,11 @@ if (app.node.tryGetContext('github-oidc')) {
   new CdkdDeployStack(app, 'sakekasu-kakeibo-cdkd-deploy', { repository: REPOSITORY, env });
 } else {
   buildApplicationStacks();
+  // アプリのロールはすべて Permissions Boundary の内側に置く（理由は lib/role-boundary.ts）。
+  // 境界は cdkd-deploy のスタックが作り、cdkd 用ロールは境界の無いロールを作れない
+  for (const stack of app.node.children) {
+    if (stack instanceof cdk.Stack) applyRoleBoundary(stack);
+  }
 }
 
 /** アプリ本体のスタック群 */

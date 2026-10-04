@@ -544,6 +544,13 @@ table=sakekasu-kakeibo-dev
   IAM ロール、他のアプリの cdkd の状態）と、IAM ユーザー・Organizations などには触れない。
   cdkd が誤った差分を出したときに、壊れるのを kakeibo の中に留めるためのもの。中身は
   `infra/lib/deploy-guardrail.ts`。新しいリソースの作成で AccessDenied が出たら、まずここを疑う
+- **Permissions Boundary**：アプリのロール（Lambda の実行ロール）にはすべて、管理ポリシー
+  `sakekasu-kakeibo-role-boundary` を境界として付けている。cdkd 用ロールは境界の無いロールを
+  作れず、境界の取り外しや信頼ポリシーの書き換え、境界そのものの書き換えもできない。
+  境界は IAM・STS・Organizations と、他のアプリのリソース・cdkd の状態バケットを天井から外す。
+  Lambda から他のアプリのリソースを使う処理を足すと、デプロイは通っても実行時に AccessDenied になる。
+  CDK 側でロールの `assumedBy` を変えたときも、cdkd の UpdateAssumeRolePolicy が拒否されて止まる。
+  そのときは人が直す。中身は `infra/lib/role-boundary.ts`
 - **ロールのスタック**：これだけは CloudFormation で入れる。deploy ワークフローが毎回、
   deploy ロールで `cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true` を打つ。
   cdkd に自分の権限の出どころを管理させると、壊したときに直す手段が無くなるため。
