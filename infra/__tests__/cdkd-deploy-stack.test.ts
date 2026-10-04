@@ -103,10 +103,10 @@ describe('CdkdDeployStack', () => {
     it('他のアプリの cdkd の状態は書き換えられず、自分の状態は書ける', () => {
       const resources = statement('DenyWritingOtherAppsState').Resource as string[];
       const state = `arn:aws:s3:::cdkd-state-${ACCOUNT}/cdkd/`;
-      expect(resources).toContain(`${state}sakekasu-learning-*`);
+      expect(resources).toContain(`${state}sakekasu-learning*`);
       expect(resources).toContain(`${state}ReinventPlanner*`);
-      expect(resources).toContain(`${state}sakekasu-dev-*`);
-      expect(resources).toContain(`${state}sakekasu-integrated-*`);
+      expect(resources).toContain(`${state}sakekasu-dev*`);
+      expect(resources).toContain(`${state}sakekasu-integrated*`);
       expect(resources.some((r) => r.includes('kakeibo'))).toBe(false);
     });
   });

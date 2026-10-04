@@ -18,7 +18,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
  * - GitHub Actions のロール自身は書き換えない（接頭辞の範囲に入ってしまうため、別に止める）
  * - IAM ユーザー・アクセスキー・MFA・ID プロバイダー、Organizations、アカウント設定、
  *   CloudTrail（証跡と CloudTrail Lake）の停止や削除には触れない。どのアプリのデプロイにも要らない
- * - cdkd の状態バケットそのものと、他のアプリの状態を消したり書き換えたりしない
+ * - cdkd の状態バケットそのものと、他のアプリの状態を消したり書き換えたりしない。共用の資産置き場は消さない
  *
  * App タグを条件にした Deny は、aws:ResourceTag を評価しない API（S3 のオブジェクト操作など）
  * には効かない。状態バケットのオブジェクトは名前で別に止めている。
@@ -36,15 +36,36 @@ export interface DeployGuardrailProps {
 
 /**
  * 状態バケット（`cdkd/<スタック名>/<リージョン>/state.json`）にある他のアプリのスタック名。
- * アプリやスタックを足したらここにも足す。このアプリの分は呼び出し側の接頭辞で除く
+ * アプリやスタックを足したらここにも足す。このアプリの分は呼び出し側の接頭辞で除く。
+ * 末尾に `-` を付けないのは、接尾辞の無いスタック名（`ReinventPlanner` のような）も拾うため
  */
 export const CDKD_STACK_NAME_PATTERNS: Record<string, string[]> = {
-  builder: ['sakekasu-dev-*', 'sakekasu-staging-*', 'sakekasu-prod-*'],
-  integrated: ['sakekasu-integrated-*'],
-  kakeibo: ['sakekasu-kakeibo-*'],
-  learning: ['sakekasu-learning-*'],
+  builder: ['sakekasu-dev*', 'sakekasu-staging*', 'sakekasu-prod*'],
+  integrated: ['sakekasu-integrated*'],
+  kakeibo: ['sakekasu-kakeibo*'],
+  learning: ['sakekasu-learning*'],
   reinvent: ['ReinventPlanner*'],
 };
+
+/**
+ * 全アプリで共用するバケット（cdkd の状態と資産置き場）の削除と、削除・持ち出し・読めなくするのと
+ * 同じ結果になる設定変更。どのアプリの cdkd もこれらを使わない
+ */
+const SHARED_BUCKET_WRITE_ACTIONS = [
+  's3:DeleteBucket',
+  's3:PutBucketPolicy',
+  's3:DeleteBucketPolicy',
+  's3:PutBucketAcl',
+  's3:PutBucketVersioning',
+  's3:PutLifecycleConfiguration',
+  's3:PutBucketOwnershipControls',
+  's3:PutBucketPublicAccessBlock',
+  's3:PutEncryptionConfiguration',
+  's3:PutBucketLogging',
+  's3:PutReplicationConfiguration',
+  's3:PutBucketNotification',
+  's3:PutBucketObjectLockConfiguration',
+];
 
 /** IAM ロールを作り替える操作。ロールにはタグが無いので、名前で範囲を絞る */
 const ROLE_WRITE_ACTIONS = [
@@ -131,6 +152,7 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
         'organizations:*',
         'account:*',
         'sso:*',
+        'sso-directory:*',
         'identitystore:*',
         'cloudtrail:DeleteTrail',
         'cloudtrail:StopLogging',
@@ -147,21 +169,7 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
     new iam.PolicyStatement({
       sid: 'DenyChangingCdkdStateBucket',
       effect: iam.Effect.DENY,
-      actions: [
-        's3:DeleteBucket',
-        's3:PutBucketPolicy',
-        's3:DeleteBucketPolicy',
-        's3:PutBucketAcl',
-        's3:PutBucketVersioning',
-        's3:PutLifecycleConfiguration',
-        's3:PutBucketOwnershipControls',
-        's3:PutBucketPublicAccessBlock',
-        's3:PutEncryptionConfiguration',
-        's3:PutBucketLogging',
-        's3:PutReplicationConfiguration',
-        's3:PutBucketNotification',
-        's3:PutBucketObjectLockConfiguration',
-      ],
+      actions: SHARED_BUCKET_WRITE_ACTIONS,
       resources: [stateBucket],
     }),
     new iam.PolicyStatement({
@@ -169,6 +177,20 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
       effect: iam.Effect.DENY,
       actions: ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion'],
       resources: otherStacks.map((pattern) => `${stateBucket}/cdkd/${pattern}`),
+    }),
+    // cdkd の資産置き場（Lambda のコードなど）も全アプリで共用。cdkd-assets-<account>-<region> のほか、
+    // sakekasu-reinvent は cdkd の設定（app/infra/cdk.json の useCdkBootstrapAssets）で CDK bootstrap の
+    // cdk-hnb659fds-assets-<account>-<region> に置く。どちらもキーは中身のハッシュだけで
+    // アプリごとの接頭辞が無いので、名前でアプリを分けられない。cdkd は資産を消さない
+    // （有無を確かめて無ければ置くだけ）ので、削除と、削除と同じ結果になるバケットの設定変更
+    // （ライフサイクルでの期限切れ、暗号化キーの差し替え、レプリケーションなど）を、状態バケットと同じだけ止める。
+    // 上書きは止められない。新しいリージョンの cdkd bootstrap はここに当たるので、人が打つ
+    new iam.PolicyStatement({
+      sid: 'DenyDestroyingSharedAssets',
+      effect: iam.Effect.DENY,
+      actions: ['s3:DeleteObject', 's3:DeleteObjectVersion', ...SHARED_BUCKET_WRITE_ACTIONS],
+      // ARN の * は / もまたぐので、バケットとその中のオブジェクトの両方に当たる
+      resources: [`arn:aws:s3:::cdkd-assets-${account}-*`, `arn:aws:s3:::cdk-hnb659fds-assets-${account}-*`],
     }),
   ];
 }
