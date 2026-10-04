@@ -16,8 +16,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
  * - 他のアプリの App タグを付けない（このアプリの値以外のタグを付けて作る・付け替える）
  * - IAM ロールは App タグを付けていない（理由は bin/app.ts）ので、名前の接頭辞で絞る
  * - GitHub Actions のロール自身は書き換えない（接頭辞の範囲に入ってしまうため、別に止める）
- * - IAM ユーザー・アクセスキー・ID プロバイダー、Organizations、アカウント設定、
- *   CloudTrail の停止には触れない。どのアプリのデプロイにも要らない
+ * - IAM ユーザー・アクセスキー・MFA・ID プロバイダー、Organizations、アカウント設定、
+ *   CloudTrail（証跡と CloudTrail Lake）の停止や削除には触れない。どのアプリのデプロイにも要らない
  * - cdkd の状態バケットそのものと、他のアプリの状態を消したり書き換えたりしない
  *
  * App タグを条件にした Deny は、aws:ResourceTag を評価しない API（S3 のオブジェクト操作など）
@@ -125,6 +125,7 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
         'iam:*SAMLProvider*',
         'iam:*ServiceSpecificCredential*',
         'iam:*SSHPublicKey*',
+        'iam:*MFADevice*',
         'iam:*AccountPasswordPolicy',
         'iam:*AccountAlias',
         'organizations:*',
@@ -135,6 +136,11 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
         'cloudtrail:StopLogging',
         'cloudtrail:UpdateTrail',
         'cloudtrail:PutEventSelectors',
+        'cloudtrail:PutInsightSelectors',
+        'cloudtrail:DeleteEventDataStore',
+        'cloudtrail:UpdateEventDataStore',
+        'cloudtrail:StopEventDataStoreIngestion',
+        'cloudtrail:DeleteChannel',
       ],
       resources: ['*'],
     }),
@@ -151,6 +157,10 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
         's3:PutBucketOwnershipControls',
         's3:PutBucketPublicAccessBlock',
         's3:PutEncryptionConfiguration',
+        's3:PutBucketLogging',
+        's3:PutReplicationConfiguration',
+        's3:PutBucketNotification',
+        's3:PutBucketObjectLockConfiguration',
       ],
       resources: [stateBucket],
     }),
