@@ -186,6 +186,12 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
+いまの dev は、発行済みの証明書の ARN を `cdk.json` の context `certificateArn` で渡している。
+こうすると `-cert` スタックは合成されず、`-site` にも `Custom::CrossRegionExportReader` が
+置かれない。cdkd（0.294.7）は Reader の属性を物理 ID に解決してしまい、ディストリビューションの
+更新が通らないため（2026-10-04）。`-cert` の証明書と Writer は us-east-1 にそのまま残り、
+cdkd の状態も残るが、以後のデプロイでは触らない。証明書は ACM が DNS 検証で自動更新する。
+
 ### 4. ログインのユーザー（共通ログイン）
 
 ログインは 4 アプリ（reinvent、builder、kakeibo、learning）共通のユーザープールで行う。
