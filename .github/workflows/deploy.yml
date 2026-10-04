@@ -128,7 +128,15 @@ jobs:
       - name: cdkd deploy
         if: steps.migrate.outputs.engine == 'cdkd'
         working-directory: infra
-        run: npx cdkd deploy --all --yes -c env=${{ env.TARGET_ENV }}
+        run: |
+          # cdkd はスタックが失敗しても終了コード 0 で抜けることがある（2026-10-04 の builder で、
+          # 自動ロールバックまで走ったのにステップは緑だった）。出力にも失敗が出ていないか確かめる
+          set -o pipefail
+          npx cdkd deploy --all --yes -c env=${{ env.TARGET_ENV }} 2>&1 | tee "$RUNNER_TEMP/cdkd-deploy.log"
+          if grep -qE 'Failed: |node\(s\) failed|Rollback completed' "$RUNNER_TEMP/cdkd-deploy.log"; then
+            echo "::error::cdkd の出力に失敗が出ている（終了コードは 0）。上のログを確かめる"
+            exit 1
+          fi
 
       # 移行の前検査で引っかかったときだけ通る。スタックはまだ CloudFormation の管理下に
       # あるので、これまでどおり出す。cdkd ロールでも bootstrap ロールを引き受けられる
