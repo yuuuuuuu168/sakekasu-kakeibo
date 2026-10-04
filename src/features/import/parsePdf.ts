@@ -1,7 +1,7 @@
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 
 /**
- * pdfjs は 350KB ほどあり、PDF を落とした人しか要らない。
+ * pdfjs は 440KB ほどあり（worker は別に 1.2MB）、PDF を落とした人しか要らない。
  * ここで動的に読み込んで、最初の表示に載せないようにしている。
  */
 async function loadPdfjs() {
@@ -31,23 +31,34 @@ export type PdfParseResult = {
 export async function parsePdfStatement(file: File): Promise<PdfParseResult> {
   const pdfjs = await loadPdfjs();
   const buffer = await file.arrayBuffer();
-  const document = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
-  const rows: string[][] = [];
-  let textLength = 0;
+  // 読むのはテキスト層だけで、描画はしない。外から来た PDF を開くので、
+  // 使わない機能（XFA フォーム、フォントの読み込み）は明示的に切っておく
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    enableXfa: false,
+    disableFontFace: true,
+  });
+  try {
+    const document = await loadingTask.promise;
+    const rows: string[][] = [];
+    let textLength = 0;
 
-  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    const page = await document.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const lines = groupIntoLines(content.items.filter(isTextItem));
-    for (const line of lines) {
-      textLength += line.length;
-      const matched = LINE.exec(line);
-      if (matched) rows.push([matched[1], matched[2].trim(), matched[3]]);
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const lines = groupIntoLines(content.items.filter(isTextItem));
+      for (const line of lines) {
+        textLength += line.length;
+        const matched = LINE.exec(line);
+        if (matched) rows.push([matched[1], matched[2].trim(), matched[3]]);
+      }
     }
-  }
 
-  await document.destroy();
-  return { rows, imageOnly: textLength < 40, pageCount: document.numPages };
+    return { rows, imageOnly: textLength < 40, pageCount: document.numPages };
+  } finally {
+    // pdfjs 6 から PDFDocumentProxy に destroy() が無くなり、読み込みタスクの側で片付ける
+    await loadingTask.destroy();
+  }
 }
 
 function isTextItem(item: unknown): item is TextItem {
