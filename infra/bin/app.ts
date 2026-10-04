@@ -21,14 +21,8 @@ const app = new cdk.App();
 // cdkd はロールを更新するたびに名前が変わったとみなして作り直す（2026-10-04 にタグを足しただけで
 // 作り直しが起き、Lambda が消えたロールを指して止まった）。ロールはガードレールでも
 // 名前の接頭辞で範囲を絞る。
-//
-// CloudFront のディストリビューションにも、今は付けない。証明書の ARN を別リージョンのスタックから
-// crossRegionReferences で受け取っていて、cdkd はその値（Custom::CrossRegionExportReader の属性）を
-// 解決できず物理 ID で代用する。ディストリビューションを更新すると、その誤った値が証明書として送られて
-// 断られる（2026-10-04、sakekasu-kakeibo-dev-site のデプロイが失敗した）。証明書の ARN を context で
-// 渡す形に直すまで、ディストリビューションに差分を出さない
 cdk.Tags.of(app).add('App', 'kakeibo', {
-  excludeResourceTypes: ['AWS::IAM::Role', 'AWS::CloudFront::Distribution'],
+  excludeResourceTypes: ['AWS::IAM::Role'],
 });
 
 const REGION = 'ap-northeast-1';
