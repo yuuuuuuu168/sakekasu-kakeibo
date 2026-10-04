@@ -604,6 +604,22 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 git ls-remote https://github.com/anthropics/claude-code-action.git refs/tags/v1
 ```
 
+## npm audit で残している指摘
+
+ルート（画面）は 0 件。`infra/` には次の 8 件（high）が残るが、直さずに置いている（2026-10 時点）。
+
+- `braces`（GHSA-vfj7-8cjw-p6xm）と、それを引く `micromatch` / `fast-glob` / `@aws-cdk/cdk-assets-lib` /
+  `@aws-cdk/toolkit-lib` / `cdk-local` / `@go-to-k/cdkd`。`braces` は全バージョンが対象で修正版が無い。
+  `npm audit fix --force` は cdkd を 0.169.0 へ下げようとするので打たない。cdkd 配下を overrides で
+  動かすのもデプロイの挙動に響くので避けている
+- `aws-cdk-lib` に同梱（bundled）された `brace-expansion`。最新の aws-cdk-lib でも同じ版が入っていて、
+  同梱物には overrides が効かない
+
+どれも合成とデプロイのときに手元か Actions で動くだけで、利用者のブラウザにも Lambda にも載らない。
+渡るグロブはこちらのコードと cdk.json が決めたもので、外からの入力は入らないので、実害は無いと判断した。
+aws-cdk-lib や cdkd を上げたときは `(cd infra && npm audit)` を取り直し、消えていればこの節を削る。
+`npm audit fix` を `infra/` で打つと cdkd 配下（`cdk-local` など）まで上がるので、上げたいものだけを個別に入れる。
+
 ## よくある詰まり
 
 ### cdkd への移行が途中で止まった
