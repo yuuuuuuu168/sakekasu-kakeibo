@@ -191,7 +191,8 @@ async function putTransactions(sub: string, body: Json): Promise<APIGatewayProxy
     const chunk = rows.slice(index, index + 25);
     let request: Record<string, unknown[]> | undefined = {
       [TABLE_NAME]: chunk.map((txn) => ({
-        PutRequest: { Item: { pk: `USER#${sub}`, sk: SK.transaction(txn.id), ...txn } },
+        // キーは展開の後ろに置く。本文に pk / sk があっても、sub から組み立てた値が勝つ
+        PutRequest: { Item: { ...txn, pk: `USER#${sub}`, sk: SK.transaction(txn.id) } },
       })),
     };
 
@@ -247,7 +248,8 @@ export function assertTransaction(value: unknown): Json & { id: string } {
     throw new BadRequest(`明細 ${txn.id} の内訳の合計 ${total} が金額 ${txn.amount} と合いません`);
   }
 
-  return txn as Json & { id: string };
+  // 本文の pk / sk は保存に使わない。キーは呼び出し側が sub から組み立てる
+  return strip(txn) as Json & { id: string };
 }
 
 async function putConfig(sub: string, sk: string, field: string, body: Json): Promise<APIGatewayProxyResultV2> {
