@@ -98,7 +98,7 @@
 
 sakekasu-builder は Amplify Hosting で配信しているが、あちらの [docs/amplify-exit.md](https://github.com/yuuuuuuu168/sakekasu-builder/blob/main/docs/amplify-exit.md) が「配信設定だけが IaC の外にある」ことを唯一の移行動機として挙げている。新しく作るものを同じ状態から始める理由が無いので、S3 + CloudFront を最初から CDK に置いた。セキュリティヘッダ 7 種も `ResponseHeadersPolicy` に入れてある。
 
-配信物は GitHub Actions から `aws s3 sync` で置く。CDK の `BucketDeployment` は使わない。`Custom::CDKBucketDeployment` というカスタムリソースが増え、あちらが [#129](https://github.com/yuuuuuuu168/sakekasu-builder/issues/129) で 6 個消したのと同じ性質のものを持ち込むことになる。ロググループを `logRetention` で作らず明示しているのも同じ理由。
+配信物は GitHub Actions から `aws s3 sync` で置く。CDK の `BucketDeployment` は使わない。`Custom::CDKBucketDeployment` というカスタムリソースが増え、あちらが [#129](https://github.com/yuuuuuuu168/sakekasu-builder-archive/issues/129) で 6 個消したのと同じ性質のものを持ち込むことになる。ロググループを `logRetention` で作らず明示しているのも同じ理由。
 
 ### Bedrock の IAM は 2 種類の ARN が要る
 
