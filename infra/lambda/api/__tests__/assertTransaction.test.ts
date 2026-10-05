@@ -35,6 +35,13 @@ describe('assertTransaction', () => {
     expect(() => assertTransaction({ ...VALID, amount: 1200.5 })).toThrow(/整数/);
   });
 
+  it('本文の pk / sk は返さない（キーは sub から組み立てる）', () => {
+    const result = assertTransaction({ ...VALID, pk: 'USER#someone-else', sk: 'CONFIG#categories' });
+    expect(result).not.toHaveProperty('pk');
+    expect(result).not.toHaveProperty('sk');
+    expect(result.id).toBe('t1');
+  });
+
   it('内訳が無ければ断る', () => {
     expect(() => assertTransaction({ ...VALID, splits: [] })).toThrow(/内訳がありません/);
   });
