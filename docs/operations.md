@@ -46,7 +46,7 @@ ns-1336.awsdns-39.org / ns-529.awsdns-02.net / ns-310.awsdns-38.com / ns-1620.aw
 
 噛み合っていない。このアカウントにあるゾーンは公開ゾーン（`PrivateZone: false`）だが、
 レジストラからの委任を受けていない。ドメインもこのアカウントの Route53 Domains には
-登録されていない。つまり本物のゾーンは別のアカウント（組織の管理アカウント <管理アカウント ID> が候補）にある。
+登録されていない。つまり本物のゾーンは別のアカウント（組織の管理アカウントが候補）にある。
 
 このゾーン ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
 ゾーンに書かれ、ACM が永久に `PENDING_VALIDATION` のままになる。`cdk deploy` は待ち続け、
@@ -572,6 +572,19 @@ npx cdkd diff -c env=dev --profile sakekasu-builder
 
 ## PR のセキュリティレビュー
 
+**2026-10-05 にリポジトリを公開してから、AWS Security Agent のコードレビューは使っていない。**
+Security Agent は公開リポジトリの PR にコメントを付けない（修正前の脆弱性を公開の場で明かさない
+ための仕様）。PR ごとのセキュリティレビューは、下の claude-code-action が
+[security-requirements.md](security-requirements.md) を読んで受け持つ。機械的に見つかるものは
+GitHub 側に任せる。
+
+- **Dependabot**: 依存パッケージの既知の脆弱性を知らせ、直せるものは更新の PR を作る
+- **CodeQL**（コードスキャン、Default setup）: 自分で書いたコードの危険なパターン（XSS、注入など）
+- **Secret scanning と Push protection**: 鍵やトークンの書き込みを見つけ、push の時点で止める
+
+どれもリポジトリの Settings → Advanced Security で有効にしてある。以下は、非公開だった間に
+Security Agent を使っていたときの記録として残す。
+
 PR の差分を AWS Security Agent に読ませ、指摘を PR のコメントに残す。設計レビューと
 コードレビューは 2025 年 12 月のプレビューで入った機能で、ペネトレーションテストだけが
 2026 年 3 月に GA になっている。ここで使うのはコードレビューのほうなので、いまはプレビュー。
@@ -622,10 +635,11 @@ GitHub App は 1 アカウントに 1 回しか入れられず、そのインス
   コンソールだけ直すと、次に誰かが読んだときに食い違う
 - 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
 
-## PR の汎用コードレビュー（claude-code-action）
+## PR のコードレビュー（claude-code-action）
 
-セキュリティは上の AWS Security Agent が見る。その担当外（ロジックのバグ、可読性、設計、
-CLAUDE.md や steering の方針との食い違い）を埋めるのが `.github/workflows/claude-review.yml`。
+セキュリティ（[security-requirements.md](security-requirements.md) の観点）と、ロジックのバグ、
+可読性、設計、CLAUDE.md や steering の方針との食い違いを見るのが `.github/workflows/claude-review.yml`。
+非公開だった間はセキュリティを AWS Security Agent に任せ、こちらは汎用のレビューだけだった。
 [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) を使い、
 PR の差分をレビューして指摘を PR のコメントに残す。CI は赤にしない。
 
@@ -651,7 +665,7 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 - 走らせるのは `src` / `packages` / `infra` と設定ファイル、それにワークフロー自身。
   `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
 - 同じ PR に続けて push したら、前のレビューは打ち切る（`concurrency`）
-- AWS Security Agent と役割が分かれている。片方はセキュリティ、こちらは汎用
+- セキュリティもこちらで見る。依存パッケージ・危険なパターン・鍵の書き込みは GitHub 側の仕組みが見る
 - **`claude-review.yml` 自身を変える PR では、レビュー（Claude の実行）だけがスキップされる。**
   claude-code-action が、PR のワークフローを main の版と突き合わせ、違えば自分の実行を止める
   （改ざん防止）。効くのはこの Action の中だけで、**ジョブ自体は動く**。同一リポジトリの

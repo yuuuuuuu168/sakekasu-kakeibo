@@ -1,6 +1,10 @@
 # セキュリティレビューの観点
 
-AWS Security Agent のコンソール（Agent Space → セキュリティ要件）に入れる内容。
+PR のセキュリティレビューで見てほしい観点。`.github/workflows/claude-review.yml` が Claude に
+このファイルを読ませている（リポジトリを公開してからは、AWS Security Agent のコードレビューが
+PR にコメントを付けられないため）。
+
+元は AWS Security Agent のコンソール（Agent Space → セキュリティ要件）に入れる内容として書いた。
 マネージドの要件（認証・認可、監視、暗号化、シークレット管理、情報保護）は有効にしたうえで、
 このリポジトリ固有のものをカスタム要件として足す。
 

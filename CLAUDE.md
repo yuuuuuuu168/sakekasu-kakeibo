@@ -72,8 +72,8 @@ AWS CLI v2 の導入、読み取り専用プロファイルの配置、SSO ロ�
 | プロファイル | アカウント | 使いどころ |
 | --- | --- | --- |
 | `verify` | 232791540685（Web アプリのデプロイ先） | アプリのログ・メトリクス・リソースの確認 |
-| `verify-org` | <管理アカウント ID>（Organization の管理アカウント） | 組織・請求・Identity Center の確認 |
-| `verify-ops` | <運用アカウント ID>（運用ツール用） | Security Agent / DevOps Agent の確認 |
+| `verify-org` | Organization の管理アカウント | 組織・請求・Identity Center の確認 |
+| `verify-ops` | 運用ツール用 | Security Agent / DevOps Agent の確認 |
 
 接続先は [scripts/aws-verify.conf](scripts/aws-verify.conf) にある。どれも Permission Set
 `AgentVerifyAccess` で、create / update / delete / put 系の変更操作はできない。変更操作は
