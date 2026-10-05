@@ -217,7 +217,7 @@ npm test
 
 テストは `packages/core` に厚く置いている。CSV の列推定、店舗名の正規化、内訳分割の不変条件、レシートのマッチ、叱りの段階。ここが正しければ、残りは画面と配線になる。
 
-PR の差分は AWS Security Agent のコードレビューにもかける。設定は AWS のコンソール側で、リポジトリには置かない。見てほしい観点と入れ方は [docs/security-requirements.md](docs/security-requirements.md) と [docs/operations.md](docs/operations.md) にある。
+PR の差分は Claude にもレビューさせる（`.github/workflows/claude-review.yml`）。セキュリティの観点は [docs/security-requirements.md](docs/security-requirements.md) にあり、バグや設計とあわせて見る。依存パッケージの脆弱性、コードの危険なパターン、鍵の書き込みは、GitHub の Dependabot・CodeQL・Secret scanning が見る。詳しくは [docs/operations.md](docs/operations.md) にある。
 
 ## デザイン
 
