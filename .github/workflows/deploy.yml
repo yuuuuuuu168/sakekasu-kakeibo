@@ -179,12 +179,18 @@ jobs:
           auth_domain="$(read_output "$prefix-api" AuthDomain)"
           site_bucket="$(read_output "$prefix-site" SiteBucketName)"
           distribution_id="$(read_output "$prefix-site" DistributionId)"
+          # バケット名にはアカウント ID が入る。secrets.AWS_ACCOUNT_ID と同じ値を含む出力は
+          # GitHub がジョブの間で渡さず捨てる（Skip output ... may contain secret）ので、
+          # アカウントの部分を置き換えて渡し、配信のジョブで戻す
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          test -n "$account"
+          site_bucket_masked="${site_bucket//$account/__ACCOUNT__}"
           {
             echo "apiUrl=$api_url"
             echo "userPoolId=$user_pool_id"
             echo "userPoolClientId=$user_pool_client_id"
             echo "authDomain=$auth_domain"
-            echo "siteBucket=$site_bucket"
+            echo "siteBucket=$site_bucket_masked"
             echo "distributionId=$distribution_id"
           } >> "$GITHUB_OUTPUT"
 
@@ -224,12 +230,17 @@ jobs:
 
       # ハッシュ付きの資産は長く持たせ、index.html だけ都度読み直させる
       - name: S3 へ同期して無効化
+        env:
+          SITE_BUCKET: ${{ needs.infra.outputs.siteBucket }}
         run: |
           set -euo pipefail
-          aws s3 sync dist/ "s3://${{ needs.infra.outputs.siteBucket }}/" \
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          bucket="${SITE_BUCKET//__ACCOUNT__/$account}"
+          test -n "$bucket" || { echo "配信先のバケット名が取れていません" >&2; exit 1; }
+          aws s3 sync dist/ "s3://$bucket/" \
             --delete --exclude index.html \
             --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp dist/index.html "s3://${{ needs.infra.outputs.siteBucket }}/index.html" \
+          aws s3 cp dist/index.html "s3://$bucket/index.html" \
             --cache-control "no-cache"
           aws cloudfront create-invalidation \
             --distribution-id "${{ needs.infra.outputs.distributionId }}" --paths "/index.html"
