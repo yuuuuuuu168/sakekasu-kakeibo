@@ -29,7 +29,7 @@ const repoRoot = path.join(here, '..', '..');
  * InvokeModel の認可はプロファイル本体と振り先の foundation-model の**両方**を見る。
  * プロファイルの ARN だけを許可すると、振り先に当たったリクエストだけが
  * AccessDeniedException で落ちる。この 2 つと振り先リージョンは
- * sakekasu-builder が同じアカウント（232791540685 / ap-northeast-1）で実測したもので、
+ * sakekasu-builder が同じアカウント（ap-northeast-1）で実測したもので、
  * モデルを差し替えるときは次のコマンドで振り先を取り直すこと。
  *
  * ```sh

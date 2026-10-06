@@ -48,7 +48,7 @@ RPC の形をしていて、グラフで引く必要がないこと。試行錯�
 | `sakekasu-kakeibo-{env}-api` | HTTP API、api Lambda、ocr-receipt Lambda、monthly-report Lambda、EventBridge ルール |
 | `sakekasu-kakeibo-{env}-site` | 静的サイト用 S3、CloudFront、ACM 証明書（us-east-1）、レスポンスヘッダポリシー |
 
-デプロイ先は sakekasu-builder と同じアカウント（232791540685 / ap-northeast-1）。
+デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）。
 リソース名の接頭辞で分離する。証明書だけは CloudFront の制約で us-east-1 に置く。
 
 ## データモデル

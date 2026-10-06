@@ -23,7 +23,7 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 
 ## AWS へ初めて入れる
 
-デプロイ先は sakekasu-builder と同じアカウント（232791540685 / ap-northeast-1）。
+デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）。
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けてある。
 
 ### 1. ドメインと証明書（いまは付けていない）
@@ -34,7 +34,7 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 
 #### なぜ付けられないか
 
-`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウント（232791540685）に無い。
+`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウント（<アプリのアカウント ID>）に無い。
 
 ```
 $ dig NS sakekasu-builder.com +short      # 実際に委任されている NS
@@ -135,8 +135,9 @@ CDK が面倒を見る。
 `siteOrigin` はしばらく残しておく。CloudFront の既定ドメインでも引き続き配信されるので、
 消すと古い URL を開いたときだけ CORS で弾かれる。ブックマークを入れ替えてから消す。
 
-委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ARN を
-`certificateArn` で渡す形になる。CloudFront を指すレコードも手で入れる。
+委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ID を
+`certificateId` で渡す形になる（ARN はアカウント ID を含むので、`infra/bin/app.ts` がデプロイ先の
+アカウントと組み合わせて作る）。CloudFront を指すレコードも手で入れる。
 
 ```sh
 aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
@@ -186,7 +187,8 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
-いまの dev は、発行済みの証明書の ARN を `cdk.json` の context `certificateArn` で渡している。
+いまの dev は、発行済みの証明書の ID を `cdk.json` の context `certificateId` で渡している
+（ARN はデプロイ先のアカウントと組み合わせて作る。公開リポジトリにアカウント ID を書かないため）。
 こうすると `-cert` スタックは合成されず、`-site` にも `Custom::CrossRegionExportReader` が
 置かれない。cdkd（0.294.7）は Reader の属性を物理 ID に解決してしまい、ディストリビューションの
 更新が通らないため（2026-10-04）。`-cert` の証明書と Writer は us-east-1 にそのまま残り、
@@ -451,9 +453,9 @@ table=sakekasu-kakeibo-dev
 合成したテンプレートを CloudFormation に渡す代わりに、cdkd が依存関係を読んで AWS の API を
 直接並列に叩く。CloudFormation の変更セットの作成と、変更の無いスタックの確認待ちが無くなる。
 
-- **状態**：S3 の `cdkd-state-232791540685` に `cdkd/{スタック名}/{リージョン}/state.json` として
+- **状態**：S3 の `cdkd-state-<アプリのアカウント ID>` に `cdkd/{スタック名}/{リージョン}/state.json` として
   置く。スタックの出力もここにある。CloudFormation のコンソールにはアプリ本体のスタックが出ない
-- **Lambda のコード**：`cdkd-assets-232791540685-{リージョン}` に置く。証明書の `-cert` スタックの
+- **Lambda のコード**：`cdkd-assets-<アプリのアカウント ID>-{リージョン}` に置く。証明書の `-cert` スタックの
   カスタムリソース用に us-east-1 にも作る
 - **ロール**：cdkd は CDK bootstrap の `cdk-hnb659fds-*` ロールを使えない（CloudFormation に
   権限を委ねる前提の作りのため）。そこで `sakekasu-kakeibo-cdkd-deploy` スタックが
@@ -603,7 +605,7 @@ sakekasu-builder が既に AWS Security Agent に繋がっている。**その�
 GitHub App は 1 アカウントに 1 回しか入れられず、そのインストールが AWS アカウント 1 つに
 結びつく。builder も kakeibo も同じ `yuuuuuuu168` の下にあるので、
 
-- builder の連携が 232791540685 から張ってあるなら、そのまま kakeibo を足せる
+- builder の連携が <アプリのアカウント ID> から張ってあるなら、そのまま kakeibo を足せる
 - 別の AWS アカウントから張ってあるなら、そちらに寄せるしかない。kakeibo 用に
   別アカウントから繋ぐことはできない
 

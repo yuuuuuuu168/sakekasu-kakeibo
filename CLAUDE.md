@@ -53,7 +53,7 @@ URL は数えないので、英語のコマンドや英文の下書きはコー�
 
 ## AWS 確認作業の認証フロー
 
-デプロイ先は sakekasu-builder と同じアカウント（232791540685 / ap-northeast-1）で、
+デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）で、
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けている。
 
 AWS環境の確認が必要になったら、ユーザーの指示を待たずに次を実行する。
@@ -71,7 +71,7 @@ AWS CLI v2 の導入、読み取り専用プロファイルの配置、SSO ロ�
 
 | プロファイル | アカウント | 使いどころ |
 | --- | --- | --- |
-| `verify` | 232791540685（Web アプリのデプロイ先） | アプリのログ・メトリクス・リソースの確認 |
+| `verify` | <アプリのアカウント ID>（Web アプリのデプロイ先） | アプリのログ・メトリクス・リソースの確認 |
 | `verify-org` | Organization の管理アカウント | 組織・請求・Identity Center の確認 |
 | `verify-ops` | 運用ツール用 | Security Agent / DevOps Agent の確認 |
 
@@ -100,7 +100,7 @@ Identity Center のユーザーがグループ `sakekasu` に入っているか�
 どちらも Actions にロールを触らせないため、手で打つ。
 
 アプリ本体のスタックは CloudFormation ではなく [cdkd](https://github.com/go-to-k/cdkd) で出している。
-状態は S3 の `cdkd-state-232791540685` にあり、CloudFormation のスタックは無い。
+状態は S3 の `cdkd-state-<アプリのアカウント ID>` にあり、CloudFormation のスタックは無い。
 `cdk diff` は CloudFormation のスタックと比べるので、もう当てにならない。
 確かめたいだけなら `cdkd diff` までにとどめる。手順は
 [docs/operations.md](docs/operations.md) にある。
