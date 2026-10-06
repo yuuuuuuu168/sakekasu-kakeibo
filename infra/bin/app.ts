@@ -73,13 +73,24 @@ function buildApplicationStacks(): void {
    *
    * 証明書の扱いは 3 通り。
    * 1. context に hostedZoneId と zoneName を渡す → us-east-1 の証明書を CDK が作り、DNS 検証も自動
-   * 2. context に certificateArn を渡す → 既に発行済みの証明書を使う（DNS が Route53 に無い場合）
+   * 2. context に certificateId を渡す → 既に発行済みの証明書を使う（DNS が Route53 に無い場合）。
+   *    ARN はアカウント ID を含むので cdk.json には ID だけを置き、デプロイ先のアカウントと組み合わせて作る
+   *    （公開リポジトリなので）。-c certificateArn で ARN を丸ごと渡せば、そちらを使う
    * 3. どちらも渡さない → CloudFront の既定ドメインで配信する。後からドメインを足せる
    */
   const domainName = app.node.tryGetContext('domainName') as string | undefined;
   const hostedZoneId = app.node.tryGetContext('hostedZoneId') as string | undefined;
   const zoneName = (app.node.tryGetContext('zoneName') as string | undefined) ?? domainName?.split('.').slice(1).join('.');
-  let certificateArn = app.node.tryGetContext('certificateArn') as string | undefined;
+  const certificateId = app.node.tryGetContext('certificateId') as string | undefined;
+  let certificateArn =
+    (app.node.tryGetContext('certificateArn') as string | undefined) ??
+    (certificateId ? `arn:aws:acm:us-east-1:${account}:certificate/${certificateId}` : undefined);
+  if (certificateId && !account && !app.node.tryGetContext('certificateArn')) {
+    throw new Error(
+      '証明書の ARN を組み立てるにはデプロイ先のアカウントが要る。認証情報付きで合成するか、' +
+        '環境変数 CDK_DEFAULT_ACCOUNT を入れる',
+    );
+  }
 
   /*
    * 配信に使うサブドメインのゾーン。context の dnsZone を渡したときだけ作る。
