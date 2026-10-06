@@ -135,8 +135,9 @@ CDK が面倒を見る。
 `siteOrigin` はしばらく残しておく。CloudFront の既定ドメインでも引き続き配信されるので、
 消すと古い URL を開いたときだけ CORS で弾かれる。ブックマークを入れ替えてから消す。
 
-委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ARN を
-`certificateArn` で渡す形になる。CloudFront を指すレコードも手で入れる。
+委任が使えない場合は、証明書を手で発行して検証レコードを本物のゾーンに入れ、ID を
+`certificateId` で渡す形になる（ARN はアカウント ID を含むので、`infra/bin/app.ts` がデプロイ先の
+アカウントと組み合わせて作る）。CloudFront を指すレコードも手で入れる。
 
 ```sh
 aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
@@ -186,7 +187,8 @@ npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 `Custom::CrossRegionExport{Writer,Reader}` を 1 つずつ置く（この 2 つはカスタムリソースを
 作らない方針の唯一の例外。理由は design.md にある）。
 
-いまの dev は、発行済みの証明書の ARN を `cdk.json` の context `certificateArn` で渡している。
+いまの dev は、発行済みの証明書の ID を `cdk.json` の context `certificateId` で渡している
+（ARN はデプロイ先のアカウントと組み合わせて作る。公開リポジトリにアカウント ID を書かないため）。
 こうすると `-cert` スタックは合成されず、`-site` にも `Custom::CrossRegionExportReader` が
 置かれない。cdkd（0.294.7）は Reader の属性を物理 ID に解決してしまい、ディストリビューションの
 更新が通らないため（2026-10-04）。`-cert` の証明書と Writer は us-east-1 にそのまま残り、

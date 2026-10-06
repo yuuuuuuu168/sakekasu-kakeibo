@@ -182,6 +182,8 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 
 デプロイは main へのマージ経由。`.github/workflows/deploy.yml` が [cdkd](https://github.com/go-to-k/cdkd) で `cdkd deploy --all` を打ち、続けてフロントをビルドして S3 へ同期し、`index.html` を無効化する。cdkd は CloudFormation を通さずに AWS の API を直接叩くので、CloudFormation の変更セットと待ちが無くなる。認証は GitHub OIDC で、リポジトリにアクセスキーは置かない。
 
+アカウント ID は公開リポジトリに書かない。ロールの ARN はリポジトリの secret `AWS_ACCOUNT_ID`（Settings → Secrets and variables → Actions）から組み立て、CDK はデプロイ時の認証情報から `CDK_DEFAULT_ACCOUNT` を受け取る。証明書は `infra/cdk.json` に ID（`certificateId`）だけを置く。AWS 確認用の `scripts/aws-verify.conf` の `SSO_ACCOUNT_ID` は、クラウド環境の Environment variables で渡す。`infra/__tests__/no-account-ids.test.ts` が、ダミー以外の 12 桁の数字が入ると落ちる。
+
 ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。依存の取得とテストも認証情報を入れる前に済ませている。詳しい理由は [docs/operations.md](docs/operations.md) にある。
 
 手元から打つのは、最初の 1 回だけ。
