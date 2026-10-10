@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, Circle, LoaderCircle } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
-/** 写真を選んでから下書きが出るまでの段。送る → 読む → 費目を決める の順に進む */
+/** 写真を選んでから下書きが出るまでの段。送る → 読む → カテゴリを決める の順に進む */
 export type ReadingStage = 'upload' | 'read' | 'classify';
 
 export type Reading = {
@@ -18,7 +18,7 @@ export type Reading = {
 const STEPS: { stage: ReadingStage; label: string }[] = [
   { stage: 'upload', label: '写真を送る' },
   { stage: 'read', label: '文字を読む' },
-  { stage: 'classify', label: '費目を決める' },
+  { stage: 'classify', label: 'カテゴリを決める' },
 ];
 
 /** 読み取りがこれより長いと、止まっていないことを言い添える */
