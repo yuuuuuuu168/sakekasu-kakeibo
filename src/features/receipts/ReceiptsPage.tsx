@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
+  RECEIPT_PAYMENT_METHODS,
+  SOURCE_LABELS,
   UNCATEGORIZED_ID,
   activeCategories,
   applyReceipt,
@@ -11,11 +13,13 @@ import {
   findCandidates,
   findDuplicateReceipts,
   formatYen,
+  hasImportableStatement,
   splitsFromReceipt,
   transactionId,
   type MatchCandidate,
   type Receipt,
   type ReceiptItem,
+  type SourceKind,
   type Transaction,
 } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
@@ -34,8 +38,15 @@ type Draft = {
   total: number;
   items: ReceiptItem[];
   imageKey?: string;
+  /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
+  paidWith: SourceKind;
   warnings?: string[];
 };
+
+/** 登録ボタンの文言と、登録後の知らせに使う。「不明払い」とは言わないので分けている */
+function paymentPhrase(method: SourceKind): string {
+  return method === 'unknown' ? '支払い方法不明' : `${SOURCE_LABELS[method]}払い`;
+}
 
 /**
  * OCR が読める形式。読む側（ocr-receipt）が中身のバイト列で確かめるのもこの 3 つ。
@@ -45,7 +56,7 @@ type Draft = {
 const READABLE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 function emptyDraft(): Draft {
-  return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [] };
+  return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [], paidWith: 'cash' };
 }
 
 /**
@@ -101,6 +112,7 @@ export function ReceiptsPage() {
         total: result.total,
         items: judged.items,
         imageKey: target.key,
+        paidWith: result.paymentMethod ?? 'cash',
         ...(warnings.length > 0 ? { warnings } : {}),
       };
       setDraft(next);
@@ -115,35 +127,38 @@ export function ReceiptsPage() {
     }
   }
 
-  async function save(asCash: boolean) {
+  /** asPayment: レシートから明細を作って登録する（支払い方法は draft.paidWith） */
+  async function save(asPayment: boolean) {
     if (!draft) return;
     setBusy(true);
     try {
+      const { paidWith, ...rest } = draft;
       const receipt: Receipt = {
-        ...draft,
+        ...rest,
         items: draft.items,
-        status: asCash ? 'cash' : selectedTxnId ? 'matched' : 'pending',
-        ...(selectedTxnId && !asCash ? { txnId: selectedTxnId } : {}),
+        status: asPayment ? 'cash' : selectedTxnId ? 'matched' : 'pending',
+        ...(asPayment ? { paidWith } : {}),
+        ...(selectedTxnId && !asPayment ? { txnId: selectedTxnId } : {}),
         createdAt: new Date().toISOString(),
       };
       await saveReceipt(receipt);
 
-      if (asCash) {
-        const id = transactionId('cash', receipt.date, receipt.total, receipt.storeName);
-        const cash: Transaction = {
+      if (asPayment) {
+        const id = transactionId(paidWith, receipt.date, receipt.total, receipt.storeName);
+        const paid: Transaction = {
           id,
           date: receipt.date,
           amount: receipt.total,
           rawMerchant: receipt.storeName,
           merchant: receipt.storeName,
-          source: 'cash',
-          sourceLabel: '現金',
+          source: paidWith,
+          sourceLabel: SOURCE_LABELS[paidWith],
           splits: splitsFromReceipt(receipt, receipt.total),
           needsDetail: false,
           receiptId: receipt.id,
         };
-        await saveTransactions([cash]);
-        setMessage('現金払いとして明細に足しました。');
+        await saveTransactions([paid]);
+        setMessage(`${paymentPhrase(paidWith)}として明細に足しました。`);
       } else if (selectedTxnId) {
         const txn = snapshot.transactions.find((item) => item.id === selectedTxnId);
         if (txn) {
@@ -307,7 +322,7 @@ export function ReceiptsPage() {
           <h3 className="mt-4 text-xs font-semibold text-ink-2">当てる明細</h3>
           {candidates.length === 0 ? (
             <p className="mt-1 text-sm text-ink-2">
-              金額 {formatYen(draft.total)} に一致する明細がありません。現金払いならそのまま登録できます。
+              金額 {formatYen(draft.total)} に一致する明細がありません。支払い方法を選べば、そのまま明細として登録できます。
             </p>
           ) : (
             <ul className="mt-1 space-y-1">
@@ -330,9 +345,32 @@ export function ReceiptsPage() {
             </ul>
           )}
 
-          <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-grid pt-3">
+          <div className="mt-4 border-t border-grid pt-3">
+            <Field
+              label="支払い方法"
+              hint={
+                hasImportableStatement(draft.paidWith)
+                  ? `${SOURCE_LABELS[draft.paidWith]}の利用明細を取り込むなら、ここでは登録せず「レシートだけ保存」して、取り込んだ明細に当ててください。両方だと二重に数えます。`
+                  : undefined
+              }
+            >
+              <Select
+                value={draft.paidWith}
+                onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
+                className="w-full"
+              >
+                {RECEIPT_PAYMENT_METHODS.map((method) => (
+                  <option key={method} value={method}>
+                    {SOURCE_LABELS[method]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0}>
-              現金払いとして登録
+              {paymentPhrase(draft.paidWith)}として登録
             </Button>
             <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0}>
               {selectedTxnId ? '明細に当てる' : 'レシートだけ保存'}
@@ -359,7 +397,7 @@ export function ReceiptsPage() {
                       <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
                       <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
                       {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                      {item.status === 'cash' && <Badge tone="neutral">現金</Badge>}
+                      {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
                       {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
                       <span className="tnum text-sm font-semibold text-ink">{formatYen(item.total)}</span>
                       <button
@@ -403,7 +441,7 @@ export function ReceiptsPage() {
                       : '品目なし'}
                   </span>
                   {receipt.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                  {receipt.status === 'cash' && <Badge tone="neutral">現金</Badge>}
+                  {receipt.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[receipt.paidWith ?? 'cash']}</Badge>}
                   {receipt.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
                   <span className="tnum text-sm font-medium text-ink">{formatYen(receipt.total)}</span>
                   <button

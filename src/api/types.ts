@@ -37,6 +37,8 @@ export type ReceiptDraft = {
   date: string;
   total: number;
   items: ReceiptItem[];
+  /** 支払いの印字から読めた支払い方法。読めなければ無い */
+  paymentMethod?: SourceKind;
   /** OCR が読み切れなかった項目の説明。画面に出して直させる */
   warnings?: string[];
 };
