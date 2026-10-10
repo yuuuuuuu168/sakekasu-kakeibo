@@ -193,20 +193,24 @@ export function ReceiptsPage() {
       totalBytes > 0
         ? files.reduce((sum, file, index) => sum + file.size * sent[index], 0) / totalBytes
         : sent.reduce((sum, ratio) => sum + ratio, 0) / files.length;
-    // 送り終えたあとに読み取りで落ちても、写真はレシートに付けて残す
-    let uploadedKeys: string[] = [];
+    // 届いた写真のキー（選んだ順）。途中で落ちても、届いた分はレシートに付けて残す
+    const uploaded: (string | undefined)[] = files.map(() => undefined);
+    const uploadedKeys = () => uploaded.filter((key): key is string => key !== undefined);
     try {
-      const keys = await Promise.all(
+      // 1 枚が落ちても、他の写真は送り終えるまで待つ（Promise.all だと届く前に諦めてしまう）
+      const results = await Promise.allSettled(
         files.map(async (file, index) => {
           const target = await api.requestUpload(file.type || 'image/jpeg');
           await uploadToS3(target, file, (ratio) => {
             sent[index] = ratio;
             setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: progress() } : now));
           });
-          return target.key;
+          uploaded[index] = target.key;
         }),
       );
-      uploadedKeys = keys;
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      const keys = uploadedKeys();
       enter('read');
       // 1 枚なら key で送る。これまでと同じ呼び方にしておく
       const result = await api.analyzeReceipt(keys.length === 1 ? { key: keys[0] } : { keys });
@@ -236,11 +240,16 @@ export function ReceiptsPage() {
       if (auto) setMessage(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
+      const keys = uploadedKeys();
       setMessage(
-        uploadedKeys.length > 0 ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）` : reason,
+        keys.length === files.length
+          ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）`
+          : keys.length > 0
+            ? `${files.length} 枚のうち ${keys.length} 枚しか送れませんでした。届いた写真だけ付けておくので、下に手で入れてください。（${reason}）`
+            : reason,
       );
       setEditing(undefined);
-      setDraft({ ...emptyDraft(), ...imageFields(uploadedKeys) });
+      setDraft({ ...emptyDraft(), ...imageFields(keys) });
     } finally {
       setReading(undefined);
       previewUrls.forEach((url) => URL.revokeObjectURL(url));

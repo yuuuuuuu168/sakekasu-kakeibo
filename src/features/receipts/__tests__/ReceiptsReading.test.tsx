@@ -140,6 +140,34 @@ describe('レシートを読んでいるあいだ', () => {
     });
   });
 
+  it('分けて撮った写真の一部だけ送れなかったら、届いた写真だけ付けて手入力に回す', async () => {
+    let count = 0;
+    vi.mocked(api.requestUpload).mockImplementation(async () => {
+      count += 1;
+      if (count === 2) throw new Error('圏外です');
+      return { key: `receipts/u/${count}.jpg`, uploadUrl: `https://example.com/put/${count}` };
+    });
+    const analyze = vi.spyOn(api, 'analyzeReceipt');
+    const save = vi.spyOn(api, 'putReceipt');
+    const { container } = render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    pickFromLibrary(container, [photo('top.jpg', 100), photo('bottom.jpg', 100)]);
+    await vi.waitFor(() => expect(upload.all).toHaveLength(1));
+    await act(async () => upload.all[0].finish());
+
+    expect(await screen.findByText(/2 枚のうち 1 枚しか送れませんでした.*圏外です/)).toBeInTheDocument();
+    expect(analyze).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('合計'), { target: { value: '800' } });
+    fireEvent.click(screen.getByRole('button', { name: 'レシートだけ保存' }));
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0][0]).toMatchObject({ imageKey: 'receipts/u/1.jpg' });
+    expect(save.mock.calls[0][0]).not.toHaveProperty('imageKeys');
+  });
+
   it('1 枚のレシートとして読める枚数より多く選んだら、送らずに選び直してもらう', async () => {
     const { container } = render(
       <StoreProvider>
