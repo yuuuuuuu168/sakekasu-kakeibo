@@ -88,25 +88,38 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
  * カテゴリは聞かない。このモデルに任せるのは「印字を読む」ところまでで、
  * どの費目かは別の関数（classify）が Jev に聞く。仕事を 1 つにすると
  * 出力が短くなり、JSON が壊れる目も減る。
+ *
+ * `lines` を先頭に置いているのは、項目を埋める前に印字を書き起こさせるため。
+ * JSON は前から順に生成されるので、先に全体を読ませてから値を拾わせる形になる。
+ * いきなり項目を埋めさせると、読めていない欄をそれらしい値で埋めてくる。
  */
 function buildPrompt(): string {
-  return `このレシートの写真から、次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
+  return `日本のレシートの写真です。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
 
 {
-  "storeName": "店舗名",
-  "date": "YYYY-MM-DD",
-  "total": 合計金額の整数,
+  "lines": ["印字を上から 1 行ずつ書き起こしたもの"],
+  "storeName": "店舗名" または null,
+  "date": "YYYY-MM-DD" または null,
+  "total": 合計金額の整数 または null,
   "items": [
-    { "name": "品目名", "amount": 金額の整数, "quantity": 個数 }
+    { "name": "品目名", "amount": 金額の整数 または null, "quantity": 個数 }
   ]
 }
 
+読み方。
+- 写真は 90 度や 180 度回っていることがある。文字の向きに合わせて読む
+- まず lines に印字をそのまま書き起こし、その後で lines から各項目を拾う
+- 読めない欄は推測で埋めず null にする。それらしい値を作らないこと
+- 半角カナは全角カタカナに直す。濁点・半濁点が別の文字に分かれて印字されていても 1 文字にまとめる（ｸﾞ → グ、ﾊﾟ → パ）
+
 決まり。
 - 金額は円の整数。カンマや円記号を含めない
-- 値引き・ポイント値引きは負の金額の品目として入れる
-- 小計・合計・お預り・お釣り・消費税は items に入れない
-- 日付が読めなければ date を空文字にする
-- 品目名は印字されたまま。略字はそのまま書く`;
+- 値引き・割引・セット割・クーポン・ポイント値引きは負の金額の品目として入れる。「-¥100」「▲100」「△100」「100-」はどれも -100
+- 小計・合計・お預り・お釣り・消費税・対象額・点数・支払方法（交通系・クレジット等）は items に入れない
+- total は「合計」の金額。「小計」「お預り」「対象」ではない
+- 店舗名はチェーン名と店名をつなげる（例: タリーズコーヒー 横浜駅店）
+- 日付は取引日。キャンペーンや有効期限の日付と取り違えない
+- 品目名は印字の通り。略字はそのまま書く`;
 }
 
 async function analyze(
@@ -118,7 +131,7 @@ async function analyze(
       contentType: 'application/json',
       body: JSON.stringify({
         anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 2048,
+        max_tokens: 4096,
         temperature: 0,
         messages: [
           {
@@ -138,6 +151,8 @@ async function analyze(
   return normalizeDraft(text);
 }
 
+type DraftItem = { name: string; amount: number; quantity?: number; categoryId: string };
+
 /**
  * モデルの出力を家計簿が扱える形に直す。
  * JSON が壊れていること、金額が文字列で来ることがいずれも起きるので、
@@ -145,20 +160,25 @@ async function analyze(
  *
  * カテゴリはキーワード表（classifyItem）で仮に付ける。本番の判定は画面が
  * この後 /classify に聞きに行くので、ここで付けるのはその返事が来ないときの控え。
+ *
+ * `today` は日付の検算に使う。テストから固定できるように引数にしてある。
  */
 export function normalizeDraft(
   text: string,
-): { storeName: string; date: string; total: number; items: { name: string; amount: number; quantity?: number; categoryId: string }[]; warnings: string[] } {
+  today: Date = new Date(),
+): { storeName: string; date: string; total: number; items: DraftItem[]; warnings: string[] } {
   const warnings: string[] = [];
   const parsed = extractJson(text);
   if (!parsed) {
     return { storeName: '', date: '', total: 0, items: [], warnings: ['レシートを読み取れませんでした。手で入れてください。'] };
   }
 
+  let unreadable = 0;
   const items = (Array.isArray(parsed.items) ? (parsed.items as RawItem[]) : [])
     .map((item) => {
       const name = typeof item.name === 'string' ? item.name.trim() : '';
       const amount = toNumber(item.amount);
+      if (name !== '' && amount === undefined) unreadable += 1;
       if (name === '' || amount === undefined) return undefined;
       return {
         name,
@@ -167,27 +187,59 @@ export function normalizeDraft(
         categoryId: classifyItem(name),
       };
     })
-    .filter((item): item is { name: string; amount: number; quantity?: number; categoryId: string } => item !== undefined);
+    .filter((item): item is DraftItem => item !== undefined);
+  if (unreadable > 0) warnings.push(`金額を読めなかった品目が ${unreadable} 件あります。手で足してください。`);
 
-  const total = toNumber(parsed.total);
+  const rawTotal = toNumber(parsed.total);
+  const total = rawTotal === undefined ? undefined : toYen(rawTotal);
+
+  const flipped = total === undefined ? undefined : flipDiscount(items, total);
+  if (flipped) warnings.push(`「${flipped.name}」を値引き（${flipped.amount} 円）として入れました。違っていたら直してください。`);
+
   const itemsTotal = items.reduce((sum, item) => sum + item.amount, 0);
-
   if (total === undefined) warnings.push('合計を読み取れませんでした。入れ直してください。');
-  else if (items.length > 0 && Math.abs(toYen(total) - itemsTotal) > Math.max(50, Math.round(total * 0.1))) {
-    warnings.push(`品目の合計（${itemsTotal} 円）が合計（${toYen(total)} 円）と離れています。読み落としがあるかもしれません。`);
+  else if (items.length > 0 && Math.abs(total - itemsTotal) > Math.max(50, Math.round(total * 0.1))) {
+    warnings.push(`品目の合計（${itemsTotal} 円）が合計（${total} 円）と離れています。読み落としがあるかもしれません。`);
   }
   if (items.length === 0) warnings.push('品目を読み取れませんでした。手で足してください。');
 
+  const storeName = typeof parsed.storeName === 'string' ? parsed.storeName.trim() : '';
+  if (storeName === '') warnings.push('店名を読み取れませんでした。');
+
   const date = typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : '';
   if (date === '') warnings.push('日付を読み取れませんでした。');
+  else {
+    const doubt = doubtDate(date, today);
+    if (doubt) warnings.push(doubt);
+  }
 
-  return {
-    storeName: typeof parsed.storeName === 'string' ? parsed.storeName.trim() : '',
-    date,
-    total: total === undefined ? itemsTotal : toYen(total),
-    items,
-    warnings,
-  };
+  return { storeName, date, total: total ?? itemsTotal, items, warnings };
+}
+
+/**
+ * 値引きの行を正の金額で読んでしまったものを 1 つだけ直す。
+ * 品目の合計が合計より 2×a 多く、金額 a の正の品目がちょうど 1 つあるときに限り、
+ * その品目を負にする。候補が複数あればどれか決められないので触らない。
+ * 直した品目を返す（直さなければ undefined）。
+ */
+function flipDiscount(items: DraftItem[], total: number): DraftItem | undefined {
+  const excess = items.reduce((sum, item) => sum + item.amount, 0) - total;
+  if (excess <= 0 || excess % 2 !== 0) return undefined;
+  const candidates = items.filter((item) => item.amount === excess / 2);
+  if (candidates.length !== 1) return undefined;
+  const target = candidates[0];
+  target.amount = -target.amount;
+  return target;
+}
+
+/** 日本時間の今日から見て、レシートの日付として不自然なら理由を返す */
+function doubtDate(date: string, today: Date): string | undefined {
+  const day = Date.parse(`${date}T00:00:00+09:00`);
+  if (Number.isNaN(day)) return '日付を読み取れませんでした。';
+  const DAY = 24 * 60 * 60 * 1000;
+  if (day > today.getTime() + DAY) return `日付（${date}）が先の日付になっています。読み違いかもしれません。`;
+  if (day < today.getTime() - 365 * DAY) return `日付（${date}）が 1 年以上前です。読み違いかもしれません。`;
+  return undefined;
 }
 
 function extractJson(text: string): Record<string, unknown> | undefined {

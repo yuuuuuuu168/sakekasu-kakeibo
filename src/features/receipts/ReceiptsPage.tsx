@@ -245,7 +245,21 @@ export function ReceiptsPage() {
           <ul className="mt-1 space-y-2">
             {draft.items.map((item, index) => (
               // 目印に品目名を混ぜると、1 文字打つたびに行が作り直されて入力欄から外れる
-              <li key={index} className="flex items-center gap-2">
+              <li key={index} className="flex items-center gap-1.5">
+                {/* 左からカテゴリ・品名・金額。幅は品名に回し、カテゴリは選べる分だけに絞る */}
+                <Select
+                  value={item.categoryId ?? UNCATEGORIZED_ID}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      items: draft.items.map((row, position) => (position === index ? { ...row, categoryId: event.target.value } : row)),
+                    })
+                  }
+                  className="w-[5.5rem] min-w-0 shrink-0"
+                  aria-label="カテゴリ"
+                >
+                  <CategoryOptions categories={categories} />
+                </Select>
                 <Input
                   value={item.name}
                   onChange={(event) =>
@@ -255,19 +269,6 @@ export function ReceiptsPage() {
                   className="min-w-0 flex-1"
                   aria-label="品目名"
                 />
-                <Select
-                  value={item.categoryId ?? UNCATEGORIZED_ID}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      items: draft.items.map((row, position) => (position === index ? { ...row, categoryId: event.target.value } : row)),
-                    })
-                  }
-                  className="w-32"
-                  aria-label="カテゴリ"
-                >
-                  <CategoryOptions categories={categories} />
-                </Select>
                 <Input
                   type="number"
                   inputMode="numeric"
@@ -280,13 +281,13 @@ export function ReceiptsPage() {
                       ),
                     })
                   }
-                  className="tnum w-24 shrink-0 text-right"
+                  className="tnum w-[4.5rem] shrink-0 text-right"
                   aria-label="金額"
                 />
                 <button
                   type="button"
                   onClick={() => setDraft({ ...draft, items: draft.items.filter((_, position) => position !== index) })}
-                  className="rounded-md p-1.5 text-ink-2 hover:bg-plane"
+                  className="shrink-0 rounded-md p-1 text-ink-2 hover:bg-plane"
                   aria-label="この品目を消す"
                 >
                   <Trash2 size={15} />

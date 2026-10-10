@@ -992,7 +992,7 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Lambda | 無料枠の中 |
 | API Gateway（HTTP API） | 月 0.01 ドル未満 |
 | CloudFront | 無料枠の中 |
-| Bedrock（Claude Haiku） | レシート 1 枚で 0.2 円ほど。月 100 枚で 20 円 |
+| Bedrock（Claude Sonnet 4.6） | レシート 1 枚で 2〜3 円ほど（画像と書き起こしで入力 2,000・出力 1,000 トークン前後）。月 100 枚で 300 円ほど |
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |

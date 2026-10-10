@@ -44,7 +44,7 @@ inclusion: always
 - **配信**: S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中
 - **デプロイ**: アプリ本体のスタックは cdkd（CloudFormation を通さない CDK のデプロイツール）で出す。
   cdkd 用ロールと Actions 用ロールのスタックだけは CloudFormation
-- **AI**: Amazon Bedrock（Claude Haiku 4.5）※レシートの OCR、TypeSafe（Jev）※カテゴリ判定
+- **AI**: Amazon Bedrock（Claude Sonnet 4.6）※レシートの OCR、TypeSafe（Jev）※カテゴリ判定
 - **テスト**: Vitest + Testing Library + fast-check（プロパティベーステスト）
 
 UI コンポーネントのライブラリとルータは入れていない。画面が 6 枚しかないため。

@@ -36,9 +36,13 @@ const repoRoot = path.join(here, '..', '..');
  * aws bedrock list-inference-profiles --region ap-northeast-1 \
  *   --query "inferenceProfileSummaries[?inferenceProfileId=='<profile-id>'].models"
  * ```
+ *
+ * Haiku 4.5 では感熱紙の細かい印字や半角カナを読み違え、読めない欄を作り話で
+ * 埋めることがあったので、jp. の推論プロファイルにある最新の Sonnet に上げた。
+ * 振り先（ap-northeast-1 / ap-northeast-3）は 2026-10 に上のコマンドで確かめてある。
  */
-const BEDROCK_MODEL_ID = 'jp.anthropic.claude-haiku-4-5-20251001-v1:0';
-const BEDROCK_FOUNDATION_MODEL_ID = 'anthropic.claude-haiku-4-5-20251001-v1:0';
+const BEDROCK_MODEL_ID = 'jp.anthropic.claude-sonnet-4-6';
+const BEDROCK_FOUNDATION_MODEL_ID = 'anthropic.claude-sonnet-4-6';
 const BEDROCK_INFERENCE_REGIONS = ['ap-northeast-1', 'ap-northeast-3'];
 
 /**
