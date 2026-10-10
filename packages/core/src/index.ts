@@ -16,6 +16,7 @@ export * from './receipt/items';
 export * from './receipt/split';
 export * from './receipt/match';
 export * from './receipt/register';
+export * from './receipt/discount';
 export * from './duplicate';
 export * from './transfer';
 export * from './payment';
