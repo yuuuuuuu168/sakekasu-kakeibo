@@ -44,6 +44,11 @@ CDK が作るのは入れ物だけで、`generateSecretString` 以外で値を�
 Lambda のログに鍵が出ないこと（SDK の `logLevel` を `debug` にしないこと。
 `debug` はリクエストヘッダと本文を出す）。
 
+API の Lambda は、保存した明細とレシートの中身（金額・日付・品目名・店舗名・カテゴリ）を
+1 リクエスト 1 行でログに出す（`describeRequest`）。何がどのカテゴリで保存されたかを
+CloudWatch で追うためで、利用者が出してよいと決めた。Cognito の `sub` と、
+リクエストヘッダ（トークン）は出さないこと。
+
 ## 6. 外部のモデルへ渡すのは品目名と店舗名だけに限ること
 
 `infra/lambda/classify/` が TypeSafe に送るのは、レシートの品目名と明細の店舗名、
