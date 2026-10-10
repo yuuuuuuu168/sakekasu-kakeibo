@@ -14,8 +14,13 @@ import {
 import { SEED_CATEGORIES, TRANSFER_ID, UNCATEGORIZED_ID } from '../categories';
 import type { Category } from '../types';
 
+/** 初期カテゴリから切り離した形。小カテゴリは食費の下にだけ置いて、2 段目の扱いを見る */
 const NESTED: Category[] = [
-  ...SEED_CATEGORIES,
+  { id: 'food', label: '食費', order: 1 },
+  { id: 'cafe', label: 'カフェ', order: 2 },
+  { id: 'daily', label: '日用品', order: 3 },
+  { id: TRANSFER_ID, label: '振替・チャージ', order: 90 },
+  { id: UNCATEGORIZED_ID, label: '未分類', order: 99 },
   { id: 'rice', label: '米・パン', order: 101, parentId: 'food' },
   { id: 'deli', label: '惣菜', order: 102, parentId: 'food' },
 ];
@@ -198,5 +203,32 @@ describe('decideVerdicts', () => {
   it('答えが 1 つも無ければ全部未分類', () => {
     const verdicts = decideVerdicts(RECEIPT, {}, {});
     expect(Object.values(verdicts).every((verdict) => verdict.categoryId === UNCATEGORIZED_ID)).toBe(true);
+  });
+});
+
+describe('初期カテゴリで聞く', () => {
+  const target: ClassifyTarget = {
+    kind: 'item',
+    subjects: [{ key: 's0', text: 'AWS Lambda 本格入門', context: 'AMAZON' }],
+    categories: SEED_CATEGORIES,
+  };
+
+  it('1 段目は大カテゴリだけを並べる', () => {
+    const [spec] = parentChoiceSpecs(target);
+    expect(Object.keys(spec.criteria)).toContain('work');
+    expect(Object.keys(spec.criteria)).not.toContain('work-books');
+    expect(Object.keys(spec.criteria)).toHaveLength(15);
+  });
+
+  it('2 段目は選んだ大カテゴリの小カテゴリと「どれでもない」', () => {
+    const [spec] = childChoiceSpecs(target, { s0: { choice: 'work', confidence: 0.9 } });
+    expect(Object.keys(spec.criteria)).toEqual([
+      'work-ai',
+      'work-cloud',
+      'work-devtools',
+      'work-courses',
+      'work-books',
+      NONE_OF_CHILDREN,
+    ]);
   });
 });

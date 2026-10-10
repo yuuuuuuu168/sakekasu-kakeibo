@@ -163,3 +163,52 @@ describe('TransactionsPage の振替の絞り込み', () => {
     expect(screen.queryByText(/チャージらしい明細が/)).not.toBeInTheDocument();
   });
 });
+
+const AMAZON: Transaction = {
+  id: 'amz1',
+  date: '2026-09-05',
+  amount: 3104,
+  rawMerchant: 'AMAZON.CO.JP',
+  merchant: 'AMAZONCOJP',
+  source: 'credit',
+  sourceLabel: '楽天カード',
+  splits: [{ id: 'amz1-1', amount: 3104, categoryId: 'daily', origin: 'rule' }],
+  needsDetail: true,
+};
+
+const RAMEN: Transaction = {
+  id: 'ramen1',
+  date: '2026-09-06',
+  amount: 980,
+  rawMerchant: 'ラーメン太郎 品川',
+  merchant: 'ラーメン太郎品川',
+  source: 'credit',
+  sourceLabel: '楽天カード',
+  splits: [{ id: 'ramen1-1', amount: 980, categoryId: 'food-eatout', origin: 'rule' }],
+  needsDetail: false,
+};
+
+describe('TransactionsPage のカテゴリの付け替え', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('Amazon のような混ざる店は、直してもルールを覚えない', async () => {
+    load([AMAZON]);
+    render(<TransactionsPage month="2026-09" filter="all" />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('カテゴリ'), { target: { value: 'work' } });
+    });
+    expect(store.saveTransaction).toHaveBeenCalled();
+    expect(store.saveRules).not.toHaveBeenCalled();
+  });
+
+  it('普通の店は、直すと次から同じカテゴリになるよう覚える', async () => {
+    load([RAMEN]);
+    render(<TransactionsPage month="2026-09" filter="all" />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('カテゴリ'), { target: { value: 'social-dining' } });
+    });
+    expect(store.saveRules).toHaveBeenCalled();
+  });
+});

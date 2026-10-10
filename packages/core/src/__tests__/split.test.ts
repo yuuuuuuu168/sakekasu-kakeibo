@@ -33,18 +33,39 @@ const TXN: Transaction = {
 
 describe('classifyItem', () => {
   it('品目名からカテゴリを当てる', () => {
-    expect(classifyItem('直巻おにぎり 鮭')).toBe('food');
-    expect(classifyItem('ティッシュ 5箱')).toBe('daily');
-    expect(classifyItem('ブレンドコーヒー R')).toBe('cafe');
-    expect(classifyItem('アサヒスーパードライ 350ml')).toBe('alcohol');
-    expect(classifyItem('カップ麺 醤油')).toBe('food');
+    expect(classifyItem('直巻おにぎり 鮭')).toBe('food-deli');
+    expect(classifyItem('ティッシュ 5箱')).toBe('daily-consumables');
+    expect(classifyItem('ブレンドコーヒー R')).toBe('food-cafe');
+    expect(classifyItem('アサヒスーパードライ 350ml')).toBe('food-alcohol');
+    expect(classifyItem('カップ麺 醤油')).toBe('food-groceries');
     expect(classifyItem('謎の商品')).toBe('uncategorized');
+  });
+
+  it('長い語を先に当てる', () => {
+    expect(classifyItem('冷凍弁当 からあげ')).toBe('food-deli');
+    expect(classifyItem('冷凍 餃子')).toBe('food-groceries');
+    expect(classifyItem('ドリップコーヒー 40袋')).toBe('food-snacks');
+    expect(classifyItem('IDカードホルダー ネックストラップ')).toBe('daily-household');
+  });
+
+  it('Amazon の商品名でよく出るものを拾う', () => {
+    expect(classifyItem('ウィルキンソン タンサン 500ml×24本')).toBe('food-snacks');
+    expect(classifyItem('Kindle Unlimited')).toBe('fees-membership');
+    expect(classifyItem('Anker Prime Charger (160W) ノートPC 各種対応')).toBe('hobby-gadgets');
+    expect(classifyItem('hololive OFFICIAL CARD GAME')).toBe('oshi-hololive');
+    expect(classifyItem('ブルーロック（４０） (週刊少年マガジンコミックス)')).toBe('hobby-books');
+    expect(classifyItem('勘違いの工房主 10 (アルファポリスCOMICS)')).toBe('hobby-books');
+    expect(classifyItem('配送料・手数料')).toBe('fees-shipping');
+  });
+
+  it('タバコはどこにも入れない', () => {
+    expect(classifyItem('メビウス タバコ')).toBe('uncategorized');
   });
 
   it('OCR の推定を優先し、未分類のときだけ表で拾う', () => {
     expect(classifyItem('ティッシュ', 'daily')).toBe('daily');
-    expect(classifyItem('アサヒスーパードライ', 'alcohol')).toBe('alcohol');
-    expect(classifyItem('ティッシュ', 'uncategorized')).toBe('daily');
+    expect(classifyItem('アサヒスーパードライ', 'food-alcohol')).toBe('food-alcohol');
+    expect(classifyItem('ティッシュ', 'uncategorized')).toBe('daily-consumables');
   });
 });
 
@@ -52,7 +73,13 @@ describe('splitsFromReceipt', () => {
   it('コンビニの 1 回の支払いを品目ごとに割る', () => {
     const splits = splitsFromReceipt(CONBINI_RECEIPT, 1200);
     expect(splits).toHaveLength(5);
-    expect(splits.map((split) => split.categoryId)).toEqual(['food', 'daily', 'cafe', 'alcohol', 'food']);
+    expect(splits.map((split) => split.categoryId)).toEqual([
+      'food-deli',
+      'daily-consumables',
+      'food-cafe',
+      'food-alcohol',
+      'food-deli',
+    ]);
     expect(splits.every((split) => split.origin === 'receipt')).toBe(true);
   });
 
@@ -61,6 +88,42 @@ describe('splitsFromReceipt', () => {
     const splits = splitsFromReceipt(CONBINI_RECEIPT, 1200);
     expect(sumSplits(splits)).toBe(1200);
     expect(splits.every((split) => split.amount > 0)).toBe(true);
+  });
+
+  it('送料と同じ額の割引は配送料で相殺し、商品の額はそのまま残す', () => {
+    // Amazon の注文画面。商品 3,614 + 配送料 200 - 割引 200 = 請求 3,614
+    const receipt: Receipt = {
+      ...CONBINI_RECEIPT,
+      total: 3614,
+      items: [
+        { name: 'バッグハンガー', amount: 1980 },
+        { name: 'Selected Posh', amount: 1634 },
+        { name: '配送料・手数料', amount: 200 },
+        { name: '割引', amount: -200 },
+      ],
+    };
+    const splits = splitsFromReceipt(receipt, 3614);
+    expect(splits.map((split) => split.amount)).toEqual([1980, 1634, 200, -200]);
+    expect(splits.slice(2).every((split) => split.categoryId === 'fees-shipping')).toBe(true);
+  });
+
+  it('送料と額の合わない割引は、行として残さず商品に配る', () => {
+    const receipt: Receipt = {
+      ...CONBINI_RECEIPT,
+      total: 1300,
+      items: [
+        { name: 'ティッシュ', amount: 1000 },
+        { name: 'おにぎり', amount: 500 },
+        { name: 'クーポン値引', amount: -300 },
+        { name: '配送料', amount: 100 },
+      ],
+    };
+    const splits = splitsFromReceipt(receipt, 1300);
+    expect(splits.map((split) => [split.categoryId, split.amount])).toEqual([
+      ['daily-consumables', 800],
+      ['food-deli', 400],
+      ['fees-shipping', 100],
+    ]);
   });
 
   it('品目が無いレシートは 1 行の未分類にする', () => {
@@ -132,7 +195,11 @@ describe('不変条件', () => {
       fc.property(
         fc.integer({ min: 1, max: 200_000 }),
         fc.array(
-          fc.record({ name: fc.string({ minLength: 1, maxLength: 12 }), amount: fc.integer({ min: 1, max: 50_000 }) }),
+          // 割引（負の品目）や送料も混ぜる。割引を品目に配っても総額は動かないこと
+          fc.record({
+            name: fc.oneof(fc.string({ minLength: 1, maxLength: 12 }), fc.constant('配送料'), fc.constant('割引')),
+            amount: fc.integer({ min: -5_000, max: 50_000 }),
+          }),
           { minLength: 0, maxLength: 25 },
         ),
         (total, items) => {

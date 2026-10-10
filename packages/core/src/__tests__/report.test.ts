@@ -17,7 +17,7 @@ function txn(id: string, date: string, amount: number, categoryId: string, merch
   };
 }
 
-const LIMITS: Budget = { month: '2026-08', limits: { food: 30_000, cafe: 5_000, alcohol: 10_000 } };
+const LIMITS: Budget = { month: '2026-08', limits: { food: 30_000, hobby: 5_000, oshi: 10_000 } };
 
 function report(transactions: Transaction[], budget: Budget = LIMITS) {
   return buildMonthlyReport({ month: '2026-08', transactions, categories: SEED_CATEGORIES, budget, generatedAt: '2026-09-01T00:00:00Z' });
@@ -25,12 +25,12 @@ function report(transactions: Transaction[], budget: Budget = LIMITS) {
 
 describe('叱りの段階', () => {
   it('上限の 8 割以内で全部守れば天晴れ', () => {
-    const result = report([txn('a', '2026-08-03', 20_000, 'food'), txn('b', '2026-08-04', 3_000, 'cafe')]);
+    const result = report([txn('a', '2026-08-03', 20_000, 'food'), txn('b', '2026-08-04', 3_000, 'hobby')]);
     expect(result.scolding).toMatchObject({ level: 0, title: '天晴れ' });
   });
 
   it('守れてはいるが余裕が無ければ よし', () => {
-    const result = report([txn('a', '2026-08-03', 29_000, 'food'), txn('b', '2026-08-04', 4_900, 'cafe'), txn('c', '2026-08-05', 9_000, 'alcohol')]);
+    const result = report([txn('a', '2026-08-03', 29_000, 'food'), txn('b', '2026-08-04', 4_900, 'hobby'), txn('c', '2026-08-05', 9_000, 'oshi')]);
     expect(result.scolding.level).toBe(1);
   });
 
@@ -41,14 +41,14 @@ describe('叱りの段階', () => {
   });
 
   it('2 カテゴリ超過なら 喝', () => {
-    const result = report([txn('a', '2026-08-03', 31_000, 'food'), txn('b', '2026-08-04', 5_500, 'cafe')]);
+    const result = report([txn('a', '2026-08-03', 31_000, 'food'), txn('b', '2026-08-04', 5_500, 'hobby')]);
     expect(result.scolding).toMatchObject({ level: 3, title: '喝' });
   });
 
   it('上限の 2 倍を超えたカテゴリがあれば 激怒', () => {
-    const result = report([txn('a', '2026-08-03', 11_000, 'alcohol'), txn('b', '2026-08-10', 12_000, 'alcohol')]);
+    const result = report([txn('a', '2026-08-03', 11_000, 'oshi'), txn('b', '2026-08-10', 12_000, 'oshi')]);
     expect(result.scolding).toMatchObject({ level: 4, title: '激怒' });
-    expect(result.scolding.lines.join('')).toContain('酒');
+    expect(result.scolding.lines.join('')).toContain('推し活');
   });
 
   it('上限が未設定なら判定せず、設定を促す', () => {
@@ -88,10 +88,10 @@ describe('レポートの中身', () => {
   it('超過の大きい順に 3 件まで並べる', () => {
     const result = report([
       txn('a', '2026-08-03', 40_000, 'food'),
-      txn('b', '2026-08-04', 9_000, 'cafe'),
-      txn('c', '2026-08-05', 12_000, 'alcohol'),
+      txn('b', '2026-08-04', 9_000, 'hobby'),
+      txn('c', '2026-08-05', 12_000, 'oshi'),
     ]);
-    expect(result.worst.map((row) => row.categoryId)).toEqual(['food', 'cafe', 'alcohol']);
+    expect(result.worst.map((row) => row.categoryId)).toEqual(['food', 'hobby', 'oshi']);
     expect(result.overTotal).toBe(10_000 + 4_000 + 2_000);
   });
 

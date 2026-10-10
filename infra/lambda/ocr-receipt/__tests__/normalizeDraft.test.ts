@@ -19,7 +19,7 @@ describe('normalizeDraft', () => {
     expect(draft.storeName).toBe('セブン-イレブン');
     expect(draft.date).toBe('2026-09-01');
     expect(draft.total).toBe(1200);
-    expect(draft.items[0]).toMatchObject({ name: 'おにぎり', amount: 150, categoryId: 'food' });
+    expect(draft.items[0]).toMatchObject({ name: 'おにぎり', amount: 150, categoryId: 'food-deli' });
   });
 
   it('金額が文字列で返ってきても円の整数に直す', () => {
@@ -38,14 +38,14 @@ describe('normalizeDraft', () => {
     const draft = normalizeDraft(
       '{"storeName":"店","date":"2026-09-01","total":398,"items":[{"name":"ティッシュ 5箱","amount":398}]}'
     );
-    expect(draft.items[0].categoryId).toBe('daily');
+    expect(draft.items[0].categoryId).toBe('daily-consumables');
   });
 
   it('カテゴリを返してきても読み捨てる', () => {
     const draft = normalizeDraft(
       '{"storeName":"店","date":"2026-09-01","total":398,"items":[{"name":"ティッシュ 5箱","amount":398,"categoryId":"food"}]}'
     );
-    expect(draft.items[0].categoryId).toBe('daily');
+    expect(draft.items[0].categoryId).toBe('daily-consumables');
   });
 
   it('品目の合計が合計と離れていれば注意を残す', () => {

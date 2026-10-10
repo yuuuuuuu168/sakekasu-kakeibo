@@ -45,7 +45,7 @@ describe('buildTransactions', () => {
     const byMerchant = Object.fromEntries(transactions.map((txn) => [txn.splits[0].categoryId, txn.needsDetail]));
     expect(byMerchant.food).toBe(true);
     expect(byMerchant.daily).toBe(true);
-    expect(byMerchant.cafe).toBe(false);
+    expect(byMerchant['food-cafe']).toBe(false);
   });
 
   it('同じ CSV を 2 回取り込んでも ID が変わらない', () => {

@@ -21,7 +21,7 @@ function txn(id: string, date: string, amount: number, splits: [string, number][
 const TRANSACTIONS: Transaction[] = [
   txn('a', '2026-09-01', 1200, [['food', 800], ['daily', 400]]),
   txn('b', '2026-09-05', 3480, [['daily', 3480]], true),
-  txn('c', '2026-09-10', 620, [['cafe', 620]]),
+  txn('c', '2026-09-10', 620, [['hobby', 620]]),
   txn('d', '2026-08-30', 5000, [['food', 5000]]),
 ];
 
@@ -32,7 +32,7 @@ describe('aggregateMonth', () => {
     const totals = totalsByCategory(transactionsOfMonth(TRANSACTIONS, '2026-09'));
     expect(totals.get('food')).toBe(800);
     expect(totals.get('daily')).toBe(3880);
-    expect(totals.get('cafe')).toBe(620);
+    expect(totals.get('hobby')).toBe(620);
   });
 
   it('当月だけを見る', () => {
@@ -85,7 +85,7 @@ describe('定期支払いと着地見込み', () => {
     id: 'r1',
     label: 'Netflix',
     amount: 1590,
-    categoryId: 'subscription',
+    categoryId: 'fees',
     dayOfMonth: 25,
     startMonth: '2026-01',
   };
@@ -102,11 +102,11 @@ describe('定期支払いと着地見込み', () => {
     });
     expect(withRecurring.projected).toBe(base.projected + 1590);
     expect(withRecurring.recurringRemaining).toBe(1590);
-    expect(withRecurring.categories.find((row) => row.categoryId === 'subscription')?.recurring).toBe(1590);
+    expect(withRecurring.categories.find((row) => row.categoryId === 'fees')?.recurring).toBe(1590);
   });
 
   it('既に取り込まれている定期支払いは二重に数えない', () => {
-    const paid = txn('sub', '2026-09-25', 1590, [['subscription', 1590]]);
+    const paid = txn('sub', '2026-09-25', 1590, [['fees', 1590]]);
     paid.rawMerchant = 'NETFLIX.COM';
     paid.merchant = 'NETFLIXCOM';
     const transactions = [...TRANSACTIONS, paid];
@@ -198,7 +198,7 @@ describe('定期支払いと着地見込み', () => {
         (amount, dayOfMonth, todayDay, imported) => {
           const payment: RecurringPayment = { ...NETFLIX, amount, dayOfMonth };
           // 取り込み済みなら、同じ支払いが明細としても入っている状況
-          const paid = txn('sub', `2026-09-${String(dayOfMonth).padStart(2, '0')}`, amount, [['subscription', amount]]);
+          const paid = txn('sub', `2026-09-${String(dayOfMonth).padStart(2, '0')}`, amount, [['fees', amount]]);
           paid.rawMerchant = 'NETFLIX.COM';
           paid.merchant = 'NETFLIXCOM';
           const transactions = imported ? [...TRANSACTIONS, paid] : TRANSACTIONS;
@@ -227,7 +227,7 @@ describe('小カテゴリ', () => {
   // 食費の内訳が小カテゴリに割れている明細
   const NESTED_TRANSACTIONS: Transaction[] = [
     txn('a', '2026-09-01', 1200, [['rice', 800], ['deli', 400]]),
-    txn('b', '2026-09-05', 620, [['cafe', 620]]),
+    txn('b', '2026-09-05', 620, [['hobby', 620]]),
   ];
 
   function summaryOf(budget?: Budget) {
@@ -254,7 +254,7 @@ describe('小カテゴリ', () => {
   });
 
   it('小カテゴリを持たないカテゴリには children を付けない', () => {
-    const cafe = summaryOf().categories.find((row) => row.categoryId === 'cafe');
+    const cafe = summaryOf().categories.find((row) => row.categoryId === 'hobby');
     expect(cafe?.children).toBeUndefined();
   });
 

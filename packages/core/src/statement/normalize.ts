@@ -71,7 +71,7 @@ export function buildTransactions(input: ImportInput): ImportResult {
     seen.set(baseId, occurrence);
     const id = occurrence === 1 ? baseId : `${baseId}-${occurrence}`;
 
-    const classification = classify(rawMerchant, rules);
+    const classification = classify(rawMerchant, rules, amount);
     const split: Split = {
       id: `${id}-1`,
       amount,

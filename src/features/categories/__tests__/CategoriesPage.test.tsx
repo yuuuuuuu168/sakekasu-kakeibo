@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { SEED_CATEGORIES, type Category } from '@kakeibo/core';
+import { TRANSFER_ID, UNCATEGORIZED_ID, type Category } from '@kakeibo/core';
 import type { Snapshot } from '../../../api/types';
 
 const store = vi.hoisted(() => ({
@@ -22,8 +22,14 @@ vi.mock('../../../api/store', () => ({ useStore: () => store }));
 
 const { CategoriesPage } = await import('../CategoriesPage');
 
+/** 初期カテゴリから切り離した形。小カテゴリは食費の下に 1 つだけ置く */
 const NESTED: Category[] = [
-  ...SEED_CATEGORIES,
+  { id: 'food', label: '食費', order: 1 },
+  { id: 'eatout', label: '外食', order: 2 },
+  { id: 'cafe', label: 'カフェ', order: 3 },
+  { id: 'daily', label: '日用品', order: 4 },
+  { id: TRANSFER_ID, label: '振替・チャージ', order: 90 },
+  { id: UNCATEGORIZED_ID, label: '未分類', order: 99 },
   { id: 'rice', label: '米・パン', order: 101, parentId: 'food' },
 ];
 

@@ -1,4 +1,4 @@
-import { UNCATEGORIZED_ID } from '../categories';
+import { SHIPPING_ID, UNCATEGORIZED_ID } from '../categories';
 import { classifyItem } from './items';
 import type { Receipt, Split, Transaction } from '../types';
 
@@ -86,6 +86,7 @@ export function splitByAmounts(total: number, parts: { categoryId: string; amoun
  * レシートの品目を明細の内訳にする。これがこの家計簿の主役。
  * 品目ごとに 1 行作るので、コンビニの 1,200 円が「おにぎり 150 / ティッシュ 250 …」に割れる。
  * 品目合計と請求額のずれは distribute で品目に按分する。
+ * 行き先の決まらない割引（負の品目）は `settleDiscounts` で片付ける。
  */
 export function splitsFromReceipt(receipt: Receipt, total: number): Split[] {
   const items = receipt.items.filter((item) => Number.isFinite(item.amount) && item.amount !== 0);
@@ -101,7 +102,40 @@ export function splitsFromReceipt(receipt: Receipt, total: number): Split[] {
     origin: 'receipt' as const,
   }));
 
-  return rebalance(splits, total);
+  return rebalance(settleDiscounts(splits), total);
+}
+
+/**
+ * カテゴリの付かなかった割引を片付ける。
+ *
+ * 送料と同じ額の割引は「送料無料」なので配送料に入れて相殺する。それ以外の割引
+ * （クーポンなど）は行として残さず、正の品目に金額の割合で配る。未分類の負の行が
+ * 残ると、未分類が負になり、品目の側は値引き前の額のまま数えられてしまう。
+ * 品目に付いた値引き（OCR やキーワードでカテゴリが付いたもの）はそのまま残す。
+ */
+function settleDiscounts(splits: Split[]): Split[] {
+  const shipping = splits.filter((split) => split.categoryId === SHIPPING_ID && split.amount > 0).map((split) => split.amount);
+  const settled = splits.map((split) => {
+    if (split.amount >= 0 || split.categoryId !== UNCATEGORIZED_ID) return split;
+    const offset = shipping.indexOf(-split.amount);
+    if (offset < 0) return split;
+    shipping.splice(offset, 1);
+    return { ...split, categoryId: SHIPPING_ID };
+  });
+
+  const loose = settled.filter((split) => split.amount < 0 && split.categoryId === UNCATEGORIZED_ID);
+  const kept = settled.filter((split) => !loose.includes(split));
+  // クーポンは商品に掛かるものなので、送料の行には配らない。送料しか無いときだけ送料に配る
+  const goods = kept.filter((split) => split.amount > 0 && split.categoryId !== SHIPPING_ID);
+  const positives = goods.length > 0 ? goods : kept.filter((split) => split.amount > 0);
+  if (loose.length === 0 || positives.length === 0) return settled;
+
+  const discount = loose.reduce((sum, split) => sum + split.amount, 0);
+  const shares = distribute(discount, positives.map((split) => split.amount));
+  return kept.map((split) => {
+    const index = positives.indexOf(split);
+    return index < 0 ? split : { ...split, amount: split.amount + shares[index] };
+  });
 }
 
 /** レシートを明細に紐付ける。内訳が確定するので needsDetail は下ろす */
