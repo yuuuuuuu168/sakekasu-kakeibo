@@ -7,20 +7,19 @@ import {
   activeCategories,
   applyReceipt,
   autoMatch,
-  categoryLabel,
   classifyItem,
   duplicateKey,
   findCandidates,
   findDuplicateReceipts,
   formatYen,
   hasImportableStatement,
-  splitsFromReceipt,
-  transactionId,
+  linkedTransaction,
+  receiptCategorySummary,
+  transactionFromReceipt,
   type MatchCandidate,
   type Receipt,
   type ReceiptItem,
   type SourceKind,
-  type Transaction,
 } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
@@ -42,6 +41,19 @@ type Draft = {
   paidWith: SourceKind;
   warnings?: string[];
 };
+
+/** 保存済みのレシートを直すときの下書き。読み取り結果と同じ欄に載せる */
+function draftFromReceipt(receipt: Receipt): Draft {
+  return {
+    id: receipt.id,
+    storeName: receipt.storeName,
+    date: receipt.date,
+    total: receipt.total,
+    items: receipt.items,
+    ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
+    paidWith: receipt.paidWith ?? 'cash',
+  };
+}
 
 /** 登録ボタンの文言と、登録後の知らせに使う。「不明払い」とは言わないので分けている */
 function paymentPhrase(method: SourceKind): string {
@@ -70,11 +82,18 @@ export function ReceiptsPage() {
   const libraryRef = useRef<HTMLInputElement>(null);
 
   const [draft, setDraft] = useState<Draft | undefined>();
+  /**
+   * 保存済みのレシートを開いて直しているときの、開いた時点のレシート。
+   * 明細とつながったもの（matched / cash）は、つながりはそのままに中身だけ直す。
+   * 未紐付けのものは読み取り直後と同じ流れで、明細に当てるか登録するかを選び直せる
+   */
+  const [editing, setEditing] = useState<Receipt | undefined>();
   const [selectedTxnId, setSelectedTxnId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | undefined>();
 
   const categories = activeCategories(snapshot.categories);
+  const linked = editing && editing.status !== 'pending' ? linkedTransaction(editing, snapshot.transactions) : undefined;
 
   /**
    * 同じレシートを 2 回撮ったもの。ID は撮った時刻から作るので中身が同じでも別 ID になり、
@@ -115,6 +134,7 @@ export function ReceiptsPage() {
         paidWith: result.paymentMethod ?? 'cash',
         ...(warnings.length > 0 ? { warnings } : {}),
       };
+      setEditing(undefined);
       setDraft(next);
       const auto = autoMatch(findCandidates({ ...next, status: 'pending' }, snapshot.transactions));
       setSelectedTxnId(auto?.id);
@@ -139,25 +159,13 @@ export function ReceiptsPage() {
         status: asPayment ? 'cash' : selectedTxnId ? 'matched' : 'pending',
         ...(asPayment ? { paidWith } : {}),
         ...(selectedTxnId && !asPayment ? { txnId: selectedTxnId } : {}),
-        createdAt: new Date().toISOString(),
+        createdAt: editing?.createdAt ?? new Date().toISOString(),
       };
       await saveReceipt(receipt);
 
       if (asPayment) {
-        const id = transactionId(paidWith, receipt.date, receipt.total, receipt.storeName);
-        const paid: Transaction = {
-          id,
-          date: receipt.date,
-          amount: receipt.total,
-          rawMerchant: receipt.storeName,
-          merchant: receipt.storeName,
-          source: paidWith,
-          sourceLabel: SOURCE_LABELS[paidWith],
-          splits: splitsFromReceipt(receipt, receipt.total),
-          needsDetail: false,
-          receiptId: receipt.id,
-        };
-        await saveTransactions([paid]);
+        // 新しい明細なので saveTransactions で足す。saveTransaction は既にある明細の差し替えにしか効かない
+        await saveTransactions([transactionFromReceipt(receipt, paidWith)]);
         setMessage(`${paymentPhrase(paidWith)}として明細に足しました。`);
       } else if (selectedTxnId) {
         const txn = snapshot.transactions.find((item) => item.id === selectedTxnId);
@@ -169,8 +177,56 @@ export function ReceiptsPage() {
         setMessage('レシートだけ保存しました。対応する明細を取り込んだら、もう一度開いて当ててください。');
       }
 
-      setDraft(undefined);
-      setSelectedTxnId(undefined);
+      closeDraft();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openReceipt(receipt: Receipt) {
+    setDraft(draftFromReceipt(receipt));
+    setEditing(receipt);
+    setSelectedTxnId(receipt.txnId);
+    setMessage(undefined);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function closeDraft() {
+    setDraft(undefined);
+    setEditing(undefined);
+    setSelectedTxnId(undefined);
+  }
+
+  /**
+   * 明細とつながった保存済みのレシートを直す。つながりは変えずに、レシートと明細の両方を差し替える。
+   * レシートから作った明細は日付・金額・店名・支払い方法・内訳を、紐付けた明細は内訳だけを直す
+   * （紐付けた明細の金額は取り込んだ請求額なので、レシートの側から書き換えない）。
+   */
+  async function saveEdit() {
+    if (!draft || !editing) return;
+    setBusy(true);
+    try {
+      const { paidWith, warnings: _warnings, ...rest } = draft;
+      const receipt: Receipt = {
+        ...editing,
+        ...rest,
+        ...(editing.status === 'cash' ? { paidWith } : {}),
+      };
+      await saveReceipt(receipt);
+
+      if (editing.status === 'cash') {
+        const txn = transactionFromReceipt(receipt, paidWith, linked);
+        await (linked ? saveTransaction(txn) : saveTransactions([txn]));
+        setMessage(linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。');
+      } else if (linked) {
+        await saveTransaction(applyReceipt(linked, receipt));
+        setMessage('レシートを直し、紐付けた明細の内訳も合わせました。');
+      } else {
+        setMessage('レシートを直しました。紐付けていた明細は見つかりませんでした。');
+      }
+      closeDraft();
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -201,7 +257,13 @@ export function ReceiptsPage() {
             <ImageIcon size={15} />
             カメラロールから
           </Button>
-          <Button onClick={() => setDraft(emptyDraft())} disabled={busy}>
+          <Button
+            onClick={() => {
+              closeDraft();
+              setDraft(emptyDraft());
+            }}
+            disabled={busy}
+          >
             手で入れる
           </Button>
           <input
@@ -229,7 +291,7 @@ export function ReceiptsPage() {
       </Card>
 
       {draft && (
-        <Card title="読み取り結果" action={<Button size="sm" onClick={() => setDraft(undefined)}>やめる</Button>}>
+        <Card title={editing ? 'レシートを直す' : '読み取り結果'} action={<Button size="sm" onClick={closeDraft}>やめる</Button>}>
           {draft.warnings && draft.warnings.length > 0 && (
             <ul className="mb-3 space-y-1 rounded-lg bg-warning/12 px-3 py-2 text-xs text-ink">
               {draft.warnings.map((warning) => (
@@ -319,63 +381,121 @@ export function ReceiptsPage() {
             品目を足す
           </Button>
 
-          <h3 className="mt-4 text-xs font-semibold text-ink-2">当てる明細</h3>
-          {candidates.length === 0 ? (
-            <p className="mt-1 text-sm text-ink-2">
-              金額 {formatYen(draft.total)} に一致する明細がありません。支払い方法を選べば、そのまま明細として登録できます。
-            </p>
+          {editing && editing.status !== 'pending' ? (
+            <>
+              <h3 className="mt-4 text-xs font-semibold text-ink-2">
+                {editing.status === 'cash' ? 'このレシートから作った明細' : '紐付けた明細'}
+              </h3>
+              {linked ? (
+                <p className="mt-1 flex items-center gap-2 rounded-lg bg-plane px-2 py-1.5">
+                  <span className="tnum text-xs text-muted">{linked.date.slice(5)}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{linked.rawMerchant || '（店名なし）'}</span>
+                  <span className="text-xs text-muted">{linked.sourceLabel}</span>
+                  <span className="tnum text-sm text-ink">{formatYen(linked.amount)}</span>
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-ink-2">
+                  {editing.status === 'cash'
+                    ? '明細が見つかりません。保存すると作り直します。'
+                    : '紐付けていた明細が見つかりません。レシートだけ直します。'}
+                </p>
+              )}
+              {editing.status === 'matched' && (
+                <p className="mt-1 text-xs text-muted">明細の金額は取り込んだ請求額のままで、品目の内訳だけを合わせ直します。</p>
+              )}
+
+              {editing.status === 'cash' && (
+                <div className="mt-4 border-t border-grid pt-3">
+                  <Field
+                    label="支払い方法"
+                    hint={
+                      hasImportableStatement(draft.paidWith)
+                        ? `${SOURCE_LABELS[draft.paidWith]}の利用明細も取り込むと、同じ支払いが 2 件になります。取り込んだら、明細の画面で重複として片方を消してください。`
+                        : undefined
+                    }
+                  >
+                    <Select
+                      value={draft.paidWith}
+                      onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
+                      className="w-full"
+                    >
+                      {RECEIPT_PAYMENT_METHODS.map((method) => (
+                        <option key={method} value={method}>
+                          {SOURCE_LABELS[method]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+              )}
+
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Button variant="primary" onClick={() => void saveEdit()} disabled={busy || draft.total <= 0}>
+                  直した内容で保存
+                </Button>
+              </div>
+            </>
           ) : (
-            <ul className="mt-1 space-y-1">
-              {candidates.map((candidate) => (
-                <li key={candidate.txn.id}>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-plane">
-                    <input
-                      type="radio"
-                      name="candidate"
-                      checked={selectedTxnId === candidate.txn.id}
-                      onChange={() => setSelectedTxnId(candidate.txn.id)}
-                    />
-                    <span className="tnum text-xs text-muted">{candidate.txn.date.slice(5)}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{candidate.txn.rawMerchant}</span>
-                    <span className="text-xs text-muted">{candidate.reasons.join('・')}</span>
-                    <span className="tnum text-sm text-ink">{formatYen(candidate.txn.amount)}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
+            <>
+              <h3 className="mt-4 text-xs font-semibold text-ink-2">当てる明細</h3>
+              {candidates.length === 0 ? (
+                <p className="mt-1 text-sm text-ink-2">
+                  金額 {formatYen(draft.total)} に一致する明細がありません。支払い方法を選べば、そのまま明細として登録できます。
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-1">
+                  {candidates.map((candidate) => (
+                    <li key={candidate.txn.id}>
+                      <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-plane">
+                        <input
+                          type="radio"
+                          name="candidate"
+                          checked={selectedTxnId === candidate.txn.id}
+                          onChange={() => setSelectedTxnId(candidate.txn.id)}
+                        />
+                        <span className="tnum text-xs text-muted">{candidate.txn.date.slice(5)}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-ink">{candidate.txn.rawMerchant}</span>
+                        <span className="text-xs text-muted">{candidate.reasons.join('・')}</span>
+                        <span className="tnum text-sm text-ink">{formatYen(candidate.txn.amount)}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="mt-4 border-t border-grid pt-3">
+                <Field
+                  label="支払い方法"
+                  hint={
+                    hasImportableStatement(draft.paidWith)
+                      ? `${SOURCE_LABELS[draft.paidWith]}の利用明細を取り込むなら、ここでは登録せず「レシートだけ保存」して、取り込んだ明細に当ててください。両方だと二重に数えます。`
+                      : undefined
+                  }
+                >
+                  <Select
+                    value={draft.paidWith}
+                    onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
+                    className="w-full"
+                  >
+                    {RECEIPT_PAYMENT_METHODS.map((method) => (
+                      <option key={method} value={method}>
+                        {SOURCE_LABELS[method]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0}>
+                  {paymentPhrase(draft.paidWith)}として登録
+                </Button>
+                <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0}>
+                  {selectedTxnId ? '明細に当てる' : 'レシートだけ保存'}
+                </Button>
+              </div>
+            </>
           )}
-
-          <div className="mt-4 border-t border-grid pt-3">
-            <Field
-              label="支払い方法"
-              hint={
-                hasImportableStatement(draft.paidWith)
-                  ? `${SOURCE_LABELS[draft.paidWith]}の利用明細を取り込むなら、ここでは登録せず「レシートだけ保存」して、取り込んだ明細に当ててください。両方だと二重に数えます。`
-                  : undefined
-              }
-            >
-              <Select
-                value={draft.paidWith}
-                onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
-                className="w-full"
-              >
-                {RECEIPT_PAYMENT_METHODS.map((method) => (
-                  <option key={method} value={method}>
-                    {SOURCE_LABELS[method]}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
-            <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0}>
-              {paymentPhrase(draft.paidWith)}として登録
-            </Button>
-            <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0}>
-              {selectedTxnId ? '明細に当てる' : 'レシートだけ保存'}
-            </Button>
-          </div>
         </Card>
       )}
 
@@ -430,16 +550,17 @@ export function ReceiptsPage() {
               .sort((a, b) => b.date.localeCompare(a.date))
               .map((receipt) => (
                 <li key={receipt.id} className="flex items-center gap-2 py-2">
-                  <span className="tnum text-xs text-muted">{receipt.date.slice(5)}</span>
-                  <span className="min-w-0 flex-1 truncate text-sm text-ink">{receipt.storeName || '（店名なし）'}</span>
-                  <span className="text-xs text-muted">
-                    {receipt.items.length > 0
-                      ? receipt.items
-                          .slice(0, 2)
-                          .map((item) => categoryLabel(snapshot.categories, item.categoryId ?? UNCATEGORIZED_ID))
-                          .join('・')
-                      : '品目なし'}
-                  </span>
+                  {/* 行を押すと上の欄に開いて、中身を見たり直したりできる */}
+                  <button
+                    type="button"
+                    onClick={() => openReceipt(receipt)}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left hover:bg-plane"
+                    aria-label={`${receipt.date} の ${receipt.storeName || '店名なし'} のレシートを開く`}
+                  >
+                    <span className="tnum text-xs text-muted">{receipt.date.slice(5)}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{receipt.storeName || '（店名なし）'}</span>
+                    <span className="shrink-0 text-xs text-muted">{receiptCategorySummary(receipt, snapshot.categories)}</span>
+                  </button>
                   {receipt.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
                   {receipt.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[receipt.paidWith ?? 'cash']}</Badge>}
                   {receipt.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}

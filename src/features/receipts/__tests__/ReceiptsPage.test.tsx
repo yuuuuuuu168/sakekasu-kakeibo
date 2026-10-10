@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { StoreProvider } from '../../../api/store';
 import { ReceiptsPage } from '../ReceiptsPage';
@@ -22,6 +22,8 @@ describe('ReceiptsPage', () => {
   });
 
   it('支払い方法を選んで、そのまま明細として登録できる', async () => {
+    // jsdom は scrollTo を持たない
+    window.scrollTo = vi.fn() as typeof window.scrollTo;
     render(
       <StoreProvider>
         <ReceiptsPage />
@@ -56,5 +58,10 @@ describe('ReceiptsPage', () => {
     expect(await screen.findByText('Suica払いとして明細に足しました。')).toBeInTheDocument();
     expect(await screen.findByText('保存済み 1 枚')).toBeInTheDocument();
     expect(screen.getByText('Suica')).toBeInTheDocument();
+
+    // 開くと、いま作った明細がつながって見える（明細が手元の状態に入っていること）
+    fireEvent.click(screen.getByRole('button', { name: /タリーズコーヒー のレシートを開く/ }));
+    expect(screen.getByText('このレシートから作った明細')).toBeInTheDocument();
+    expect(screen.queryByText('明細が見つかりません。保存すると作り直します。')).not.toBeInTheDocument();
   });
 });
