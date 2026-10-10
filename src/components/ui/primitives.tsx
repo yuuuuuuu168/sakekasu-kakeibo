@@ -36,12 +36,16 @@ export function Button({ variant = 'ghost', size = 'md', className, ...rest }: B
   );
 }
 
+/** 幅を className で指定したときは、既定の w-full を付けない。両方あると w-full が勝ち、金額欄が横に伸びる */
+const WIDTH_CLASS = /(^|\s)w-/;
+
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...rest}
       className={cn(
-        'w-full rounded-lg bg-plane px-2.5 py-1.5 text-sm text-ink ring-1 ring-black/10 placeholder:text-muted dark:ring-white/10',
+        !WIDTH_CLASS.test(className ?? '') && 'w-full',
+        'rounded-lg bg-plane px-2.5 py-1.5 text-sm text-ink ring-1 ring-black/10 placeholder:text-muted dark:ring-white/10',
         className,
       )}
     />

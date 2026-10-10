@@ -14,12 +14,14 @@ import {
   isTransfer,
   learnRule,
   markNotDuplicate,
+  rootCategoryId,
   monthOf,
   shouldLearnRule,
   transactionsOfMonth,
   type DuplicatePair,
   type Transaction,
 } from '@kakeibo/core';
+import { CategoryOptions } from '../../components/CategoryOptions';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Select } from '../../components/ui/primitives';
 import { MonthPicker } from '../../components/ui/MonthPicker';
@@ -53,8 +55,11 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
       const suspects = new Set(misfiled.map((txn) => txn.id));
       return monthly.filter((txn) => isTransfer(txn) || suspects.has(txn.id));
     }
-    return monthly.filter((txn) => txn.splits.some((split) => split.categoryId === filter));
-  }, [snapshot.transactions, month, filter, misfiled]);
+    // 大カテゴリで絞ったときは、その下の小カテゴリの明細も出す
+    return monthly.filter((txn) =>
+      txn.splits.some((split) => split.categoryId === filter || rootCategoryId(snapshot.categories, split.categoryId) === filter),
+    );
+  }, [snapshot.transactions, snapshot.categories, month, filter, misfiled]);
 
   /**
    * 重複は月をまたぐ。月末に現金で保存したレシートと、翌月頭に計上されたカード明細が典型。
@@ -109,13 +114,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
             <option value={NEEDS_DETAIL_FILTER}>内訳待ちだけ</option>
             <option value={DUPLICATES_FILTER}>重複の可能性だけ</option>
             <option value={UNCATEGORIZED_ID}>未分類だけ</option>
-            {categories
-              .filter((category) => category.id !== UNCATEGORIZED_ID)
-              .map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.label}
-                </option>
-              ))}
+            <CategoryOptions categories={categories} exclude={[UNCATEGORIZED_ID]} />
           </Select>
           <MonthPicker month={month} onChange={setMonth} />
         </div>
@@ -178,11 +177,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                             className="text-xs"
                             aria-label="カテゴリ"
                           >
-                            {categories.map((category) => (
-                              <option key={category.id} value={category.id}>
-                                {category.label}
-                              </option>
-                            ))}
+                            <CategoryOptions categories={categories} />
                           </Select>
                         </div>
                       )}

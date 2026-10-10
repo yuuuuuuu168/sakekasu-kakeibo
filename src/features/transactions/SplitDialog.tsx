@@ -12,6 +12,7 @@ import {
   type Split,
   type Transaction,
 } from '@kakeibo/core';
+import { CategoryOptions } from '../../components/CategoryOptions';
 import { judgeReceiptItems } from '../../api/classify';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button, Input, Select } from '../../components/ui/primitives';
@@ -73,11 +74,7 @@ export function SplitDialog({
                 onChange={(event) => change(index, { categoryId: event.target.value, origin: 'manual' })}
                 className="flex-1"
               >
-                {options.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.label}
-                  </option>
-                ))}
+                <CategoryOptions categories={options} />
               </Select>
               <Input
                 type="number"

@@ -212,3 +212,12 @@ describe('TransactionsPage のカテゴリの付け替え', () => {
     expect(store.saveRules).toHaveBeenCalled();
   });
 });
+
+describe('TransactionsPage のカテゴリの絞り込み', () => {
+  it('大カテゴリで絞ると、その下の小カテゴリの明細も出る', () => {
+    load([RAMEN, AMAZON]);
+    render(<TransactionsPage month="2026-09" filter="food" />);
+    expect(screen.getByText('ラーメン太郎 品川')).toBeInTheDocument();
+    expect(screen.queryByText('AMAZON.CO.JP')).not.toBeInTheDocument();
+  });
+});
