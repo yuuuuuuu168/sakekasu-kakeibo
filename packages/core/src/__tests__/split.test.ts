@@ -105,6 +105,26 @@ describe('splitsFromReceipt', () => {
     expect(splits.every((split) => split.amount > 0)).toBe(true);
   });
 
+  it('税抜き印字のレシートでは、消費税の分だけ値引きも大きくする', () => {
+    // セブン-イレブンのレシート。品目の合計 801 円に対して支払いは 864 円（差の 63 円が消費税）
+    const receipt: Receipt = {
+      ...CONBINI_RECEIPT,
+      total: 864,
+      items: [
+        { name: 'ジョージア ブラック 500ml', amount: 169, categoryId: 'food-snacks' },
+        { name: '爽健美茶 600ml', amount: 173, categoryId: 'food-snacks' },
+        { name: '値引額', amount: -20, categoryId: 'discount' },
+        { name: 'おおきな海老マヨネーズ', amount: 268, categoryId: 'food-deli' },
+        { name: '半熟煮玉子おむすび', amount: 208, categoryId: 'food-deli' },
+        { name: 'バイオ30レジ袋中1枚', amount: 3, categoryId: 'daily' },
+      ],
+    };
+    const splits = splitsFromReceipt(receipt, 864);
+    expect(sumSplits(splits)).toBe(864);
+    // 全行を 864 / 801 倍にそろえる。値引きは -20 × 864 / 801 = -21.57…。前は大きさで配っていたので -19 になっていた
+    expect(splits.map((split) => split.amount)).toEqual([182, 187, -21, 289, 224, 3]);
+  });
+
   it('送料と同じ額の割引は配送料で相殺し、商品の額はそのまま残す', () => {
     // Amazon の注文画面。商品 3,614 + 配送料 200 - 割引 200 = 請求 3,614
     const receipt: Receipt = {
@@ -239,6 +259,29 @@ describe('不変条件', () => {
         (total, items) => {
           const receipt: Receipt = { ...CONBINI_RECEIPT, total, items };
           expect(sumSplits(splitsFromReceipt(receipt, total))).toBe(total);
+        },
+      ),
+    );
+  });
+
+  it('値引きがあっても、rebalance は内訳の合計を総額に合わせ、値引きは負のまま残す', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 1_000_000 }),
+        fc.array(fc.integer({ min: 1, max: 500_000 }), { minLength: 1, maxLength: 15 }),
+        fc.array(fc.integer({ min: -50_000, max: -1 }), { minLength: 1, maxLength: 5 }),
+        (total, goods, discounts) => {
+          const splits = [...goods, ...discounts].map((amount, index) => ({
+            id: `s${index}`,
+            amount,
+            categoryId: amount < 0 ? 'discount' : 'food',
+            origin: 'receipt' as const,
+          }));
+          const balanced = rebalance(splits, total);
+          expect(isBalanced(balanced, total)).toBe(true);
+          if (sumSplits(splits) > 0) {
+            for (const split of balanced.slice(goods.length)) expect(split.amount).toBeLessThanOrEqual(0);
+          }
         },
       ),
     );
