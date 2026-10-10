@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { classifyItem, toPaymentMethod, toYen, type SourceKind } from '@kakeibo/core';
+import { classifyItem, formatMoney, toMinor, toPaymentMethod, type Currency, type SourceKind } from '@kakeibo/core';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -94,16 +94,17 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
  * いきなり項目を埋めさせると、読めていない欄をそれらしい値で埋めてくる。
  */
 function buildPrompt(): string {
-  return `日本のレシートの写真です。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
+  return `レシートの写真です。ほとんどは日本の円のレシートで、たまに米ドルのレシートがあります。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
 
 {
   "lines": ["印字を上から 1 行ずつ書き起こしたもの"],
   "storeName": "店舗名" または null,
   "date": "YYYY-MM-DD" または null,
-  "total": 合計金額の整数 または null,
+  "currency": "JPY" | "USD",
+  "total": 合計金額 または null,
   "paymentMethod": "cash" | "paypay" | "credit" | "suica" または null,
   "items": [
-    { "name": "品目名", "amount": 金額の整数 または null, "quantity": 個数 }
+    { "name": "品目名", "amount": 金額 または null, "quantity": 個数 }
   ]
 }
 
@@ -114,12 +115,13 @@ function buildPrompt(): string {
 - 半角カナは全角カタカナに直す。濁点・半濁点が別の文字に分かれて印字されていても 1 文字にまとめる（ｸﾞ → グ、ﾊﾟ → パ）
 
 決まり。
-- 金額は円の整数。カンマや円記号を含めない
+- currency は印字の通貨。$ や USD の印字があれば USD、それ以外は JPY
+- 金額は印字の通貨のまま数で書く。円は整数、ドルはセントまでの小数（$12.34 は 12.34）。カンマや通貨記号を含めない
 - 値引き・割引・セット割・クーポン・ポイント値引きは負の金額の品目として入れる。「-¥100」「▲100」「△100」「100-」はどれも -100
-- 小計・合計・お預り・お釣り・消費税・対象額・点数・支払方法（交通系・クレジット等）は items に入れない
-- total は「合計」の金額。「小計」「お預り」「対象」ではない
+- 小計・合計・お預り・お釣り・消費税・対象額・点数・支払方法（交通系・クレジット等）は items に入れない。ドルのレシートの Subtotal・Tax・Tip・Change も同じ
+- total は「合計」（Total）の金額。「小計」「お預り」「対象」ではない
 - 店舗名はチェーン名と店名をつなげる（例: タリーズコーヒー 横浜駅店）
-- 日付は取引日。キャンペーンや有効期限の日付と取り違えない
+- 日付は取引日。キャンペーンや有効期限の日付と取り違えない。ドルのレシートの 10/03/2026 のような日付は月/日/年
 - paymentMethod は支払いの行から決める。お預り・現計は cash、PayPay は paypay、
   クレジット・カード・VISA などは credit、交通系・Suica・PASMO・ICOCA などの交通系 IC は suica。
   支払いの印字が無い、またはこの 4 つのどれでもない（他の QR 決済・電子マネー・商品券など）なら null
@@ -170,12 +172,26 @@ type DraftItem = { name: string; amount: number; quantity?: number; categoryId: 
 export function normalizeDraft(
   text: string,
   today: Date = new Date(),
-): { storeName: string; date: string; total: number; items: DraftItem[]; paymentMethod?: SourceKind; warnings: string[] } {
+): {
+  storeName: string;
+  date: string;
+  total: number;
+  items: DraftItem[];
+  /** ドルのときだけ入る。total と品目の amount はセント */
+  currency?: Currency;
+  paymentMethod?: SourceKind;
+  warnings: string[];
+} {
   const warnings: string[] = [];
   const parsed = extractJson(text);
   if (!parsed) {
     return { storeName: '', date: '', total: 0, items: [], warnings: ['レシートを読み取れませんでした。手で入れてください。'] };
   }
+
+  // 金額は印字の通貨の最小単位（円、セント）の整数に直す。小数のドルを持ち込まない
+  const currency: Currency = parsed.currency === 'USD' ? 'USD' : 'JPY';
+  const toAmount = (value: number) => toMinor(value, currency);
+  const money = (value: number) => formatMoney(value, currency);
 
   let unreadable = 0;
   const items = (Array.isArray(parsed.items) ? (parsed.items as RawItem[]) : [])
@@ -186,24 +202,24 @@ export function normalizeDraft(
       if (name === '' || amount === undefined) return undefined;
       return {
         name,
-        amount: toYen(amount),
+        amount: toAmount(amount),
         ...(toNumber(item.quantity) !== undefined ? { quantity: toNumber(item.quantity) } : {}),
-        categoryId: classifyItem(name, undefined, toYen(amount)),
+        categoryId: classifyItem(name, undefined, toAmount(amount)),
       };
     })
     .filter((item): item is DraftItem => item !== undefined);
   if (unreadable > 0) warnings.push(`金額を読めなかった品目が ${unreadable} 件あります。手で足してください。`);
 
   const rawTotal = toNumber(parsed.total);
-  const total = rawTotal === undefined ? undefined : toYen(rawTotal);
+  const total = rawTotal === undefined ? undefined : toAmount(rawTotal);
 
   const flipped = total === undefined ? undefined : flipDiscount(items, total);
-  if (flipped) warnings.push(`「${flipped.name}」を値引き（${flipped.amount} 円）として入れました。違っていたら直してください。`);
+  if (flipped) warnings.push(`「${flipped.name}」を値引き（${money(flipped.amount)}）として入れました。違っていたら直してください。`);
 
   const itemsTotal = items.reduce((sum, item) => sum + item.amount, 0);
   if (total === undefined) warnings.push('合計を読み取れませんでした。入れ直してください。');
   else if (items.length > 0 && Math.abs(total - itemsTotal) > Math.max(50, Math.round(total * 0.1))) {
-    warnings.push(`品目の合計（${itemsTotal} 円）が合計（${total} 円）と離れています。読み落としがあるかもしれません。`);
+    warnings.push(`品目の合計（${money(itemsTotal)}）が合計（${money(total)}）と離れています。読み落としがあるかもしれません。`);
   }
   if (items.length === 0) warnings.push('品目を読み取れませんでした。手で足してください。');
 
@@ -219,7 +235,17 @@ export function normalizeDraft(
 
   const paymentMethod = toPaymentMethod(parsed.paymentMethod);
 
-  return { storeName, date, total: total ?? itemsTotal, items, ...(paymentMethod ? { paymentMethod } : {}), warnings };
+  if (currency === 'USD') warnings.push('ドルのレシートとして読みました。円に直すレートを確かめてください。');
+
+  return {
+    storeName,
+    date,
+    total: total ?? itemsTotal,
+    items,
+    ...(currency === 'USD' ? { currency } : {}),
+    ...(paymentMethod ? { paymentMethod } : {}),
+    warnings,
+  };
 }
 
 /**
@@ -265,7 +291,7 @@ function extractJson(text: string): Record<string, unknown> | undefined {
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
-    const cleaned = value.replace(/[,¥円\s]/g, '');
+    const cleaned = value.replace(/[,¥円$\s]/g, '').replace(/^USD/i, '');
     const parsed = Number(cleaned);
     if (Number.isFinite(parsed)) return parsed;
   }

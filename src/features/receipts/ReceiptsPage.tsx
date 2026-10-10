@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
+  CURRENCIES,
+  CURRENCY_LABELS,
   RECEIPT_PAYMENT_METHODS,
   SOURCE_LABELS,
   UNCATEGORIZED_ID,
@@ -8,15 +10,25 @@ import {
   applyReceipt,
   autoMatch,
   classifyItem,
+  convertDisplayed,
   duplicateKey,
   findCandidates,
   findDuplicateReceipts,
+  formatMoney,
   formatYen,
+  fromMinor,
   hasImportableStatement,
+  impliedRate,
+  latestUsdRate,
   learnItemRules,
   linkedTransaction,
   receiptCategorySummary,
+  receiptCurrency,
+  receiptYenTotal,
+  toMinor,
   transactionFromReceipt,
+  usableRate,
+  type Currency,
   type MatchCandidate,
   type Receipt,
   type ReceiptItem,
@@ -36,8 +48,12 @@ type Draft = {
   id: string;
   storeName: string;
   date: string;
+  /** 合計と品目の金額は currency の最小単位（円、セント） */
   total: number;
   items: DraftItem[];
+  currency: Currency;
+  /** ドルのときの 1 ドルの円。円のときは使わない */
+  exchangeRate?: number;
   imageKey?: string;
   /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
   paidWith: SourceKind;
@@ -63,9 +79,26 @@ function draftFromReceipt(receipt: Receipt): Draft {
     date: receipt.date,
     total: receipt.total,
     items: receipt.items,
+    currency: receiptCurrency(receipt),
+    ...(receipt.exchangeRate !== undefined ? { exchangeRate: receipt.exchangeRate } : {}),
     ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
     paidWith: receipt.paidWith ?? 'cash',
   };
+}
+
+/**
+ * 下書きから、レシートに保存する通貨の欄を作る。円なら何も持たせない（これまでのレシートと同じ形）。
+ * `paidYen` は当てた明細の請求額。渡すと、そこから割り戻した実際のレートを残す。
+ */
+function currencyFields(draft: Draft, paidYen?: number): Pick<Receipt, 'currency' | 'exchangeRate'> {
+  if (draft.currency === 'JPY') return {};
+  const rate = (paidYen !== undefined ? impliedRate(paidYen, draft.total) : undefined) ?? usableRate(draft.exchangeRate);
+  return { currency: draft.currency, ...(rate !== undefined ? { exchangeRate: rate } : {}) };
+}
+
+/** 円に直せない下書き（ドルなのにレートが無い）。明細を作れない */
+function lacksRate(draft: Draft): boolean {
+  return draft.currency !== 'JPY' && usableRate(draft.exchangeRate) === undefined;
 }
 
 /** 登録ボタンの文言と、登録後の知らせに使う。「不明払い」とは言わないので分けている */
@@ -81,7 +114,7 @@ function paymentPhrase(method: SourceKind): string {
 const READABLE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 function emptyDraft(): Draft {
-  return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [], paidWith: 'cash' };
+  return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [], currency: 'JPY', paidWith: 'cash' };
 }
 
 /**
@@ -153,6 +186,8 @@ export function ReceiptsPage() {
         date: result.date || todayIso(),
         total: result.total,
         items: judged.items,
+        currency: result.currency ?? 'JPY',
+        ...(result.currency === 'USD' ? { exchangeRate: latestUsdRate(snapshot.receipts) } : {}),
         imageKey: target.key,
         paidWith: result.paymentMethod ?? 'cash',
         ...(warnings.length > 0 ? { warnings } : {}),
@@ -179,9 +214,11 @@ export function ReceiptsPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      const { paidWith, ...rest } = draft;
+      const { paidWith, currency: _currency, exchangeRate: _rate, ...rest } = draft;
+      const selected = selectedTxnId && !asPayment ? snapshot.transactions.find((item) => item.id === selectedTxnId) : undefined;
       const receipt: Receipt = {
         ...rest,
+        ...currencyFields(draft, selected?.amount),
         items: toReceiptItems(draft.items),
         status: asPayment ? 'cash' : selectedTxnId ? 'matched' : 'pending',
         ...(asPayment ? { paidWith } : {}),
@@ -196,9 +233,8 @@ export function ReceiptsPage() {
         await saveTransactions([transactionFromReceipt(receipt, paidWith)]);
         setMessage(`${paymentPhrase(paidWith)}として明細に足しました。${learned}`);
       } else if (selectedTxnId) {
-        const txn = snapshot.transactions.find((item) => item.id === selectedTxnId);
-        if (txn) {
-          await saveTransaction(applyReceipt(txn, receipt));
+        if (selected) {
+          await saveTransaction(applyReceipt(selected, receipt));
           setMessage(`明細に当てました。内訳が品目ごとに分かれています。${learned}`);
         }
       } else {
@@ -248,10 +284,13 @@ export function ReceiptsPage() {
     if (!draft || !editing) return;
     setBusy(true);
     try {
-      const { paidWith, warnings: _warnings, ...rest } = draft;
+      const { paidWith, warnings: _warnings, currency: _currency, exchangeRate: _rate, ...rest } = draft;
+      // 円に戻したときにドルの欄が残らないよう、開いた時点の通貨の欄は外してから載せ直す
+      const { currency: _was, exchangeRate: _wasRate, ...base } = editing;
       const receipt: Receipt = {
-        ...editing,
+        ...base,
         ...rest,
+        ...currencyFields(draft, editing.status === 'matched' ? linked?.amount : undefined),
         items: toReceiptItems(draft.items),
         ...(editing.status === 'cash' ? { paidWith } : {}),
       };
@@ -284,6 +323,25 @@ export function ReceiptsPage() {
   }
 
   const itemsTotal = draft?.items.reduce((sum, item) => sum + item.amount, 0) ?? 0;
+  const money = (amount: number) => formatMoney(amount, draft?.currency ?? 'JPY');
+  /** 下書きの合計を円に直した額。ドルのときだけ添える */
+  const yenHint =
+    draft && draft.currency !== 'JPY' && !lacksRate(draft)
+      ? `約 ${formatYen(receiptYenTotal(draft))}`
+      : undefined;
+
+  /** 通貨を切り替える。画面に見えている数はそのままにする（OCR が通貨を取り違えたとき用） */
+  function changeCurrency(next: Currency) {
+    if (!draft || draft.currency === next) return;
+    const convert = (amount: number) => convertDisplayed(amount, draft.currency, next);
+    setDraft({
+      ...draft,
+      currency: next,
+      total: convert(draft.total),
+      items: draft.items.map((item) => ({ ...item, amount: convert(item.amount) })),
+      ...(next === 'USD' && usableRate(draft.exchangeRate) === undefined ? { exchangeRate: latestUsdRate(snapshot.receipts) } : {}),
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -350,16 +408,57 @@ export function ReceiptsPage() {
             <Field label="日付">
               <Input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} />
             </Field>
-            <Field label="合計" hint={itemsTotal !== draft.total ? `品目の合計は ${formatYen(itemsTotal)}` : undefined}>
-              <Input
-                type="number"
-                inputMode="numeric"
-                value={draft.total}
-                onChange={(event) => setDraft({ ...draft, total: Math.round(Number(event.target.value) || 0) })}
-                className="tnum text-right"
-              />
-            </Field>
+            {/* 1 つの label に 2 つの入力を入れると、ラベルを押したときに通貨の側へ行ってしまう */}
+            <div className="flex gap-1.5">
+              <div className="w-[4.5rem] shrink-0">
+                <Field label="通貨">
+                  <Select
+                    value={draft.currency}
+                    onChange={(event) => changeCurrency(event.target.value as Currency)}
+                    className="w-full"
+                  >
+                    {CURRENCIES.map((currency) => (
+                      <option key={currency} value={currency}>
+                        {CURRENCY_LABELS[currency]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <div className="min-w-0 flex-1">
+                <Field label="合計" hint={itemsTotal !== draft.total ? `品目の合計は ${money(itemsTotal)}` : yenHint}>
+                  <MoneyInput amount={draft.total} currency={draft.currency} onChange={(total) => setDraft({ ...draft, total })} className="w-full" />
+                </Field>
+              </div>
+            </div>
           </div>
+
+          {draft.currency !== 'JPY' && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <Field
+                label="1 ドルの円"
+                hint={
+                  lacksRate(draft)
+                    ? 'レートを入れてください'
+                    : itemsTotal !== draft.total
+                      ? yenHint
+                      : '明細に当てると、請求額から実際のレートに置き換えます'
+                }
+              >
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={draft.exchangeRate ?? ''}
+                  onChange={(event) => {
+                    const rate = Number(event.target.value);
+                    setDraft({ ...draft, exchangeRate: event.target.value === '' || !Number.isFinite(rate) ? undefined : rate });
+                  }}
+                  className="tnum text-right"
+                />
+              </Field>
+            </div>
+          )}
 
           <h3 className="mt-4 text-xs font-semibold text-ink-2">品目</h3>
           <ul className="mt-1 space-y-2">
@@ -391,19 +490,16 @@ export function ReceiptsPage() {
                   className="min-w-0 flex-1"
                   aria-label="品目名"
                 />
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  value={item.amount}
-                  onChange={(event) =>
+                <MoneyInput
+                  amount={item.amount}
+                  currency={draft.currency}
+                  onChange={(amount) =>
                     setDraft({
                       ...draft,
-                      items: draft.items.map((row, position) =>
-                        position === index ? { ...row, amount: Math.round(Number(event.target.value) || 0) } : row,
-                      ),
+                      items: draft.items.map((row, position) => (position === index ? { ...row, amount } : row)),
                     })
                   }
-                  className="tnum w-[4.5rem] shrink-0 text-right"
+                  className="w-[4.5rem] shrink-0"
                   aria-label="金額"
                 />
                 <button
@@ -475,7 +571,11 @@ export function ReceiptsPage() {
               )}
 
               <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button variant="primary" onClick={() => void saveEdit()} disabled={busy || draft.total <= 0}>
+                <Button
+                  variant="primary"
+                  onClick={() => void saveEdit()}
+                  disabled={busy || draft.total <= 0 || (editing.status === 'cash' && lacksRate(draft))}
+                >
                   直した内容で保存
                 </Button>
               </div>
@@ -485,7 +585,10 @@ export function ReceiptsPage() {
               <h3 className="mt-4 text-xs font-semibold text-ink-2">当てる明細</h3>
               {candidates.length === 0 ? (
                 <p className="mt-1 text-sm text-ink-2">
-                  金額 {formatYen(draft.total)} に一致する明細がありません。支払い方法を選べば、そのまま明細として登録できます。
+                  {draft.currency === 'JPY'
+                    ? `金額 ${formatYen(draft.total)} に一致する明細がありません。`
+                    : `${money(draft.total)}${yenHint ? `（${yenHint}）` : ''} に近い明細がありません。`}
+                  支払い方法を選べば、そのまま明細として登録できます。
                 </p>
               ) : (
                 <ul className="mt-1 space-y-1">
@@ -532,7 +635,7 @@ export function ReceiptsPage() {
               </div>
 
               <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0}>
+                <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0 || lacksRate(draft)}>
                   {paymentPhrase(draft.paidWith)}として登録
                 </Button>
                 <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0}>
@@ -564,7 +667,7 @@ export function ReceiptsPage() {
                       {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
                       {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
                       {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                      <span className="tnum text-sm font-semibold text-ink">{formatYen(item.total)}</span>
+                      <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -609,7 +712,7 @@ export function ReceiptsPage() {
                   {receipt.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
                   {receipt.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[receipt.paidWith ?? 'cash']}</Badge>}
                   {receipt.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                  <span className="tnum text-sm font-medium text-ink">{formatYen(receipt.total)}</span>
+                  <span className="tnum text-sm font-medium text-ink">{formatMoney(receipt.total, receiptCurrency(receipt))}</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -626,5 +729,36 @@ export function ReceiptsPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * 金額の入力欄。保存は最小単位の整数（円、セント）で、見せるのはその通貨の数（12.34 ドル）。
+ * ドルは小数を打てるように step と inputMode を変える。
+ */
+function MoneyInput({
+  amount,
+  currency,
+  onChange,
+  className,
+  ...rest
+}: {
+  amount: number;
+  currency: Currency;
+  onChange: (amount: number) => void;
+  className?: string;
+  'aria-label'?: string;
+}) {
+  const decimal = currency !== 'JPY';
+  return (
+    <Input
+      type="number"
+      inputMode={decimal ? 'decimal' : 'numeric'}
+      step={decimal ? '0.01' : '1'}
+      value={fromMinor(amount, currency)}
+      onChange={(event) => onChange(toMinor(Number(event.target.value) || 0, currency))}
+      className={`tnum text-right ${className ?? ''}`}
+      {...rest}
+    />
   );
 }

@@ -1,4 +1,5 @@
 import { DISCOUNT_ID, SHIPPING_ID, UNCATEGORIZED_ID } from '../categories';
+import { foreignOf } from '../currency';
 import { classifyItem } from './items';
 import type { Receipt, Split, Transaction } from '../types';
 
@@ -150,13 +151,19 @@ function settleShippingDiscounts(splits: Split[]): Split[] {
   });
 }
 
-/** レシートを明細に紐付ける。内訳が確定するので needsDetail は下ろす */
+/**
+ * レシートを明細に紐付ける。内訳が確定するので needsDetail は下ろす。
+ * ドルのレシートでも内訳は明細の円の請求額で作る（品目のセントの比で円を配る）。
+ */
 export function applyReceipt(txn: Transaction, receipt: Receipt): Transaction {
+  const { foreign: _previous, ...rest } = txn;
+  const foreign = foreignOf(receipt);
   return {
-    ...txn,
+    ...rest,
     splits: splitsFromReceipt(receipt, txn.amount),
     needsDetail: false,
     receiptId: receipt.id,
+    ...(foreign ? { foreign } : {}),
   };
 }
 

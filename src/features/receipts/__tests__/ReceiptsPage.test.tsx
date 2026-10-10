@@ -65,6 +65,34 @@ describe('ReceiptsPage', () => {
     expect(screen.queryByText('明細が見つかりません。保存すると作り直します。')).not.toBeInTheDocument();
   });
 
+  it('ドルのレシートは、レートで円に直して明細にする', async () => {
+    window.scrollTo = vi.fn() as typeof window.scrollTo;
+    render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '手で入れる' }));
+    fireEvent.change(screen.getByLabelText('店名'), { target: { value: 'Starbucks' } });
+    fireEvent.change(screen.getByLabelText('通貨'), { target: { value: 'USD' } });
+    fireEvent.change(screen.getByLabelText(/^合計/), { target: { value: '12.34' } });
+
+    // 既定のレートが入り、円に直した額が見える
+    expect(screen.getByLabelText(/^1 ドルの円/)).toHaveValue(150);
+    expect(screen.getByText('約 ¥1,851')).toBeInTheDocument();
+
+    // レートを消すと円に直せないので、明細にはできない
+    fireEvent.change(screen.getByLabelText(/^1 ドルの円/), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '現金払いとして登録' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^1 ドルの円/), { target: { value: '155' } });
+    fireEvent.click(screen.getByRole('button', { name: '現金払いとして登録' }));
+
+    expect(await screen.findByText('現金払いとして明細に足しました。')).toBeInTheDocument();
+    // 保存済みの一覧にはドルのまま出す
+    expect(screen.getByText('$12.34')).toBeInTheDocument();
+  });
+
   it('品目のカテゴリを選び直して保存すると、その品目を覚える', async () => {
     window.scrollTo = vi.fn() as typeof window.scrollTo;
     render(

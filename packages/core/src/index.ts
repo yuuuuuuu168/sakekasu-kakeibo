@@ -1,5 +1,6 @@
 export * from './types';
 export * from './money';
+export * from './currency';
 export * from './date';
 export * from './hash';
 export * from './merchant';

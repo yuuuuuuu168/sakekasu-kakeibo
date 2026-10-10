@@ -156,11 +156,13 @@ function sameItems(a: Receipt, b: Receipt): boolean {
  */
 export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair[] {
   const alive = receipts.filter((receipt) => receipt.status !== 'discarded');
-  const byTotal = new Map<number, Receipt[]>();
+  // 通貨も鍵に入れる。1,200 円と 12.00 ドル（1200 セント）を同じ合計と見ない
+  const byTotal = new Map<string, Receipt[]>();
   for (const receipt of alive) {
-    const bucket = byTotal.get(receipt.total);
+    const key = `${receipt.currency ?? 'JPY'}:${receipt.total}`;
+    const bucket = byTotal.get(key);
     if (bucket) bucket.push(receipt);
-    else byTotal.set(receipt.total, [receipt]);
+    else byTotal.set(key, [receipt]);
   }
 
   const pairs: DuplicateReceiptPair[] = [];
