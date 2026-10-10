@@ -1,4 +1,5 @@
 import { UNCATEGORIZED_ID, categoryLabel } from '../categories';
+import { foreignOf, receiptYenTotal } from '../currency';
 import { SOURCE_LABELS } from '../payment';
 import { transactionId } from '../statement/normalize';
 import type { Category, Receipt, SourceKind, Transaction } from '../types';
@@ -10,20 +11,26 @@ import { splitsFromReceipt } from './split';
  * `existing` は、保存済みのレシートを直したときの、前に作った明細。渡すと ID と
  * メモ・「重複ではない」の印を引き継いで中身だけ差し替える。ID は内容から作るので、
  * 作り直すと日付や金額を直しただけで別の明細になり、前の明細が残って二重になる。
+ *
+ * ドルのレシートは、レシートのレート（exchangeRate）で円に直した額を明細の金額にする。
  */
 export function transactionFromReceipt(receipt: Receipt, paidWith: SourceKind, existing?: Transaction): Transaction {
+  const { foreign: _previous, ...base } = existing ?? {};
+  const amount = receiptYenTotal(receipt);
+  const foreign = foreignOf(receipt);
   return {
-    ...existing,
-    id: existing?.id ?? transactionId(paidWith, receipt.date, receipt.total, receipt.storeName),
+    ...base,
+    id: existing?.id ?? transactionId(paidWith, receipt.date, amount, receipt.storeName),
     date: receipt.date,
-    amount: receipt.total,
+    amount,
     rawMerchant: receipt.storeName,
     merchant: receipt.storeName,
     source: paidWith,
     sourceLabel: SOURCE_LABELS[paidWith],
-    splits: splitsFromReceipt(receipt, receipt.total),
+    splits: splitsFromReceipt(receipt, amount),
     needsDetail: false,
     receiptId: receipt.id,
+    ...(foreign ? { foreign } : {}),
   };
 }
 

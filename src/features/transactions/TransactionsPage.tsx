@@ -10,6 +10,7 @@ import {
   duplicateKey,
   findDuplicates,
   findMisfiledTransfers,
+  formatMoney,
   formatYen,
   isTransfer,
   learnRule,
@@ -220,6 +221,9 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
 
                     <div className="flex shrink-0 flex-col items-end gap-1.5">
                       <span className="tnum text-sm font-semibold text-ink">{formatYen(txn.amount)}</span>
+                      {txn.foreign && (
+                        <span className="tnum -mt-1 text-xs text-muted">{formatMoney(txn.foreign.amount, txn.foreign.currency)}</span>
+                      )}
                       <div className="flex gap-1">
                         <button
                           type="button"

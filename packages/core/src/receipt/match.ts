@@ -1,3 +1,4 @@
+import { FOREIGN_AMOUNT_TOLERANCE, receiptCurrency, receiptYenTotal } from '../currency';
 import { diffDays } from '../date';
 import { merchantSimilarity } from '../merchant';
 import type { Receipt, Transaction } from '../types';
@@ -49,14 +50,28 @@ export function scoreCandidate(receipt: Receipt, txn: Transaction): MatchCandida
 /**
  * 候補を探す。合計金額が一致し、日付が MAX_DATE_GAP 以内のものだけを返す。
  * 金額の一致を必須にしているのは、家計簿で一番信用できる手がかりだから。
+ *
+ * ドルのレシートは円の請求額とぴったりは合わない（カード会社のレートと手数料で決まる）。
+ * レシートのレートで円に直した額から FOREIGN_AMOUNT_TOLERANCE 以内を候補にし、理由に「換算で近い」と出す。
  */
 export function findCandidates(receipt: Receipt, transactions: Transaction[]): MatchCandidate[] {
+  const amountMatches = amountMatcher(receipt);
   return transactions
-    .filter((txn) => txn.amount === receipt.total)
+    .filter((txn) => amountMatches(txn.amount))
     .filter((txn) => Math.abs(diffDays(txn.date, receipt.date)) <= MAX_DATE_GAP)
     .filter((txn) => txn.receiptId === undefined || txn.receiptId === receipt.id)
-    .map((txn) => scoreCandidate(receipt, txn))
+    .map((txn) => {
+      const candidate = scoreCandidate(receipt, txn);
+      return receiptCurrency(receipt) === 'JPY' ? candidate : { ...candidate, reasons: ['換算で近い', ...candidate.reasons] };
+    })
     .sort((a, b) => b.score - a.score);
+}
+
+function amountMatcher(receipt: Receipt): (amount: number) => boolean {
+  if (receiptCurrency(receipt) === 'JPY') return (amount) => amount === receipt.total;
+  const estimate = receiptYenTotal(receipt);
+  const tolerance = Math.max(1, Math.round(estimate * FOREIGN_AMOUNT_TOLERANCE));
+  return (amount) => amount > 0 && Math.abs(amount - estimate) <= tolerance;
 }
 
 /** 迷いの無い候補が 1 件だけのときに限って自動で紐付ける。同点が並んだら人間に選ばせる */

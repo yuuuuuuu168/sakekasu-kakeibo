@@ -4,6 +4,15 @@
  */
 export type SourceKind = 'credit' | 'paypay' | 'suica' | 'cash' | 'unknown' | 'manual';
 
+/** 支払いの通貨。家計簿の集計は円だけで、ドルはレシートと明細の控えにだけ現れる（currency.ts） */
+export type Currency = 'JPY' | 'USD';
+
+/** ドルで払った明細の、もとの金額。amount はセント（最小単位）の整数 */
+export type ForeignAmount = {
+  currency: Currency;
+  amount: number;
+};
+
 export type Category = {
   id: string;
   label: string;
@@ -59,6 +68,8 @@ export type Transaction = {
    * 確かめたのはこの 1 件だけで、同じ店の次の支払いまでは信用しない（unverified.ts）
    */
   confirmed?: boolean;
+  /** ドルで払ったもの。amount は円に直した額で、こちらはレシートに印字されていた額の控え */
+  foreign?: ForeignAmount;
 };
 
 export type MatchType = 'contains' | 'equals' | 'startsWith' | 'regex';
@@ -98,8 +109,16 @@ export type Receipt = {
   storeName: string;
   /** YYYY-MM-DD */
   date: string;
+  /** 印字の合計。currency の最小単位の整数（円なら円、ドルならセント）。品目の amount も同じ */
   total: number;
   items: ReceiptItem[];
+  /** 無ければ円。これまでのレシートはすべて円 */
+  currency?: Currency;
+  /**
+   * ドルのとき、1 ドル何円で円に直すか。明細に当てたら請求額から割り戻した実際のレートが入る。
+   * レシートから明細を作るときは、この値で円の金額を決める
+   */
+  exchangeRate?: number;
   imageKey?: string;
   /** 紐付いた明細の ID */
   txnId?: string;

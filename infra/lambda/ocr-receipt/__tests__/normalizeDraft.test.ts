@@ -143,6 +143,36 @@ describe('normalizeDraft の支払い方法', () => {
   });
 });
 
+describe('normalizeDraft（ドルのレシート）', () => {
+  const today = new Date('2026-10-05T12:00:00+09:00');
+
+  it('ドルの金額はセントの整数に直し、通貨を返す', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"Starbucks","date":"2026-10-03","currency":"USD","total":12.34,"items":[{"name":"Latte","amount":5.95},{"name":"Croissant","amount":"$5.25"}]}',
+      today,
+    );
+    expect(draft.currency).toBe('USD');
+    expect(draft.total).toBe(1234);
+    expect(draft.items.map((item) => item.amount)).toEqual([595, 525]);
+    expect(draft.warnings).toContain('ドルのレシートとして読みました。円に直すレートを確かめてください。');
+  });
+
+  it('値引きの読み違いもセントで直し、ドルで知らせる', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"Store","date":"2026-10-03","currency":"USD","total":9.50,"items":[{"name":"Item","amount":10.00},{"name":"Coupon","amount":0.50}]}',
+      today,
+    );
+    expect(draft.items.map((item) => item.amount)).toEqual([1000, -50]);
+    expect(draft.warnings).toContain('「Coupon」を値引き（-$0.50）として入れました。違っていたら直してください。');
+  });
+
+  it('通貨が無い、または JPY なら円として扱い、currency を持たない', () => {
+    const draft = normalizeDraft('{"storeName":"店","date":"2026-10-03","total":1200,"items":[{"name":"おにぎり","amount":150}]}', today);
+    expect(draft).not.toHaveProperty('currency');
+    expect(draft.total).toBe(1200);
+  });
+});
+
 describe('sniffMediaType', () => {
   it('中身のバイト列から形式を決める', () => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
