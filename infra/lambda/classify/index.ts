@@ -4,6 +4,7 @@ import {
   childChoiceSpecs,
   decideVerdicts,
   parentChoiceSpecs,
+  summarizeVerdicts,
   type Category,
   type ChoiceAnswer,
   type ChoiceSpec,
@@ -73,7 +74,10 @@ export async function handler(
   if (!target) return json(400, { message: '判定する対象とカテゴリが要ります' });
 
   try {
-    return json(200, { verdicts: await classify(target) });
+    const verdicts = await classify(target);
+    // 確信度の線がどう効いているかを後から数えるため。中身（品目名・店舗名）は出さない
+    console.info('[classify] 判定', { 種類: target.kind, ...summarizeVerdicts(verdicts) });
+    return json(200, { verdicts });
   } catch (cause) {
     /*
      * 外に返すのは固定の文言だけにする。鍵が入っていないときの例外には

@@ -64,4 +64,22 @@ describe('ReceiptsPage', () => {
     expect(screen.getByText('このレシートから作った明細')).toBeInTheDocument();
     expect(screen.queryByText('明細が見つかりません。保存すると作り直します。')).not.toBeInTheDocument();
   });
+
+  it('品目のカテゴリを選び直して保存すると、その品目を覚える', async () => {
+    window.scrollTo = vi.fn() as typeof window.scrollTo;
+    render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '手で入れる' }));
+    fireEvent.change(screen.getByLabelText('合計'), { target: { value: '510' } });
+    fireEvent.click(screen.getByRole('button', { name: /品目を足す/ }));
+    fireEvent.change(screen.getByLabelText('品目名'), { target: { value: 'アイスGコーヒー' } });
+    fireEvent.change(screen.getByLabelText('金額'), { target: { value: '510' } });
+    fireEvent.change(screen.getByLabelText('カテゴリ'), { target: { value: 'food-cafe' } });
+    fireEvent.click(screen.getByRole('button', { name: 'レシートだけ保存' }));
+
+    expect(await screen.findByText(/直したカテゴリを 1 品目ぶん覚えました/)).toBeInTheDocument();
+  });
 });

@@ -13,6 +13,7 @@ import {
   findDuplicateReceipts,
   formatYen,
   hasImportableStatement,
+  learnItemRules,
   linkedTransaction,
   receiptCategorySummary,
   transactionFromReceipt,
@@ -35,12 +36,23 @@ type Draft = {
   storeName: string;
   date: string;
   total: number;
-  items: ReceiptItem[];
+  items: DraftItem[];
   imageKey?: string;
   /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
   paidWith: SourceKind;
   warnings?: string[];
 };
+
+/**
+ * 下書きの品目。categoryEdited は人がカテゴリを選び直した印で、保存するときに
+ * その品目名とカテゴリを覚える（learnItemRules）。レシートには残さない。
+ */
+type DraftItem = ReceiptItem & { categoryEdited?: boolean };
+
+/** 下書きの品目から、保存する品目を作る。覚えるための印を落とす */
+function toReceiptItems(items: DraftItem[]): ReceiptItem[] {
+  return items.map(({ categoryEdited: _edited, ...item }) => item);
+}
 
 /** 保存済みのレシートを直すときの下書き。読み取り結果と同じ欄に載せる */
 function draftFromReceipt(receipt: Receipt): Draft {
@@ -76,7 +88,7 @@ function emptyDraft(): Draft {
  * 写真 → OCR → 品目ごとのカテゴリ → 金額と日付で明細に自動マッチ、までを 1 画面で済ませる。
  */
 export function ReceiptsPage() {
-  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions } = useStore();
+  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, saveRules } = useStore();
   const cameraRef = useRef<HTMLInputElement>(null);
   // 撮るのとは別の入力にする。capture を付けるとスマホはカメラしか開かず、撮り溜めた写真を選べない
   const libraryRef = useRef<HTMLInputElement>(null);
@@ -121,7 +133,7 @@ export function ReceiptsPage() {
       // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
       // 判定が届かなければキーワード表の答えがそのまま残る
       const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId) }));
-      const judged = await judgeReceiptItems(read, result.storeName, snapshot.categories);
+      const judged = await judgeReceiptItems(read, result.storeName, snapshot.categories, snapshot.rules);
       const warnings = [...(result.warnings ?? []), ...judged.warnings];
 
       const next: Draft = {
@@ -155,26 +167,27 @@ export function ReceiptsPage() {
       const { paidWith, ...rest } = draft;
       const receipt: Receipt = {
         ...rest,
-        items: draft.items,
+        items: toReceiptItems(draft.items),
         status: asPayment ? 'cash' : selectedTxnId ? 'matched' : 'pending',
         ...(asPayment ? { paidWith } : {}),
         ...(selectedTxnId && !asPayment ? { txnId: selectedTxnId } : {}),
         createdAt: editing?.createdAt ?? new Date().toISOString(),
       };
       await saveReceipt(receipt);
+      const learned = await learnFromDraft(draft.items);
 
       if (asPayment) {
         // 新しい明細なので saveTransactions で足す。saveTransaction は既にある明細の差し替えにしか効かない
         await saveTransactions([transactionFromReceipt(receipt, paidWith)]);
-        setMessage(`${paymentPhrase(paidWith)}として明細に足しました。`);
+        setMessage(`${paymentPhrase(paidWith)}として明細に足しました。${learned}`);
       } else if (selectedTxnId) {
         const txn = snapshot.transactions.find((item) => item.id === selectedTxnId);
         if (txn) {
           await saveTransaction(applyReceipt(txn, receipt));
-          setMessage('明細に当てました。内訳が品目ごとに分かれています。');
+          setMessage(`明細に当てました。内訳が品目ごとに分かれています。${learned}`);
         }
       } else {
-        setMessage('レシートだけ保存しました。対応する明細を取り込んだら、もう一度開いて当ててください。');
+        setMessage(`レシートだけ保存しました。対応する明細を取り込んだら、もう一度開いて当ててください。${learned}`);
       }
 
       closeDraft();
@@ -183,6 +196,18 @@ export function ReceiptsPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * 人がカテゴリを選び直した品目を覚える。次に同じ名前の品目を読んだら、判定に聞かずにこのカテゴリにする。
+   * 返すのは保存後の知らせに足す一文（覚えたものが無ければ空）。
+   */
+  async function learnFromDraft(items: DraftItem[]): Promise<string> {
+    const learned = learnItemRules(items);
+    if (learned.length === 0) return '';
+    const ids = new Set(learned.map((rule) => rule.id));
+    await saveRules([...snapshot.rules.filter((rule) => !ids.has(rule.id)), ...learned]);
+    return `直したカテゴリを ${learned.length} 品目ぶん覚えました。次から同じ品目に当てます。`;
   }
 
   function openReceipt(receipt: Receipt) {
@@ -212,19 +237,21 @@ export function ReceiptsPage() {
       const receipt: Receipt = {
         ...editing,
         ...rest,
+        items: toReceiptItems(draft.items),
         ...(editing.status === 'cash' ? { paidWith } : {}),
       };
       await saveReceipt(receipt);
+      const learned = await learnFromDraft(draft.items);
 
       if (editing.status === 'cash') {
         const txn = transactionFromReceipt(receipt, paidWith, linked);
         await (linked ? saveTransaction(txn) : saveTransactions([txn]));
-        setMessage(linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。');
+        setMessage(`${linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。'}${learned}`);
       } else if (linked) {
         await saveTransaction(applyReceipt(linked, receipt));
-        setMessage('レシートを直し、紐付けた明細の内訳も合わせました。');
+        setMessage(`レシートを直し、紐付けた明細の内訳も合わせました。${learned}`);
       } else {
-        setMessage('レシートを直しました。紐付けていた明細は見つかりませんでした。');
+        setMessage(`レシートを直しました。紐付けていた明細は見つかりませんでした。${learned}`);
       }
       closeDraft();
     } catch (cause) {
@@ -329,7 +356,9 @@ export function ReceiptsPage() {
                   onChange={(event) =>
                     setDraft({
                       ...draft,
-                      items: draft.items.map((row, position) => (position === index ? { ...row, categoryId: event.target.value } : row)),
+                      items: draft.items.map((row, position) =>
+                        position === index ? { ...row, categoryId: event.target.value, categoryEdited: true } : row,
+                      ),
                     })
                   }
                   className="w-[5.5rem] min-w-0 shrink-0"

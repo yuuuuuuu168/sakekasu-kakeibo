@@ -8,6 +8,7 @@ import {
   decideVerdict,
   decideVerdicts,
   parentChoiceSpecs,
+  summarizeVerdicts,
   type ChoiceAnswer,
   type ClassifyTarget,
 } from '../classify';
@@ -230,5 +231,16 @@ describe('初期カテゴリで聞く', () => {
       'work-books',
       NONE_OF_CHILDREN,
     ]);
+  });
+});
+
+describe('summarizeVerdicts', () => {
+  it('結論ごとの件数を数え、中身は持たない', () => {
+    const summary = summarizeVerdicts({
+      a: { categoryId: 'food-cafe', confidence: 0.9, status: 'accepted', parentId: 'food' },
+      b: { categoryId: 'food', confidence: 0.6, status: 'review' },
+      c: { categoryId: 'uncategorized', confidence: 0.2, status: 'unresolved' },
+    });
+    expect(summary).toEqual({ 件数: 3, そのまま入れた: 1, 人に見せた: 1, 捨てた: 1, 小カテゴリまで: 1 });
   });
 });

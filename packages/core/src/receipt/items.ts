@@ -92,6 +92,15 @@ function normalize(text: string): string {
   return text.normalize('NFKC').toUpperCase();
 }
 
+/**
+ * 品目名の照合に使う形。全角半角と大文字小文字、空白の揺れだけを吸収する。
+ * 店舗名の正規化（normalizeMerchant）は数字を落とすので使わない。
+ * 品目名の数字（「コーラ 500ml」「卵 10個」）は中身を分ける手がかりになる。
+ */
+export function normalizeItemName(name: string): string {
+  return normalize(name).replace(/\s+/g, '');
+}
+
 /** 長いキーワードを先に見る。「カップ麺」が「麺」より先に当たるようにするため */
 const SORTED_KEYWORDS = ITEM_KEYWORDS.map(([keyword, categoryId]) => [normalize(keyword), categoryId] as const).sort(
   (a, b) => b[0].length - a[0].length,

@@ -72,6 +72,27 @@ export type Verdict = {
 };
 
 /**
+ * 判定の結論を件数にまとめる。ログに残して、確信度の線（ACCEPT / REVIEW）が
+ * 実際にどう効いているかを見るためのもの。品目名や店舗名は入れない。
+ */
+export function summarizeVerdicts(verdicts: Record<string, Verdict>): {
+  件数: number;
+  そのまま入れた: number;
+  人に見せた: number;
+  捨てた: number;
+  小カテゴリまで: number;
+} {
+  const all = Object.values(verdicts);
+  return {
+    件数: all.length,
+    そのまま入れた: all.filter((verdict) => verdict.status === 'accepted').length,
+    人に見せた: all.filter((verdict) => verdict.status === 'review').length,
+    捨てた: all.filter((verdict) => verdict.status === 'unresolved').length,
+    小カテゴリまで: all.filter((verdict) => verdict.parentId !== undefined).length,
+  };
+}
+
+/**
  * カテゴリの説明。ラベル（ID）だけでは意味が伝わらない 2 つに言葉を足す。
  * 利用者が付けたカテゴリ名はそのまま説明に使う。名前がその人にとっての定義なので、
  * こちらで言い換えない。

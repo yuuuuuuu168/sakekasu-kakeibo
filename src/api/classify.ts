@@ -1,5 +1,6 @@
 import {
   UNCATEGORIZED_ID,
+  applyItemRules,
   categoryLabel,
   learnRule,
   normalizeMerchant,
@@ -53,27 +54,36 @@ function knownIds(categories: Category[]): Set<string> {
 }
 
 /**
- * レシートの品目にカテゴリを当てる。判定が届かなかった品目は、
- * OCR の関数がキーワード表で付けた答えをそのまま残す。
+ * レシートの品目にカテゴリを当てる。順番は、人が覚えさせたカテゴリ（品目のルール）、
+ * 判定（Jev）、OCR の関数がキーワード表で付けた答え。
+ *
+ * 覚えさせた品目は判定に聞かない。人が決めた答えを上書きさせないためと、聞く数を減らすため。
+ * 判定が届かなかった品目は、キーワード表の答えをそのまま残す。
  */
 export async function judgeReceiptItems(
   items: ReceiptItem[],
   storeName: string,
   categories: Category[],
+  rules: CategoryRule[] = [],
 ): Promise<JudgedItems> {
+  const known = knownIds(categories);
+  // 覚えたカテゴリが今は使われていない（消した・統合した）ときは、覚えていないのと同じに扱う
+  const ruledResult = applyItemRules(items, rules.filter((rule) => known.has(rule.categoryId)));
+  const ruled = ruledResult.ruled;
+
   const verdicts = await judge({
     kind: 'item',
     categories,
-    subjects: items.map((item, index) => ({
-      key: String(index),
-      text: item.name,
-      ...(storeName ? { context: storeName } : {}),
-    })),
+    subjects: items.flatMap((item, index) =>
+      ruled.has(index)
+        ? []
+        : [{ key: String(index), text: item.name, ...(storeName ? { context: storeName } : {}) }],
+    ),
   });
 
-  const known = knownIds(categories);
   const warnings: string[] = [];
-  const judged = items.map((item, index) => {
+  const judged = ruledResult.items.map((item, index) => {
+    if (ruled.has(index)) return item;
     const verdict = verdicts[String(index)];
     if (!usable(verdict, known)) return item;
     if (verdict.status === 'review') {

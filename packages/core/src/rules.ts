@@ -1,6 +1,7 @@
 import { normalizeMerchant } from './merchant';
 import { TRANSFER_ID, UNCATEGORIZED_ID } from './categories';
-import type { CategoryRule } from './types';
+import { normalizeItemName } from './receipt/items';
+import type { CategoryRule, ReceiptItem } from './types';
 
 export type Classification = {
   categoryId: string;
@@ -17,7 +18,10 @@ export function pickRule(rawMerchant: string, rules: CategoryRule[], amount?: nu
   const target = normalizeMerchant(rawMerchant);
   if (target === '') return undefined;
 
-  const matched = rules.filter((rule) => meetsAmount(rule, amount) && matches(target, rawMerchant, rule));
+  // 品目名のルールは店舗名に当てない（learnItemRule を参照）
+  const matched = rules.filter(
+    (rule) => rule.target !== 'item' && meetsAmount(rule, amount) && matches(target, rawMerchant, rule),
+  );
   if (matched.length === 0) return undefined;
 
   return matched.sort((a, b) => {
@@ -73,6 +77,66 @@ export function learnRule(rawMerchant: string, categoryId: string): CategoryRule
     categoryId,
     priority: 100,
   };
+}
+
+/**
+ * レシートの品目のカテゴリを人が直したときに作るルール。以降、同じ名前の品目は
+ * 判定（Jev）に聞かずにこのカテゴリになる。
+ *
+ * 店は見ずに品目名だけで覚える。同じ品目名が店によって別の費目になることは家計簿ではまず無く、
+ * 店まで鍵にすると、チェーンの別の店舗で買っただけで覚えたことが効かなくなる。
+ */
+export function learnItemRule(name: string, categoryId: string): CategoryRule {
+  const pattern = normalizeItemName(name);
+  return {
+    id: `learned-item-${pattern.slice(0, 40)}`,
+    pattern,
+    matchType: 'equals',
+    categoryId,
+    priority: 100,
+    target: 'item',
+  };
+}
+
+/** 品目名に当たる、人が覚えさせたカテゴリ。無ければ undefined */
+export function pickItemRule(name: string, rules: CategoryRule[]): CategoryRule | undefined {
+  const target = normalizeItemName(name);
+  if (target === '') return undefined;
+  return rules.find((rule) => rule.target === 'item' && normalizeItemName(rule.pattern) === target);
+}
+
+/**
+ * 品目に覚えたカテゴリを当てる。当たった品目の位置も返す。
+ * 当たった品目は人が決めた答えなので、判定に回さない（回しても上書きしない）。
+ */
+export function applyItemRules(
+  items: ReceiptItem[],
+  rules: CategoryRule[],
+): { items: ReceiptItem[]; ruled: Set<number> } {
+  const ruled = new Set<number>();
+  const applied = items.map((item, index) => {
+    const rule = pickItemRule(item.name, rules);
+    if (!rule) return item;
+    ruled.add(index);
+    return { ...item, categoryId: rule.categoryId };
+  });
+  return { items: applied, ruled };
+}
+
+/**
+ * 保存するレシートの品目のうち、人がカテゴリを選び直したものからルールを作る。
+ * 未分類を選んだものは覚えない（「分からない」を覚えても次に役立たない）。
+ * 同じ名前が 2 回あれば後の方が勝つ。
+ */
+export function learnItemRules(items: { name: string; categoryId?: string; categoryEdited?: boolean }[]): CategoryRule[] {
+  const byId = new Map<string, CategoryRule>();
+  for (const item of items) {
+    if (!item.categoryEdited || !item.categoryId || item.categoryId === UNCATEGORIZED_ID) continue;
+    if (normalizeItemName(item.name) === '') continue;
+    const rule = learnItemRule(item.name, item.categoryId);
+    byId.set(rule.id, rule);
+  }
+  return [...byId.values()];
 }
 
 type Seed = [pattern: string, categoryId: string, ambiguous?: true];

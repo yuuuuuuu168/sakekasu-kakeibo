@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SEED_CATEGORIES, UNCATEGORIZED_ID, normalizeMerchant, type ClassifyTarget, type ReceiptItem, type Transaction, type Verdict } from '@kakeibo/core';
+import { SEED_CATEGORIES, UNCATEGORIZED_ID, learnItemRule, normalizeMerchant, type ClassifyTarget, type ReceiptItem, type Transaction, type Verdict } from '@kakeibo/core';
 
 const api = vi.hoisted(() => ({ classify: vi.fn<(target: ClassifyTarget) => Promise<Record<string, Verdict>>>() }));
 vi.mock('../index', () => ({ api }));
@@ -96,6 +96,31 @@ describe('judgeReceiptItems', () => {
     const judged = await judgeReceiptItems([], '店', CATEGORIES);
     expect(api.classify).not.toHaveBeenCalled();
     expect(judged.items).toEqual([]);
+  });
+});
+
+describe('judgeReceiptItems と覚えた品目', () => {
+  it('覚えた品目は判定に聞かず、そのカテゴリにする', async () => {
+    api.classify.mockResolvedValue({ '1': { categoryId: 'daily', confidence: 0.9, status: 'accepted' } });
+    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES, [learnItemRule('ｺｼﾋｶﾘ 5kg', 'rice')]);
+    expect(judged.items[0].categoryId).toBe('rice');
+    // 聞いたのは覚えていない品目だけ。答えの鍵は元の位置のまま
+    expect(api.classify.mock.calls[0][0].subjects.map((subject) => subject.key)).toEqual(['1']);
+    expect(judged.items[1].categoryId).toBe('daily');
+  });
+
+  it('全部覚えていれば判定を呼ばない', async () => {
+    const rules = [learnItemRule('ｺｼﾋｶﾘ 5kg', 'rice'), learnItemRule('ﾃｨｯｼｭ 5P', 'daily')];
+    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES, rules);
+    expect(api.classify).not.toHaveBeenCalled();
+    expect(judged.items.map((item) => item.categoryId)).toEqual(['rice', 'daily']);
+  });
+
+  it('覚えたカテゴリが今は無ければ、覚えていないのと同じに扱う', async () => {
+    api.classify.mockResolvedValue({});
+    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES, [learnItemRule('ｺｼﾋｶﾘ 5kg', 'gone')]);
+    expect(api.classify.mock.calls[0][0].subjects).toHaveLength(2);
+    expect(judged.items[0].categoryId).toBe('food');
   });
 });
 
