@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { api, type ReceiptDraft } from '../../../api/index';
 import { StoreProvider } from '../../../api/store';
+import { MAX_RECEIPT_PHOTOS } from '@kakeibo/core';
 import { ReceiptsPage } from '../ReceiptsPage';
 
-const upload = vi.hoisted(() => ({ progress: undefined as ((ratio: number) => void) | undefined, finish: () => {} }));
+type Upload = { progress?: (ratio: number) => void; finish: () => void };
+/** progress と finish は最後に始まった送信のもの。all は始まった順の全部 */
+const upload = vi.hoisted(() => ({ progress: undefined as Upload['progress'], finish: () => {}, all: [] as Upload[] }));
 
 vi.mock('../../../api/remote', async (original) => ({
   ...(await original<typeof import('../../../api/remote')>()),
@@ -12,6 +15,7 @@ vi.mock('../../../api/remote', async (original) => ({
     new Promise<void>((resolve) => {
       upload.progress = onProgress;
       upload.finish = resolve;
+      upload.all.push({ progress: onProgress, finish: resolve });
     }),
 }));
 
@@ -31,8 +35,16 @@ function pickPhoto(container: HTMLElement) {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
+function pickFromLibrary(container: HTMLElement, files: File[]) {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]:not([capture])')!;
+  fireEvent.change(input, { target: { files } });
+}
+
+const photo = (name: string, size: number) => new File(['x'.repeat(size)], name, { type: 'image/jpeg' });
+
 describe('レシートを読んでいるあいだ', () => {
   beforeEach(() => {
+    upload.all = [];
     // jsdom は object URL も scrollTo も持たない
     URL.createObjectURL = vi.fn(() => 'blob:receipt');
     URL.revokeObjectURL = vi.fn();
@@ -83,5 +95,63 @@ describe('レシートを読んでいるあいだ', () => {
 
     expect(await screen.findByText(/写真は届いていますが、読み取れませんでした/)).toBeInTheDocument();
     expect(screen.getByText('読み取り結果')).toBeInTheDocument();
+  });
+
+  it('分けて撮った写真は、まとめて送って 1 枚のレシートとして読み、写真を全部残す', async () => {
+    let count = 0;
+    vi.mocked(api.requestUpload).mockImplementation(async () => {
+      count += 1;
+      return { key: `receipts/u/${count}.jpg`, uploadUrl: `https://example.com/put/${count}` };
+    });
+    const analyze = vi.spyOn(api, 'analyzeReceipt').mockResolvedValue({
+      storeName: 'イオン',
+      date: '2026-10-01',
+      total: 2000,
+      items: [{ name: '牛乳', amount: 2000 }],
+    });
+    const save = vi.spyOn(api, 'putReceipt');
+    const { container } = render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    pickFromLibrary(container, [photo('top.jpg', 100), photo('bottom.jpg', 300)]);
+
+    expect(await screen.findByAltText('読み取り中のレシート（1/2 枚目）')).toBeInTheDocument();
+    expect(screen.getByAltText('読み取り中のレシート（2/2 枚目）')).toBeInTheDocument();
+    expect(screen.getByText(/写真を 2 枚送っています/)).toBeInTheDocument();
+    await vi.waitFor(() => expect(upload.all).toHaveLength(2));
+
+    // 送った割合はバイト数で均す。小さい 1 枚目が送り終えても 25%
+    act(() => upload.all[0].progress?.(1));
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    await act(async () => upload.all[0].finish());
+    expect(analyze).not.toHaveBeenCalled();
+
+    await act(async () => upload.all[1].finish());
+    expect(await screen.findByDisplayValue('イオン')).toBeInTheDocument();
+    expect(analyze).toHaveBeenCalledWith({ keys: ['receipts/u/1.jpg', 'receipts/u/2.jpg'] });
+
+    fireEvent.click(screen.getByRole('button', { name: 'レシートだけ保存' }));
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0][0]).toMatchObject({
+      imageKey: 'receipts/u/1.jpg',
+      imageKeys: ['receipts/u/1.jpg', 'receipts/u/2.jpg'],
+    });
+  });
+
+  it('1 枚のレシートとして読める枚数より多く選んだら、送らずに選び直してもらう', async () => {
+    const { container } = render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    pickFromLibrary(
+      container,
+      Array.from({ length: MAX_RECEIPT_PHOTOS + 1 }, (_, index) => photo(`${index}.jpg`, 10)),
+    );
+
+    expect(await screen.findByText(new RegExp(`${MAX_RECEIPT_PHOTOS} 枚までです`))).toBeInTheDocument();
+    expect(api.requestUpload).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,14 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { classifyItem, formatMoney, toMinor, toPaymentMethod, type Currency, type SourceKind } from '@kakeibo/core';
+import {
+  MAX_RECEIPT_PHOTOS,
+  classifyItem,
+  formatMoney,
+  toMinor,
+  toPaymentMethod,
+  type Currency,
+  type SourceKind,
+} from '@kakeibo/core';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -36,25 +44,46 @@ export async function handler(
   const sub = event.requestContext.authorizer?.jwt?.claims?.sub;
   if (typeof sub !== 'string' || sub === '') return json(401, { message: 'サインインが必要です' });
 
-  const body = parseBody(event.body, event.isBase64Encoded);
-  const key = typeof body.key === 'string' ? body.key : '';
-  if (!key) return json(400, { message: '画像のキーが要ります' });
-
-  // 自分が上げた画像だけを読ませる。キーの組み立ては API 側と揃えてある
-  if (!key.startsWith(`receipts/${sub}/`)) {
-    console.warn('[ocr] key does not belong to caller', { sub, key });
-    return json(403, { message: 'その画像は読めません' });
+  const parsed = parseKeys(parseBody(event.body, event.isBase64Encoded), sub);
+  if ('error' in parsed) {
+    if (parsed.status === 403) console.warn('[ocr] key does not belong to caller', { sub, keys: parsed.keys });
+    return json(parsed.status, { message: parsed.error });
   }
 
   try {
-    const image = await loadImage(key);
-    const draft = await analyze(image);
+    const images = await Promise.all(parsed.keys.map(loadImage));
+    const draft = await analyze(images);
     return json(200, draft);
   } catch (cause) {
     console.error('[ocr] failed', cause);
     const message = cause instanceof Error ? cause.message : 'レシートの読み取りに失敗しました';
     return json(502, { message });
   }
+}
+
+/**
+ * 読む写真のキーを取り出す。1 枚なら `key`、分けて撮った長いレシートなら `keys`（上から順）。
+ * どのキーも呼び出した人が上げたものに限る。キーの組み立ては API 側と揃えてある。
+ */
+export function parseKeys(
+  body: Record<string, unknown>,
+  sub: string,
+): { keys: string[] } | { error: string; status: 400 | 403; keys?: string[] } {
+  const keys = Array.isArray(body.keys)
+    ? body.keys.filter((key): key is string => typeof key === 'string' && key !== '')
+    : typeof body.key === 'string' && body.key !== ''
+      ? [body.key]
+      : [];
+  if (keys.length === 0 || (Array.isArray(body.keys) && keys.length !== body.keys.length)) {
+    return { error: '画像のキーが要ります', status: 400 };
+  }
+  if (keys.length > MAX_RECEIPT_PHOTOS) {
+    return { error: `一度に読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです`, status: 400 };
+  }
+  if (new Set(keys).size !== keys.length) return { error: '同じ写真が重なっています', status: 400 };
+  const foreign = keys.filter((key) => !key.startsWith(`receipts/${sub}/`));
+  if (foreign.length > 0) return { error: 'その画像は読めません', status: 403, keys: foreign };
+  return { keys };
 }
 
 async function loadImage(key: string): Promise<{ base64: string; mediaType: string }> {
@@ -93,8 +122,12 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
  * JSON は前から順に生成されるので、先に全体を読ませてから値を拾わせる形になる。
  * いきなり項目を埋めさせると、読めていない欄をそれらしい値で埋めてくる。
  */
-function buildPrompt(): string {
-  return `レシートの写真です。ほとんどは日本の円のレシートで、たまに米ドルのレシートがあります。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
+function buildPrompt(photos: number): string {
+  const intro =
+    photos > 1
+      ? `1 枚の長いレシートを ${photos} 枚に分けて撮った写真です。つなげて 1 枚のレシートとして読んでください。写真の並びは前後していることがあります。店名のある写真が先頭、合計のある写真が末尾になるよう、印字のつながりで並べてから読むこと。境目は重ねて撮っていることがあるので、2 枚に写っている同じ行は 1 回だけ数えること。`
+      : 'レシートの写真です。';
+  return `${intro}ほとんどは日本の円のレシートで、たまに米ドルのレシートがあります。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
 
 {
   "lines": ["印字を上から 1 行ずつ書き起こしたもの"],
@@ -129,7 +162,7 @@ function buildPrompt(): string {
 }
 
 async function analyze(
-  image: { base64: string; mediaType: string },
+  images: { base64: string; mediaType: string }[],
 ): Promise<ReturnType<typeof normalizeDraft>> {
   const response = await bedrock.send(
     new InvokeModelCommand({
@@ -143,8 +176,11 @@ async function analyze(
           {
             role: 'user',
             content: [
-              { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-              { type: 'text', text: buildPrompt() },
+              ...images.map((image) => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
+              })),
+              { type: 'text', text: buildPrompt(images.length) },
             ],
           },
         ],
