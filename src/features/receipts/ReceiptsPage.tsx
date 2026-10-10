@@ -30,6 +30,7 @@ import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { config } from '../../config';
 import { todayIso } from '../../lib/month';
+import { ReadingProgress, type Reading, type ReadingStage } from './ReadingProgress';
 
 type Draft = {
   id: string;
@@ -102,6 +103,8 @@ export function ReceiptsPage() {
   const [editing, setEditing] = useState<Receipt | undefined>();
   const [selectedTxnId, setSelectedTxnId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
+  /** 写真を選んでから下書きが出るまでの進み具合。読み取り中でなければ undefined */
+  const [reading, setReading] = useState<Reading | undefined>();
   const [message, setMessage] = useState<string | undefined>();
 
   const categories = activeCategories(snapshot.categories);
@@ -126,10 +129,18 @@ export function ReceiptsPage() {
       return;
     }
     setBusy(true);
+    const previewUrl = URL.createObjectURL(file);
+    const enter = (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrl });
+    enter('upload');
+    // 送り終えたあとに読み取りで落ちても、写真はレシートに付けて残す
+    let uploadedKey: string | undefined;
     try {
       const target = await api.requestUpload(file.type || 'image/jpeg');
-      await uploadToS3(target, file);
+      await uploadToS3(target, file, (ratio) => setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: ratio } : now)));
+      uploadedKey = target.key;
+      enter('read');
       const result = await api.analyzeReceipt({ key: target.key });
+      enter('classify');
       // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
       // 判定が届かなければキーワード表の答えがそのまま残る
       const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId) }));
@@ -152,9 +163,13 @@ export function ReceiptsPage() {
       setSelectedTxnId(auto?.id);
       if (auto) setMessage(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
-      setDraft(emptyDraft());
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      setMessage(uploadedKey ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）` : reason);
+      setEditing(undefined);
+      setDraft({ ...emptyDraft(), ...(uploadedKey ? { imageKey: uploadedKey } : {}) });
     } finally {
+      setReading(undefined);
+      URL.revokeObjectURL(previewUrl);
       setBusy(false);
     }
   }
@@ -314,6 +329,7 @@ export function ReceiptsPage() {
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
             : '写真を撮るか、カメラロールから選ぶと Bedrock が品目と金額を読み、金額と日付の近い明細に自動で当てます。'}
         </p>
+        {reading && <ReadingProgress reading={reading} />}
         {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
       </Card>
 
