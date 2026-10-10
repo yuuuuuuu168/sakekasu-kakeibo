@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DISCOUNT_ID,
   SEED_CATEGORIES,
   TRANSFER_ID,
   UNCATEGORIZED_ID,
@@ -10,6 +11,7 @@ import {
   rollUpTotals,
   rootCategoryId,
   topLevelCategories,
+  withLaterSeeds,
 } from '../categories';
 import type { Category } from '../types';
 
@@ -153,10 +155,10 @@ describe('SEED_CATEGORIES', () => {
     expect(byId.size).toBe(SEED_CATEGORIES.length);
   });
 
-  it('大カテゴリは支出 13 個と、振替・未分類', () => {
+  it('大カテゴリは支出 13 個と、値引き・振替・未分類', () => {
     const top = topLevelCategories(SEED_CATEGORIES).map((category) => category.label);
-    expect(top).toHaveLength(15);
-    expect(top.slice(-2)).toEqual(['振替・チャージ', '未分類']);
+    expect(top).toHaveLength(16);
+    expect(top.slice(-3)).toEqual(['値引き', '振替・チャージ', '未分類']);
     expect(top).toContain('推し活');
     expect(top).not.toContain('サブスク');
   });
@@ -184,5 +186,30 @@ describe('SEED_CATEGORIES', () => {
         expect(child.order).toBeLessThan(parent.order + 100);
       }
     }
+  });
+});
+
+describe('withLaterSeeds', () => {
+  const saved: Category[] = [
+    { id: 'food', label: '食費', order: 100 },
+    { id: UNCATEGORIZED_ID, label: '未分類', order: 9900 },
+  ];
+
+  it('使い始めた後に足した値引きを、保存済みの一覧に補う', () => {
+    const filled = withLaterSeeds(saved);
+    expect(filled.slice(0, 2)).toEqual(saved);
+    expect(filled.find((category) => category.id === DISCOUNT_ID)?.label).toBe('値引き');
+  });
+
+  it('改名や統合で残っている値引きは、そのまま使う', () => {
+    const renamed = [...saved, { id: DISCOUNT_ID, label: '割引', order: 8900 }];
+    expect(withLaterSeeds(renamed)).toBe(renamed);
+    const merged = [...saved, { id: DISCOUNT_ID, label: '値引き', order: 8900, archived: true }];
+    expect(withLaterSeeds(merged)).toBe(merged);
+  });
+
+  it('値引きには小カテゴリを吊れず、値引きを小カテゴリにもできない', () => {
+    expect(canAdopt(SEED_CATEGORIES, 'food-cafe', DISCOUNT_ID)).toBe(false);
+    expect(canAdopt(SEED_CATEGORIES, DISCOUNT_ID, 'food')).toBe(false);
   });
 });

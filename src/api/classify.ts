@@ -71,11 +71,13 @@ export async function judgeReceiptItems(
   const ruledResult = applyItemRules(items, rules.filter((rule) => known.has(rule.categoryId)));
   const ruled = ruledResult.ruled;
 
+  // 負の金額の行は値引きなので聞かない（キーワード表の側で値引きに入っている）。
+  // 「おにぎり 値引」を聞くと食費と答えが返り、値引きが品目の側に混ざる
   const verdicts = await judge({
     kind: 'item',
     categories,
     subjects: items.flatMap((item, index) =>
-      ruled.has(index)
+      ruled.has(index) || item.amount < 0
         ? []
         : [{ key: String(index), text: item.name, ...(storeName ? { context: storeName } : {}) }],
     ),
@@ -83,7 +85,7 @@ export async function judgeReceiptItems(
 
   const warnings: string[] = [];
   const judged = ruledResult.items.map((item, index) => {
-    if (ruled.has(index)) return item;
+    if (ruled.has(index) || item.amount < 0) return item;
     const verdict = verdicts[String(index)];
     if (!usable(verdict, known)) return item;
     if (verdict.status === 'review') {

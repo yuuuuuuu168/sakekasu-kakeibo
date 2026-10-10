@@ -132,7 +132,7 @@ export function ReceiptsPage() {
       const result = await api.analyzeReceipt({ key: target.key });
       // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
       // 判定が届かなければキーワード表の答えがそのまま残る
-      const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId) }));
+      const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId, item.amount) }));
       const judged = await judgeReceiptItems(read, result.storeName, snapshot.categories, snapshot.rules);
       const warnings = [...(result.warnings ?? []), ...judged.warnings];
 

@@ -173,7 +173,7 @@ async function categorizeByName(rows: Split[], storeName: string, categories: Ca
 
   const { items } = await judgeReceiptItems(
     targets.map((row) => {
-      const guess = classifyItem(row.name ?? '');
+      const guess = classifyItem(row.name ?? '', undefined, row.amount);
       return { name: row.name ?? '', amount: row.amount, ...(guess !== UNCATEGORIZED_ID ? { categoryId: guess } : {}) };
     }),
     storeName,

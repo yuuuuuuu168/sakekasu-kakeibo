@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
+  DISCOUNT_ID,
   TRANSFER_ID,
   UNCATEGORIZED_ID,
   activeCategories,
@@ -48,7 +49,11 @@ export function CategoriesPage() {
   }, [snapshot.categories]);
 
   const parentOptions = useMemo(
-    () => topLevelCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID && category.id !== UNCATEGORIZED_ID),
+    // 値引きも親にできない（canAdopt が断る）ので、選択肢に出さない
+    () =>
+      topLevelCategories(snapshot.categories).filter(
+        (category) => category.id !== TRANSFER_ID && category.id !== UNCATEGORIZED_ID && category.id !== DISCOUNT_ID,
+      ),
     [snapshot.categories],
   );
 
@@ -184,6 +189,9 @@ export function CategoriesPage() {
                 {child ? (
                   // 上限は大カテゴリで持つ。小カテゴリは「食費の中で何に使ったか」を見るための分解
                   <span className="w-28 text-right text-xs text-muted">小カテゴリ</span>
+                ) : category.id === DISCOUNT_ID ? (
+                  // 値引きは負の額しか入らないので、上限を付けても超えることが無い
+                  <span className="w-28 text-right text-xs text-muted">上限なし</span>
                 ) : (
                   <Input
                     type="number"
@@ -198,7 +206,9 @@ export function CategoriesPage() {
                 )}
                 {category.id !== UNCATEGORIZED_ID && (
                   <>
-                    <ParentControl category={category} parents={parentOptions} disabled={busy} onChange={reparent} />
+                    {category.id !== DISCOUNT_ID && (
+                      <ParentControl category={category} parents={parentOptions} disabled={busy} onChange={reparent} />
+                    )}
                     <MergeControl category={category} categories={categories} disabled={busy} onMerge={merge} />
                   </>
                 )}

@@ -15,6 +15,14 @@ export const TRANSFER_ID = 'transfer';
  */
 export const SHIPPING_ID = 'fees-shipping';
 
+/**
+ * 値引き。レシートの「値引」「割引」「クーポン」のような負の金額の行を入れる。
+ * 品目のどれに掛かった値引きなのかはレシートから読み取れないことが多く、食費や日用品に
+ * 当てさせると判定のたびに行き先が揺れる。決まった置き場を 1 つ作り、行のまま残す。
+ * 品目の側は値引き前の額で数えるので、何をいくらで買ったかと、いくら値引きされたかが別々に見える。
+ */
+export const DISCOUNT_ID = 'discount';
+
 type Seed = [id: string, label: string, children: [id: string, label: string][]];
 
 /**
@@ -116,9 +124,24 @@ export const SEED_CATEGORIES: Category[] = [
       })),
     ];
   }),
+  { id: DISCOUNT_ID, label: '値引き', order: 8900 },
   { id: TRANSFER_ID, label: '振替・チャージ', order: 9000 },
   { id: UNCATEGORIZED_ID, label: '未分類', order: 9900 },
 ];
+
+/** 後から初期カテゴリに足したもの。保存済みのカテゴリ一覧には入っていないことがある */
+const LATER_SEEDS = SEED_CATEGORIES.filter((category) => category.id === DISCOUNT_ID);
+
+/**
+ * 保存済みのカテゴリ一覧に、後から足した初期カテゴリを補う。
+ * 初期カテゴリは一覧が空のときにしか入らないので、使い始めた後に足したものはこうしないと出てこない。
+ * 消した（統合した）ものは archived のまま残っているので、生き返らせない。
+ */
+export function withLaterSeeds(categories: Category[]): Category[] {
+  const ids = new Set(categories.map((category) => category.id));
+  const missing = LATER_SEEDS.filter((category) => !ids.has(category.id));
+  return missing.length === 0 ? categories : [...categories, ...missing];
+}
 
 export function categoryLabel(categories: Category[], id: string): string {
   return categories.find((category) => category.id === id)?.label ?? id;
@@ -135,8 +158,8 @@ export function activeCategories(categories: Category[]): Category[] {
  */
 const MAX_DEPTH = 8;
 
-/** 小カテゴリを吊れないカテゴリ。支出として数えない入れ物なので、分解する意味が無い */
-const NO_CHILDREN = new Set([TRANSFER_ID, UNCATEGORIZED_ID]);
+/** 小カテゴリを吊れないカテゴリ。支出として数えない入れ物と値引きは、分解する意味が無い */
+const NO_CHILDREN = new Set([TRANSFER_ID, UNCATEGORIZED_ID, DISCOUNT_ID]);
 
 /**
  * その ID を上限とレポートで数える先。小カテゴリなら親の ID、大カテゴリなら自分の ID。
@@ -208,7 +231,7 @@ export function rollUpLimits(limits: Record<string, number>, categories: Categor
 /**
  * その親の下に置いてよいかを確かめる。画面から壊れた形を作らせないための門。
  * 断るのは、自分自身、既に小カテゴリになっている相手（3 段目になる）、
- * 小カテゴリを抱えている自分（その子が孫になる）、未分類と振替、存在しない ID。
+ * 小カテゴリを抱えている自分（その子が孫になる）、未分類と振替と値引き、存在しない ID。
  * 親は必ず大カテゴリ、子は必ず子を持たない、という 2 つを守れば循環も起きない。
  */
 export function canAdopt(categories: Category[], childId: string, parentId: string): boolean {
