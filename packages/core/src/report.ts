@@ -2,7 +2,8 @@ import { aggregateMonth, transactionsOfMonth, type CategoryTotal } from './budge
 import { formatYen } from './money';
 import { previousMonth } from './date';
 import { spendingAmount, spendingOnly } from './transfer';
-import type { Budget, Category, Transaction } from './types';
+import { findUnverifiedPayments, type UnverifiedPayment } from './unverified';
+import type { Budget, Category, Receipt, RecurringPayment, Transaction } from './types';
 
 export type ScoldLevel = 0 | 1 | 2 | 3 | 4;
 
@@ -34,6 +35,11 @@ export type MonthlyReport = {
   needsDetailCount: number;
   uncategorizedTotal: number;
   topMerchants: MerchantTotal[];
+  /**
+   * レシートとも定期支払いとも突き合わなかったカード・PayPay の支払い。不正利用の確かめ用。
+   * この項目を足す前に作ったレポートには無い
+   */
+  unverified?: UnverifiedPayment[];
   scolding: Scolding;
 };
 
@@ -42,6 +48,9 @@ export type ReportInput = {
   transactions: Transaction[];
   categories: Category[];
   budget?: Budget;
+  /** 身に覚えの確かめ（unverified.ts）の材料。無ければ確かめは空になる */
+  receipts?: Receipt[];
+  recurring?: RecurringPayment[];
   generatedAt?: string;
 };
 
@@ -64,6 +73,10 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
   const overTotal = overCategories.reduce((sum, row) => sum + row.over, 0);
   const worst = [...overCategories].sort((a, b) => b.over - a.over).slice(0, 3);
   const hasLimits = summary.limitTotal > 0;
+  // 叱りの段階には混ぜない。使いすぎとは別の話で、混ぜると段階の比較が崩れる
+  const unverified = input.receipts
+    ? findUnverifiedPayments({ month, transactions, receipts: input.receipts, recurring: input.recurring })
+    : [];
 
   return {
     month,
@@ -78,6 +91,7 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
     needsDetailCount: summary.needsDetailCount,
     uncategorizedTotal: summary.uncategorizedTotal,
     topMerchants: topMerchants(transactionsOfMonth(transactions, month)),
+    unverified,
     scolding: scold({
       total: summary.total,
       limitTotal: summary.limitTotal,
@@ -85,6 +99,7 @@ export function buildMonthlyReport(input: ReportInput): MonthlyReport {
       overCategories,
       worst,
       needsDetailCount: summary.needsDetailCount,
+      unverifiedCount: unverified.length,
       hasLimits,
     }),
   };
@@ -116,6 +131,7 @@ type ScoldInput = {
   overCategories: CategoryTotal[];
   worst: CategoryTotal[];
   needsDetailCount: number;
+  unverifiedCount?: number;
   hasLimits: boolean;
 };
 
@@ -170,6 +186,10 @@ function scold(input: ScoldInput): Scolding {
 
   if (input.needsDetailCount > 0) {
     lines.push(`内訳が未確定の明細が ${input.needsDetailCount} 件ある。レシートを当てるまで、この数字は甘く出ている。`);
+  }
+
+  if (input.unverifiedCount) {
+    lines.push(`レシートと突き合わないカード・PayPay の支払いが ${input.unverifiedCount} 件ある。身に覚えがあるか確かめろ。`);
   }
 
   return { level, title: TITLES[level], lines };

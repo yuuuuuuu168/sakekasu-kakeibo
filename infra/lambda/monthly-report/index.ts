@@ -7,6 +7,8 @@ import {
   previousMonth,
   type Budget,
   type Category,
+  type Receipt,
+  type RecurringPayment,
   type Transaction,
 } from '@kakeibo/core';
 
@@ -82,17 +84,21 @@ async function generate(pk: string, month: string): Promise<void> {
   const items = await queryAll(pk);
 
   const transactions: Transaction[] = [];
+  const receipts: Receipt[] = [];
+  let recurring: RecurringPayment[] = [];
   let categories: Category[] = SEED_CATEGORIES;
   let budget: Budget | undefined;
 
   for (const item of items) {
     const sk = String(item.sk);
     if (sk.startsWith('TXN#')) transactions.push(item as unknown as Transaction);
+    else if (sk.startsWith('RECEIPT#')) receipts.push(item as unknown as Receipt);
+    else if (sk === 'CONFIG#recurring' && Array.isArray(item.recurring)) recurring = item.recurring as RecurringPayment[];
     else if (sk === 'CONFIG#categories' && Array.isArray(item.categories)) categories = withLaterSeeds(item.categories as Category[]);
     else if (sk === `BUDGET#${month}`) budget = { month, limits: (item.limits ?? {}) as Record<string, number> };
   }
 
-  const report = buildMonthlyReport({ month, transactions, categories, budget });
+  const report = buildMonthlyReport({ month, transactions, categories, budget, receipts, recurring });
 
   await documents.send(
     new PutCommand({
