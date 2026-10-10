@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Award, Flame, ThumbsUp, TriangleAlert, Zap } from 'lucide-react';
-import { formatYen, type MonthlyReport, type ScoldLevel } from '@kakeibo/core';
+import { confirmPayment, findUnverifiedPayments, formatYen, type MonthlyReport, type ScoldLevel } from '@kakeibo/core';
 import { api } from '../../api/index';
-import { Card, EmptyState } from '../../components/ui/primitives';
+import { useStore } from '../../api/store';
+import { Button, Card, EmptyState } from '../../components/ui/primitives';
 import { MonthPicker } from '../../components/ui/MonthPicker';
 import { StatTile } from '../../components/ui/StatTile';
 import { currentMonth, formatMonth, shiftMonth } from '../../lib/month';
@@ -31,6 +32,32 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
   const [report, setReport] = useState<MonthlyReport | undefined>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
+  const { snapshot, loading: storeLoading, saveTransaction } = useStore();
+
+  /**
+   * レポートは月初に作って保存したものなので、後からレシートを当てたり「身に覚えあり」と
+   * 言ったりした分は中に残っている。今の明細とレシートで確かめ直し、まだ残るものだけを出す
+   */
+  const unverified = useMemo(() => {
+    const listed = report?.unverified ?? [];
+    if (storeLoading) return listed;
+    const stillOpen = new Set(
+      findUnverifiedPayments({ month, transactions: snapshot.transactions, receipts: snapshot.receipts, recurring: snapshot.recurring }).map(
+        (payment) => payment.id,
+      ),
+    );
+    return listed.filter((payment) => stillOpen.has(payment.id));
+  }, [report, storeLoading, month, snapshot.transactions, snapshot.receipts, snapshot.recurring]);
+
+  async function confirmOne(id: string) {
+    const txn = snapshot.transactions.find((item) => item.id === id);
+    if (!txn) return;
+    try {
+      await saveTransaction(confirmPayment(txn));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -113,6 +140,33 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
               tone={report.deltaFromPrevious !== undefined && report.deltaFromPrevious > 0 ? 'critical' : 'good'}
             />
           </div>
+
+          {unverified.length > 0 && (
+            <Card title={`これ大丈夫？ ${unverified.length} 件`}>
+              <p className="text-xs text-ink-2">
+                {'レシートとも定期的な支払いとも突き合わなかったカード・PayPay の支払いです。利用日と金額で照らしています。' +
+                  '身に覚えが無ければ、カード会社か PayPay に問い合わせてください。'}
+              </p>
+              <ul className="mt-2 divide-y divide-grid">
+                {unverified.map((payment) => (
+                  <li key={payment.id} className="py-2">
+                    {/* 店名がこの確かめの肝なので、狭い画面でも削られないよう 1 段を明け渡す */}
+                    <div className="flex items-baseline gap-2">
+                      <span className="tnum shrink-0 text-xs text-muted">{payment.date.slice(5)}</span>
+                      <span className="min-w-0 flex-1 break-all text-sm text-ink">{payment.rawMerchant}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-end gap-3">
+                      <span className="text-xs text-muted">{payment.sourceLabel}</span>
+                      <span className="tnum text-sm font-medium text-ink">{formatYen(payment.amount)}</span>
+                      <Button size="sm" onClick={() => void confirmOne(payment.id)} disabled={storeLoading}>
+                        身に覚えあり
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
 
           <Card title="カテゴリ別">
             <div className="overflow-x-auto">

@@ -136,6 +136,8 @@ export const localApi: KakeiboApi = {
       transactions: snapshot.transactions,
       categories: snapshot.categories,
       budget: snapshot.budgets.find((budget) => budget.month === month),
+      receipts: snapshot.receipts,
+      recurring: snapshot.recurring,
     });
   },
 };

@@ -54,6 +54,11 @@ export type Transaction = {
    * 消すだけだと取り込み直しで戻ってくるので、否定したことのほうを覚えておく。
    */
   notDuplicateOf?: string[];
+  /**
+   * レシートが無くても本人の支払いだと人が確かめた印。月次レポートの「これ大丈夫？」から外す。
+   * 確かめたのはこの 1 件だけで、同じ店の次の支払いまでは信用しない（unverified.ts）
+   */
+  confirmed?: boolean;
 };
 
 export type MatchType = 'contains' | 'equals' | 'startsWith' | 'regex';
