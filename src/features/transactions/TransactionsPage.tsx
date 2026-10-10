@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeftRight, Copy, Scissors, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, Copy, Scissors, Tag, Trash2 } from 'lucide-react';
 import {
   TRANSFER_ID,
   UNCATEGORIZED_ID,
@@ -16,6 +16,7 @@ import {
   markNotDuplicate,
   rootCategoryId,
   monthOf,
+  refileDiscounts,
   shouldLearnRule,
   transactionsOfMonth,
   type DuplicatePair,
@@ -30,7 +31,7 @@ import { currentMonth } from '../../lib/month';
 import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER } from '../../lib/router';
 
 export function TransactionsPage({ month: initialMonth, filter: initialFilter }: { month?: string; filter?: string }) {
-  const { snapshot, rules, saveTransaction, removeTransaction, saveRules } = useStore();
+  const { snapshot, rules, saveTransaction, saveTransactions, saveReceipt, removeTransaction, saveRules } = useStore();
   const [month, setMonth] = useState(initialMonth ?? currentMonth());
   const [filter, setFilter] = useState(initialFilter ?? 'all');
   const [editing, setEditing] = useState<Transaction | undefined>();
@@ -45,6 +46,16 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     if (filter !== TRANSFER_ID) return [];
     return findMisfiledTransfers(transactionsOfMonth(snapshot.transactions, month), rules);
   }, [snapshot.transactions, month, filter, rules]);
+
+  /**
+   * 値引きのカテゴリを足す前に保存した明細とレシート。月をまたいで全件から探す。
+   * 一度付け替えれば出てこなくなるので、絞り込みに関係なく帯を出す
+   */
+  const discounts = useMemo(
+    () => refileDiscounts(snapshot.transactions, snapshot.receipts),
+    [snapshot.transactions, snapshot.receipts],
+  );
+  const [refiling, setRefiling] = useState(false);
 
   const rows = useMemo(() => {
     const monthly = transactionsOfMonth(snapshot.transactions, month).sort((a, b) => b.date.localeCompare(a.date));
@@ -97,6 +108,17 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     for (const txn of misfiled) await saveTransaction(asTransfer(txn));
   }
 
+  /** 値引きの行を値引きのカテゴリへ移す。レシートの品目も揃えておかないと、レシートを当て直したときに戻る */
+  async function refileAllDiscounts() {
+    setRefiling(true);
+    try {
+      for (const receipt of discounts.receipts) await saveReceipt(receipt);
+      if (discounts.transactions.length > 0) await saveTransactions(discounts.transactions);
+    } finally {
+      setRefiling(false);
+    }
+  }
+
   /** 重複ではないと言われた組。両側に印を付けて、次からは候補に出さない */
   async function dismissDuplicate(pair: DuplicatePair) {
     const [a, b] = markNotDuplicate(pair.a, pair.b);
@@ -128,6 +150,19 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
           </p>
           <Button variant="primary" size="sm" onClick={() => void markAllAsTransfer()}>
             まとめて振替にする
+          </Button>
+        </div>
+      )}
+
+      {(discounts.transactions.length > 0 || discounts.receipts.length > 0) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
+          <Tag size={18} aria-hidden className="text-ink" />
+          <p className="flex-1 text-sm text-ink">
+            値引きのカテゴリを作る前に入れた値引きが、明細 {discounts.transactions.length} 件・レシート {discounts.receipts.length} 枚に残っています
+            （全期間）。付け替えると、品目は値引き前の額になり、値引きは「値引き」の行に出ます。
+          </p>
+          <Button variant="primary" size="sm" onClick={() => void refileAllDiscounts()} disabled={refiling}>
+            値引きに付け替える
           </Button>
         </div>
       )}
