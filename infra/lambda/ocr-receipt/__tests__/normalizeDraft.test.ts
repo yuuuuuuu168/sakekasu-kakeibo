@@ -81,6 +81,48 @@ describe('normalizeDraft', () => {
     );
     expect(draft.items[1].amount).toBe(-50);
   });
+
+  /* タリーズのレシートで実際に起きた読み違い。「モーニングセット -¥100」を +100 で返してきた */
+  it('値引きを正の金額で読んだ品目が 1 つに決まれば負に直す', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"タリーズコーヒー","date":"2026-09-08","total":820,"items":[{"name":"アイスGコーヒー","amount":510},{"name":"イングリッシュマフィンツナチーズ","amount":410},{"name":"モーニングセット","amount":100}]}',
+      new Date('2026-09-08T12:00:00+09:00'),
+    );
+    expect(draft.items.map((item) => item.amount)).toEqual([510, 410, -100]);
+    expect(draft.warnings.join('')).toContain('「モーニングセット」を値引き');
+    expect(draft.warnings.join('')).not.toContain('離れています');
+  });
+
+  it('負に直す候補が複数あれば触らずに注意だけ残す', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"店","date":"2026-09-08","total":300,"items":[{"name":"A","amount":100},{"name":"B","amount":100},{"name":"C","amount":300}]}',
+      new Date('2026-09-08T12:00:00+09:00'),
+    );
+    expect(draft.items.map((item) => item.amount)).toEqual([100, 100, 300]);
+    expect(draft.warnings.join('')).toContain('離れています');
+  });
+
+  it('読めない欄の null は空として扱い、金額の読めない品目は数を知らせる', () => {
+    const draft = normalizeDraft(
+      '{"lines":["…"],"storeName":null,"date":null,"total":null,"items":[{"name":"おにぎり","amount":150},{"name":"お茶","amount":null}]}',
+      new Date('2026-09-08T12:00:00+09:00'),
+    );
+    expect(draft.storeName).toBe('');
+    expect(draft.date).toBe('');
+    expect(draft.items).toHaveLength(1);
+    const warnings = draft.warnings.join('');
+    expect(warnings).toContain('金額を読めなかった品目が 1 件');
+    expect(warnings).toContain('店名を読み取れませんでした');
+    expect(warnings).toContain('合計を読み取れませんでした');
+  });
+
+  it('先の日付や 1 年以上前の日付は読み違いを疑う', () => {
+    const today = new Date('2026-09-08T12:00:00+09:00');
+    const body = (date: string) => `{"storeName":"店","date":"${date}","total":150,"items":[{"name":"おにぎり","amount":150}]}`;
+    expect(normalizeDraft(body('2026-09-08'), today).warnings).toEqual([]);
+    expect(normalizeDraft(body('2026-12-01'), today).warnings.join('')).toContain('先の日付');
+    expect(normalizeDraft(body('2022-06-20'), today).warnings.join('')).toContain('1 年以上前');
+  });
 });
 
 describe('sniffMediaType', () => {

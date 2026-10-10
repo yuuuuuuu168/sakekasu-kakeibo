@@ -112,9 +112,9 @@ describe('ApiStack', () => {
 
     // ARN は Fn::Join で組まれるので、文字列に直して見る
     const resources = JSON.stringify(bedrock!.Resource);
-    expect(resources).toContain('inference-profile/jp.anthropic.claude-haiku');
-    expect(resources).toContain('ap-northeast-1::foundation-model/anthropic.claude-haiku');
-    expect(resources).toContain('ap-northeast-3::foundation-model/anthropic.claude-haiku');
+    expect(resources).toContain('inference-profile/jp.anthropic.claude-sonnet-4-6');
+    expect(resources).toContain('ap-northeast-1::foundation-model/anthropic.claude-sonnet-4-6');
+    expect(resources).toContain('ap-northeast-3::foundation-model/anthropic.claude-sonnet-4-6');
   });
 
   it('OCR の同時実行に天井を置く', () => {
