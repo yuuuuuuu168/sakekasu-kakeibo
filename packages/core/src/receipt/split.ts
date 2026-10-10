@@ -42,15 +42,43 @@ export function distribute(amount: number, weights: number[]): number[] {
   return floored;
 }
 
-/** 合計を total に合わせ直す。ずれは金額の大きい行から順に吸収させる */
+/**
+ * 合計を total に合わせ直す。ずれは金額の大きい行から順に吸収させる。
+ *
+ * 値引き（負の行）があるときは、全行を同じ比率（total / 今の合計）で伸び縮みさせる。
+ * ずれの多くは税抜き印字の店の消費税で、税は値引きにも掛かる。金額の大きさだけで配ると、
+ * 値引きの行に税の正の分が乗り、値引きが小さく見える（-20 円が -19 円になる）。
+ * 比率が正にならない形（合計が 0 以下、総額が 0 以下）では符号が裏返るので、従来の配り方に戻す。
+ */
 export function rebalance(splits: Split[], total: number): Split[] {
   if (splits.length === 0) {
     return [{ id: 'split-1', amount: total, categoryId: UNCATEGORIZED_ID, origin: 'fallback' }];
   }
-  const gap = total - sumSplits(splits);
+  const current = sumSplits(splits);
+  const gap = total - current;
   if (gap === 0) return splits;
-  const shares = distribute(gap, splits.map((split) => split.amount));
+  const amounts = splits.map((split) => split.amount);
+  const scalable = amounts.some((amount) => amount < 0) && current > 0 && total > 0;
+  const shares = scalable ? scale(gap, amounts) : distribute(gap, amounts);
   return splits.map((split, index) => ({ ...split, amount: split.amount + shares[index] }));
+}
+
+/**
+ * 符号つきの重みで gap を配る。重みの合計が正であることが前提（rebalance が確かめている）。
+ * 小数点以下を切り捨ててから、端数の大きい行に 1 円ずつ足す。配った合計は必ず gap に一致する。
+ */
+function scale(gap: number, weights: number[]): number[] {
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const exact = weights.map((weight) => (gap * weight) / totalWeight);
+  const floored = exact.map((value) => Math.floor(value));
+  let remainder = gap - floored.reduce((sum, value) => sum + value, 0);
+  const order = exact
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction);
+  for (let cursor = 0; remainder > 0; cursor += 1, remainder -= 1) {
+    floored[order[cursor % order.length].index] += 1;
+  }
+  return floored;
 }
 
 /** カテゴリを並べて均等に割る。端数は後ろの行へ寄せる */
