@@ -62,12 +62,27 @@ export const remoteApi: KakeiboApi = {
   getReport: (month: string) => request<MonthlyReport | undefined>('GET', `/reports/${month}`),
 };
 
-/** 署名付き URL へ画像を直接置く。本体は API を通さない */
-export async function uploadToS3(target: UploadTarget, file: Blob): Promise<void> {
-  const response = await fetch(target.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type },
-    body: file,
+/**
+ * 署名付き URL へ画像を直接置く。本体は API を通さない。fetch は送った量を教えてくれないので XMLHttpRequest で送り、
+ * onProgress に 0〜1 を渡す。回線の遅いところで「本当に送れているのか」を画面に出すため。
+ */
+export function uploadToS3(target: UploadTarget, file: Blob, onProgress?: (ratio: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', target.uploadUrl);
+    xhr.setRequestHeader('Content-Type', file.type);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve();
+      } else {
+        reject(new Error(`画像のアップロードに失敗しました (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('画像のアップロードに失敗しました。電波の届くところでもう一度お試しください。'));
+    xhr.send(file);
   });
-  if (!response.ok) throw new Error(`画像のアップロードに失敗しました (${response.status})`);
 }
