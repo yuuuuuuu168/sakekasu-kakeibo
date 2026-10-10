@@ -18,6 +18,7 @@ import {
   type ReceiptItem,
   type Transaction,
 } from '@kakeibo/core';
+import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
 import { judgeReceiptItems } from '../../api/classify';
 import { uploadToS3 } from '../../api/remote';
@@ -216,13 +217,15 @@ export function ReceiptsPage() {
           <h3 className="mt-4 text-xs font-semibold text-ink-2">品目</h3>
           <ul className="mt-1 space-y-2">
             {draft.items.map((item, index) => (
-              <li key={`${item.name}-${index}`} className="flex items-center gap-2">
+              // 目印に品目名を混ぜると、1 文字打つたびに行が作り直されて入力欄から外れる
+              <li key={index} className="flex items-center gap-2">
                 <Input
                   value={item.name}
                   onChange={(event) =>
                     setDraft({ ...draft, items: draft.items.map((row, position) => (position === index ? { ...row, name: event.target.value } : row)) })
                   }
-                  className="flex-1"
+                  placeholder="品目名"
+                  className="min-w-0 flex-1"
                   aria-label="品目名"
                 />
                 <Select
@@ -236,11 +239,7 @@ export function ReceiptsPage() {
                   className="w-32"
                   aria-label="カテゴリ"
                 >
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.label}
-                    </option>
-                  ))}
+                  <CategoryOptions categories={categories} />
                 </Select>
                 <Input
                   type="number"
@@ -254,7 +253,7 @@ export function ReceiptsPage() {
                       ),
                     })
                   }
-                  className="tnum w-24 text-right"
+                  className="tnum w-24 shrink-0 text-right"
                   aria-label="金額"
                 />
                 <button

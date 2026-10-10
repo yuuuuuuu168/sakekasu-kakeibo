@@ -9,6 +9,7 @@ import {
   type Category,
   type RecurringPayment,
 } from '@kakeibo/core';
+import { CategoryOptions } from '../../components/CategoryOptions';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { currentMonth, formatMonth, todayIso } from '../../lib/month';
@@ -257,11 +258,7 @@ function RecurringForm({
         </Field>
         <Field label="カテゴリ">
           <Select className="w-full" value={draft.categoryId} onChange={(event) => set('categoryId', event.target.value)}>
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.label}
-              </option>
-            ))}
+            <CategoryOptions categories={categories} />
           </Select>
         </Field>
         <Field label="引き落とし日">
