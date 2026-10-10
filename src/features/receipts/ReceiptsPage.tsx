@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import { Camera, Copy, Plus, Trash2 } from 'lucide-react';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
   UNCATEGORIZED_ID,
   activeCategories,
@@ -37,6 +37,13 @@ type Draft = {
   warnings?: string[];
 };
 
+/**
+ * OCR が読める形式。読む側（ocr-receipt）が中身のバイト列で確かめるのもこの 3 つ。
+ * カメラロールから選ぶ入力にはこれを列挙して渡す。iOS は HEIC の写真をここに無い形式と見て
+ * JPEG に直してから渡してくれる。`image/*` だと HEIC のまま届いて OCR で落ちることがある。
+ */
+const READABLE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
 function emptyDraft(): Draft {
   return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [] };
 }
@@ -47,7 +54,9 @@ function emptyDraft(): Draft {
  */
 export function ReceiptsPage() {
   const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions } = useStore();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  // 撮るのとは別の入力にする。capture を付けるとスマホはカメラしか開かず、撮り溜めた写真を選べない
+  const libraryRef = useRef<HTMLInputElement>(null);
 
   const [draft, setDraft] = useState<Draft | undefined>();
   const [selectedTxnId, setSelectedTxnId] = useState<string | undefined>();
@@ -69,8 +78,12 @@ export function ReceiptsPage() {
   }, [draft, snapshot.transactions]);
 
   async function onImage(file: File) {
-    setBusy(true);
     setMessage(undefined);
+    if (file.type && !READABLE_IMAGE_TYPES.includes(file.type)) {
+      setMessage('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
+      return;
+    }
+    setBusy(true);
     try {
       const target = await api.requestUpload(file.type || 'image/jpeg');
       await uploadToS3(target, file);
@@ -150,6 +163,13 @@ export function ReceiptsPage() {
     }
   }
 
+  function onPicked(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) void onImage(file);
+    // 同じ写真を選び直しても onChange が来るように空にしておく
+    event.target.value = '';
+  }
+
   const itemsTotal = draft?.items.reduce((sum, item) => sum + item.amount, 0) ?? 0;
 
   return (
@@ -158,30 +178,37 @@ export function ReceiptsPage() {
 
       <Card>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" onClick={() => fileRef.current?.click()} disabled={busy || config.mode === 'local'}>
+          <Button variant="primary" onClick={() => cameraRef.current?.click()} disabled={busy || config.mode === 'local'}>
             <Camera size={15} />
             写真を読む
+          </Button>
+          <Button onClick={() => libraryRef.current?.click()} disabled={busy || config.mode === 'local'}>
+            <ImageIcon size={15} />
+            カメラロールから
           </Button>
           <Button onClick={() => setDraft(emptyDraft())} disabled={busy}>
             手で入れる
           </Button>
           <input
-            ref={fileRef}
+            ref={cameraRef}
             type="file"
             accept="image/*"
             capture="environment"
             className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void onImage(file);
-              event.target.value = '';
-            }}
+            onChange={onPicked}
+          />
+          <input
+            ref={libraryRef}
+            type="file"
+            accept={READABLE_IMAGE_TYPES.join(',')}
+            className="hidden"
+            onChange={onPicked}
           />
         </div>
         <p className="mt-2 text-xs text-muted">
           {config.mode === 'local'
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
-            : '写真を撮ると Bedrock が品目と金額を読み、金額と日付の近い明細に自動で当てます。'}
+            : '写真を撮るか、カメラロールから選ぶと Bedrock が品目と金額を読み、金額と日付の近い明細に自動で当てます。'}
         </p>
         {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
       </Card>
