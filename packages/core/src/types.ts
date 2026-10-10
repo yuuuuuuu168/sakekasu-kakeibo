@@ -71,6 +71,12 @@ export type CategoryRule = {
   /** 大きいほど優先。同値なら pattern の長い方が勝つ */
   priority: number;
   builtin?: boolean;
+  /**
+   * 何に当てるルールか。無ければ明細の店舗名（merchant）。
+   * `item` はレシートの品目名に当てるもので、人が品目のカテゴリを直したときに覚える。
+   * 店舗名の照合（pickRule）には混ぜない。同じ一覧に置いているのは、保存先と API を増やさないため
+   */
+  target?: 'merchant' | 'item';
 };
 
 export type ReceiptItem = {
