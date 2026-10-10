@@ -4,6 +4,7 @@ import {
   UNCATEGORIZED_ID,
   activeCategories,
   applySplits,
+  classifyItem,
   formatYen,
   splitEvenly,
   sumSplits,
@@ -11,12 +12,17 @@ import {
   type Split,
   type Transaction,
 } from '@kakeibo/core';
+import { judgeReceiptItems } from '../../api/classify';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button, Input, Select } from '../../components/ui/primitives';
 
 /**
  * 1 回の支払いを複数のカテゴリに割る画面。
  * レシートが無いとき用の逃げ道で、コンビニの 1,200 円を 食費 800 / 日用品 400 にする。
+ *
+ * 行には品名も書ける。参考書かマンガか、推し活のチケットかどうかは店名では分からず、
+ * 書名やイベント名で決まるため。品名を書いて保存すると、レシートの品目と同じ道
+ * （キーワード表 → 判定）でカテゴリを当てる。
  */
 export function SplitDialog({
   transaction,
@@ -54,8 +60,19 @@ export function SplitDialog({
 
         <ul className="space-y-2">
           {rows.map((row, index) => (
-            <li key={row.id} className="flex items-center gap-2">
-              <Select value={row.categoryId} onChange={(event) => change(index, { categoryId: event.target.value })} className="flex-1">
+            <li key={row.id} className="flex flex-wrap items-center gap-2">
+              <Input
+                value={row.name ?? ''}
+                onChange={(event) => change(index, { name: event.target.value })}
+                placeholder="品名（書名・イベント名など。空でもよい）"
+                className="w-full"
+                aria-label="品名"
+              />
+              <Select
+                value={row.categoryId}
+                onChange={(event) => change(index, { categoryId: event.target.value, origin: 'manual' })}
+                className="flex-1"
+              >
                 {options.map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.label}
@@ -96,7 +113,12 @@ export function SplitDialog({
             <Plus size={14} />
             行を足す
           </Button>
-          <Button size="sm" onClick={() => setRows(splitEvenly(transaction.amount, rows.map((row) => row.categoryId)))}>
+          <Button
+            size="sm"
+            onClick={() =>
+              setRows(splitEvenly(transaction.amount, rows.map((row) => row.categoryId)).map((split, index) => withName(split, rows[index]?.name)))
+            }
+          >
             均等に割る
           </Button>
           <div className="flex-1" />
@@ -117,7 +139,7 @@ export function SplitDialog({
             onClick={async () => {
               setBusy(true);
               try {
-                await onSave(applySplits(transaction, rows));
+                await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories)));
                 onClose();
               } finally {
                 setBusy(false);
@@ -130,4 +152,45 @@ export function SplitDialog({
       </div>
     </Dialog>
   );
+}
+
+function withName(split: Split, name: string | undefined): Split {
+  const trimmed = name?.trim();
+  if (!trimmed) {
+    const { name: _dropped, ...rest } = split;
+    return rest;
+  }
+  return { ...split, name: trimmed };
+}
+
+/**
+ * 品名の書かれた行にカテゴリを当てる。当て直すのは、未分類の行と、店のルールで仮に入っただけの行。
+ * Amazon の明細は店のルールで「日用品」が仮置きされているので、それも品名で当て直す。
+ * 人がこの画面で選んだカテゴリと、レシートから付いたカテゴリは触らない。
+ * 判定に送るのは品名と店名だけで、レシートの品目と同じ扱いになる。
+ */
+async function categorizeByName(rows: Split[], storeName: string, categories: Category[]): Promise<Split[]> {
+  const named = rows.map((row) => withName(row, row.name));
+  const targets = named.filter((row) => row.name && (row.categoryId === UNCATEGORIZED_ID || provisional(row)));
+  if (targets.length === 0) return named;
+
+  const { items } = await judgeReceiptItems(
+    targets.map((row) => {
+      const guess = classifyItem(row.name ?? '');
+      return { name: row.name ?? '', amount: row.amount, ...(guess !== UNCATEGORIZED_ID ? { categoryId: guess } : {}) };
+    }),
+    storeName,
+    categories,
+  );
+  return named.map((row) => {
+    const index = targets.indexOf(row);
+    if (index < 0) return row;
+    const categoryId = items[index]?.categoryId;
+    // 当たらなかったら仮置きのカテゴリのまま残す。未分類に落とすと、書く前より情報が減る
+    return categoryId ? { ...row, categoryId } : row;
+  });
+}
+
+function provisional(row: Split): boolean {
+  return row.origin === 'rule' || row.origin === 'fallback';
 }

@@ -4,6 +4,7 @@ import {
   TRANSFER_ID,
   UNCATEGORIZED_ID,
   activeCategories,
+  allRules,
   asTransfer,
   categoryLabel,
   duplicateKey,
@@ -14,6 +15,7 @@ import {
   learnRule,
   markNotDuplicate,
   monthOf,
+  shouldLearnRule,
   transactionsOfMonth,
   type DuplicatePair,
   type Transaction,
@@ -67,7 +69,10 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
 
   const total = rows.reduce((sum, txn) => sum + txn.amount, 0);
 
-  /** カテゴリを直したら、同じ店は今後も同じカテゴリになるようルールを増やす */
+  /**
+   * カテゴリを直したら、同じ店は今後も同じカテゴリになるようルールを増やす。
+   * コンビニや Amazon のような混ざる店は、その 1 回だけの例外として直すので覚えない
+   */
   async function recategorize(txn: Transaction, categoryId: string) {
     const updated: Transaction = {
       ...txn,
@@ -76,7 +81,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     };
     await saveTransaction(updated);
 
-    if (!txn.rawMerchant) return;
+    if (!shouldLearnRule(txn.rawMerchant, allRules(snapshot.rules))) return;
     const rule = learnRule(txn.rawMerchant, categoryId);
     const others = snapshot.rules.filter((item) => item.id !== rule.id);
     await saveRules([...others, rule]);

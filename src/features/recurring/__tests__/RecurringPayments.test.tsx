@@ -64,7 +64,7 @@ describe('RecurringPayments', () => {
     fireEvent.click(screen.getByRole('button', { name: '追加' }));
     fireEvent.change(screen.getByLabelText('名前'), { target: { value: 'Netflix' } });
     fireEvent.change(screen.getByLabelText('金額'), { target: { value: '1590' } });
-    fireEvent.change(screen.getByLabelText('カテゴリ'), { target: { value: 'subscription' } });
+    fireEvent.change(screen.getByLabelText('カテゴリ'), { target: { value: 'fees-membership' } });
     fireEvent.change(screen.getByLabelText('引き落とし日'), { target: { value: '5' } });
     fireEvent.change(screen.getByLabelText('初回の月'), { target: { value: '2026-01' } });
 
@@ -77,7 +77,7 @@ describe('RecurringPayments', () => {
       expect.objectContaining({
         label: 'Netflix',
         amount: 1590,
-        categoryId: 'subscription',
+        categoryId: 'fees-membership',
         dayOfMonth: 5,
         startMonth: '2026-01',
         intervalMonths: 1,

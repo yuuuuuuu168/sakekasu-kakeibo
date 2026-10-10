@@ -13,9 +13,19 @@ import {
 } from '../categories';
 import type { Category } from '../types';
 
+/** 小カテゴリを持たない大カテゴリだけの形。初期カテゴリから切り離して、階層の扱いだけを見る */
+const FLAT: Category[] = [
+  { id: 'food', label: '食費', order: 1 },
+  { id: 'cafe', label: 'カフェ', order: 2 },
+  { id: 'daily', label: '日用品', order: 3 },
+  { id: 'eatout', label: '外食', order: 4 },
+  { id: TRANSFER_ID, label: '振替・チャージ', order: 90 },
+  { id: UNCATEGORIZED_ID, label: '未分類', order: 99 },
+];
+
 /** 週末に足すつもりの小カテゴリを、テストの中で先に作ってみたもの */
 const NESTED: Category[] = [
-  ...SEED_CATEGORIES,
+  ...FLAT,
   { id: 'rice', label: '米・パン', order: 101, parentId: 'food' },
   { id: 'deli', label: '惣菜', order: 102, parentId: 'food' },
   { id: 'paper', label: '紙もの', order: 103, parentId: 'daily' },
@@ -104,17 +114,17 @@ describe('rollUpTotals / rollUpLimits', () => {
 
 describe('canAdopt', () => {
   it('大カテゴリの下に普通のカテゴリを置ける', () => {
-    expect(canAdopt(SEED_CATEGORIES, 'eatout', 'food')).toBe(true);
+    expect(canAdopt(FLAT, 'eatout', 'food')).toBe(true);
   });
 
   it('自分自身の下には置けない', () => {
-    expect(canAdopt(SEED_CATEGORIES, 'food', 'food')).toBe(false);
+    expect(canAdopt(FLAT, 'food', 'food')).toBe(false);
   });
 
   it('未分類と振替は親にも子にもしない', () => {
-    expect(canAdopt(SEED_CATEGORIES, 'food', UNCATEGORIZED_ID)).toBe(false);
-    expect(canAdopt(SEED_CATEGORIES, 'food', TRANSFER_ID)).toBe(false);
-    expect(canAdopt(SEED_CATEGORIES, UNCATEGORIZED_ID, 'food')).toBe(false);
+    expect(canAdopt(FLAT, 'food', UNCATEGORIZED_ID)).toBe(false);
+    expect(canAdopt(FLAT, 'food', TRANSFER_ID)).toBe(false);
+    expect(canAdopt(FLAT, UNCATEGORIZED_ID, 'food')).toBe(false);
   });
 
   it('小カテゴリの下には置けない（3 段目になる）', () => {
@@ -126,12 +136,53 @@ describe('canAdopt', () => {
   });
 
   it('使わなくなったカテゴリの下には置けない', () => {
-    const merged: Category[] = SEED_CATEGORIES.map((category) => (category.id === 'food' ? { ...category, archived: true } : category));
+    const merged: Category[] = FLAT.map((category) => (category.id === 'food' ? { ...category, archived: true } : category));
     expect(canAdopt(merged, 'eatout', 'food')).toBe(false);
   });
 
   it('知らない ID は断る', () => {
-    expect(canAdopt(SEED_CATEGORIES, 'food', 'nope')).toBe(false);
-    expect(canAdopt(SEED_CATEGORIES, 'nope', 'food')).toBe(false);
+    expect(canAdopt(FLAT, 'food', 'nope')).toBe(false);
+    expect(canAdopt(FLAT, 'nope', 'food')).toBe(false);
+  });
+});
+
+describe('SEED_CATEGORIES', () => {
+  const byId = new Map(SEED_CATEGORIES.map((category) => [category.id, category]));
+
+  it('ID が重ならない', () => {
+    expect(byId.size).toBe(SEED_CATEGORIES.length);
+  });
+
+  it('大カテゴリは支出 13 個と、振替・未分類', () => {
+    const top = topLevelCategories(SEED_CATEGORIES).map((category) => category.label);
+    expect(top).toHaveLength(15);
+    expect(top.slice(-2)).toEqual(['振替・チャージ', '未分類']);
+    expect(top).toContain('推し活');
+    expect(top).not.toContain('サブスク');
+  });
+
+  it('小カテゴリは 2 段までで、親は必ず大カテゴリ', () => {
+    const children = SEED_CATEGORIES.filter((category) => category.parentId);
+    expect(children).toHaveLength(46);
+    for (const child of children) {
+      const parent = byId.get(child.parentId ?? '');
+      expect(parent, child.id).toBeDefined();
+      expect(parent?.parentId, child.id).toBeUndefined();
+      expect(child.id.startsWith(`${parent?.id}-`), child.id).toBe(true);
+    }
+  });
+
+  it('振替と未分類には小カテゴリを吊らない', () => {
+    expect(hasChildren(SEED_CATEGORIES, TRANSFER_ID)).toBe(false);
+    expect(hasChildren(SEED_CATEGORIES, UNCATEGORIZED_ID)).toBe(false);
+  });
+
+  it('小カテゴリは親のすぐ後ろに並ぶ', () => {
+    for (const parent of topLevelCategories(SEED_CATEGORIES)) {
+      for (const child of childCategories(SEED_CATEGORIES, parent.id)) {
+        expect(child.order).toBeGreaterThan(parent.order);
+        expect(child.order).toBeLessThan(parent.order + 100);
+      }
+    }
   });
 });

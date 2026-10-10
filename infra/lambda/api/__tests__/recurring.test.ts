@@ -65,7 +65,7 @@ const PAYMENT = {
   id: 'r1',
   label: 'Netflix',
   amount: 1590,
-  categoryId: 'subscription',
+  categoryId: 'fees-membership',
   dayOfMonth: 5,
   startMonth: '2026-01',
 };

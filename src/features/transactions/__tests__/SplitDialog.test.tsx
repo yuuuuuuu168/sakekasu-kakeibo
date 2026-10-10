@@ -54,3 +54,69 @@ describe('SplitDialog', () => {
     expect(saved.splits.reduce((sum, split) => sum + split.amount, 0)).toBe(1200);
   });
 });
+
+describe('SplitDialog の品名', () => {
+  it('品名だけ書いて未分類のまま保存すると、品名でカテゴリを当てる', async () => {
+    const onSave = vi.fn(async (_transaction: Transaction) => undefined);
+    const book: Transaction = {
+      ...TXN,
+      amount: 594,
+      rawMerchant: 'AMAZON.CO.JP',
+      splits: [{ id: 's1', amount: 594, categoryId: 'uncategorized', origin: 'rule' }],
+    };
+    render(<SplitDialog transaction={book} categories={SEED_CATEGORIES} onClose={() => undefined} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: 'ブルーロック（40） (週刊少年マガジンコミックス)' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.splits).toEqual([
+      expect.objectContaining({ name: 'ブルーロック（40） (週刊少年マガジンコミックス)', categoryId: 'hobby-books', amount: 594 }),
+    ]);
+  });
+
+  it('店のルールで仮に入ったカテゴリは、品名で当て直す', async () => {
+    const onSave = vi.fn(async (_transaction: Transaction) => undefined);
+    const amazon: Transaction = {
+      ...TXN,
+      amount: 1867,
+      rawMerchant: 'AMAZON.CO.JP',
+      splits: [{ id: 's1', amount: 1867, categoryId: 'daily', origin: 'rule' }],
+    };
+    render(<SplitDialog transaction={amazon} categories={SEED_CATEGORIES} onClose={() => undefined} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: 'サクセス 薬用シャンプー つめかえ用' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ categoryId: 'daily-consumables' });
+  });
+
+  it('当てられなければ仮置きのカテゴリを残す', async () => {
+    const onSave = vi.fn(async (_transaction: Transaction) => undefined);
+    render(<SplitDialog transaction={TXN} categories={SEED_CATEGORIES} onClose={() => undefined} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: 'Selected Posh' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ name: 'Selected Posh', categoryId: 'food' });
+  });
+
+  it('この画面で人が選んだカテゴリは品名で上書きしない', async () => {
+    const onSave = vi.fn(async (_transaction: Transaction) => undefined);
+    render(<SplitDialog transaction={TXN} categories={SEED_CATEGORIES} onClose={() => undefined} onSave={onSave} />);
+
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: 'てるてるおばけポンチョ' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'work' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ name: 'てるてるおばけポンチョ', categoryId: 'work', origin: 'manual' });
+  });
+});

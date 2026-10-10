@@ -47,7 +47,7 @@ describe('judgeReceiptItems', () => {
     const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
     expect(judged.items[1].categoryId).toBe('apparel');
     expect(judged.warnings[0]).toContain('ﾃｨｯｼｭ 5P');
-    expect(judged.warnings[0]).toContain('衣類・美容');
+    expect(judged.warnings[0]).toContain('衣類・散髪');
   });
 
   it('判断できなかった品目はキーワード表の答えを残す', async () => {

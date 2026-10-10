@@ -10,26 +10,114 @@ export const UNCATEGORIZED_ID = 'uncategorized';
 export const TRANSFER_ID = 'transfer';
 
 /**
- * 初期カテゴリ。試行錯誤フェーズの出発点で、増やす前提。
- * 「酒」と「カフェ・嗜好品」を食費から独立させてあるのは、混ぜると何に使ったかが
- * 見えなくなる支出だから。要らなければ画面から食費へ統合する。
+ * 配送料。Amazon の「配送料 200 / 割引 -200」のように送料と同じ額の割引が付いたとき、
+ * 割引をここに寄せて相殺する（`splitsFromReceipt`）。品目に配ると商品が安く見えてしまう。
  */
+export const SHIPPING_ID = 'fees-shipping';
+
+type Seed = [id: string, label: string, children: [id: string, label: string][]];
+
+/**
+ * 初期カテゴリ。大カテゴリ 13 個と、その下の小カテゴリ。分け方は「何に使ったか」の 1 本に揃えてある。
+ * 上限は大カテゴリにしか付けられないので、上限を付けたいものは大カテゴリに立てる（推し活がそう）。
+ * 外食・カフェ・酒を食費の下に置いたのも同じ理由で、食費全体で見張れば足りるという判断。
+ *
+ * 小カテゴリの ID には親の ID を前に付ける。利用者が画面で足すカテゴリ（`c-…`）とも、
+ * 大カテゴリ同士とも衝突しないようにするため。
+ * 化粧品やサプリのように小カテゴリを作らなかったものは、大カテゴリの直下に入る。
+ * 判定で小カテゴリまで決まらなかったときも同じで、そこが実質「その他」になる。
+ */
+const SEED_TREE: Seed[] = [
+  ['food', '食費', [
+    ['food-groceries', '食材'],
+    ['food-deli', '中食'],
+    ['food-eatout', '外食'],
+    ['food-cafe', 'カフェ'],
+    ['food-snacks', '飲み物・お菓子'],
+    ['food-alcohol', '酒'],
+  ]],
+  ['daily', '日用品', [
+    ['daily-consumables', '消耗品'],
+    ['daily-household', '生活雑貨'],
+  ]],
+  ['apparel', '衣類・散髪', [
+    ['apparel-clothes', '衣類'],
+    ['apparel-haircut', '散髪'],
+    ['apparel-cleaning', 'クリーニング'],
+  ]],
+  ['medical', '健康・医療', [
+    ['medical-clinic', '通院・薬'],
+    ['medical-fitness', 'ジム・運動'],
+  ]],
+  ['transport', '交通', [
+    ['transport-train', '電車'],
+    ['transport-bus', 'バス'],
+    ['transport-shinkansen', '新幹線'],
+    ['transport-highway-bus', '高速バス'],
+    ['transport-taxi', 'タクシー'],
+    ['transport-flight', '飛行機'],
+  ]],
+  ['housing', '住居・光熱', [
+    ['housing-rent', '家賃・管理費'],
+    ['housing-electricity', '電気'],
+    ['housing-gas', 'ガス'],
+    ['housing-water', '水道'],
+  ]],
+  ['telecom', '通信', [
+    ['telecom-mobile', '携帯'],
+    ['telecom-internet', 'ネット回線'],
+  ]],
+  ['hobby', '趣味・娯楽', [
+    ['hobby-books', '本・漫画'],
+    ['hobby-events', '映画・イベント'],
+    ['hobby-streaming', '動画・音楽配信'],
+    ['hobby-games', 'ゲーム'],
+    ['hobby-gadgets', 'ガジェット'],
+    ['hobby-dmm', 'DMM'],
+  ]],
+  ['oshi', '推し活', [
+    ['oshi-hololive', 'ホロライブ'],
+    ['oshi-youtube', 'Google/YouTube'],
+    ['oshi-pixiv', 'Pixiv/Fanbox'],
+  ]],
+  ['work', '仕事・学習', [
+    ['work-ai', 'AI'],
+    ['work-cloud', 'クラウド利用料'],
+    ['work-devtools', '開発ツール'],
+    ['work-courses', '講座・資格'],
+    ['work-books', '参考書'],
+  ]],
+  ['social', '交際費', [
+    ['social-dining', '会食'],
+    ['social-gifts', 'プレゼント・お祝い'],
+  ]],
+  ['special', '特別費', [
+    ['special-travel', '旅行'],
+    ['special-furniture', '家電・家具'],
+  ]],
+  ['fees', '手数料・年会費', [
+    ['fees-bank', '手数料'],
+    ['fees-membership', '年会費・会費'],
+    ['fees-shipping', '配送料'],
+  ]],
+];
+
+/** 並び順は大カテゴリを 100 刻みにして、小カテゴリをその間に入れる */
 export const SEED_CATEGORIES: Category[] = [
-  { id: 'food', label: '食費', order: 1 },
-  { id: 'eatout', label: '外食', order: 2 },
-  { id: 'cafe', label: 'カフェ・嗜好品', order: 3 },
-  { id: 'alcohol', label: '酒', order: 4 },
-  { id: 'daily', label: '日用品', order: 5 },
-  { id: 'apparel', label: '衣類・美容', order: 6 },
-  { id: 'transport', label: '交通', order: 7 },
-  { id: 'telecom', label: '通信', order: 8 },
-  { id: 'housing', label: '住居・光熱', order: 9 },
-  { id: 'medical', label: '医療', order: 10 },
-  { id: 'hobby', label: '趣味・娯楽', order: 11 },
-  { id: 'social', label: '交際費', order: 12 },
-  { id: 'subscription', label: 'サブスク', order: 13 },
-  { id: TRANSFER_ID, label: '振替・チャージ', order: 90 },
-  { id: UNCATEGORIZED_ID, label: '未分類', order: 99 },
+  ...SEED_TREE.flatMap(([id, label, children], index): Category[] => {
+    const order = (index + 1) * 100;
+    return [
+      { id, label, order },
+      ...children.map(([childId, childLabel], position) => ({
+        id: childId,
+        label: childLabel,
+        order: order + position + 1,
+        parentId: id,
+      })),
+    ];
+  }),
+  { id: TRANSFER_ID, label: '振替・チャージ', order: 9000 },
+  { id: UNCATEGORIZED_ID, label: '未分類', order: 9900 },
 ];
 
 export function categoryLabel(categories: Category[], id: string): string {

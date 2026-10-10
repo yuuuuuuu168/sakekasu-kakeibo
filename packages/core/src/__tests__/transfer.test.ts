@@ -53,8 +53,8 @@ describe('チャージのルール', () => {
   });
 
   it('Suica で実際に乗った分は交通費のまま', () => {
-    expect(classify('JR東日本 品川', RULES).categoryId).toBe('transport');
-    expect(classify('Suica 物販', RULES).categoryId).toBe('transport');
+    expect(classify('JR東日本 品川', RULES).categoryId).toBe('transport-train');
+    expect(classify('Suica 物販', RULES).categoryId).toBe('transport-train');
   });
 
   it('付け替えて覚えさせたルールはチャージのルールより強い', () => {

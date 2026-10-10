@@ -13,7 +13,7 @@ const NETFLIX: RecurringPayment = {
   id: 'r-netflix',
   label: 'Netflix',
   amount: 1590,
-  categoryId: 'subscription',
+  categoryId: 'fees-membership',
   dayOfMonth: 5,
   startMonth: '2026-01',
 };
@@ -36,13 +36,13 @@ const YEARLY: RecurringPayment = {
   id: 'r-domain',
   label: 'ドメイン',
   amount: 1980,
-  categoryId: 'subscription',
+  categoryId: 'fees-membership',
   dayOfMonth: 31,
   startMonth: '2026-02',
   intervalMonths: 12,
 };
 
-function txn(id: string, date: string, amount: number, merchant: string, categoryId = 'subscription'): Transaction {
+function txn(id: string, date: string, amount: number, merchant: string, categoryId = 'fees-membership'): Transaction {
   return {
     id,
     date,

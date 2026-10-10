@@ -63,6 +63,8 @@ export type CategoryRule = {
   categoryId: string;
   /** 1 回の支払いに複数カテゴリが混ざる店。当たると needsDetail が立つ */
   ambiguous?: boolean;
+  /** この額（円）以上の支払いにだけ当てる。JR の新幹線のように、金額で行き先が変わる店に使う */
+  minAmount?: number;
   /** 大きいほど優先。同値なら pattern の長い方が勝つ */
   priority: number;
   builtin?: boolean;
