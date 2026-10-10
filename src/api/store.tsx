@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import {
   SEED_CATEGORIES,
   allRules,
+  withLaterSeeds,
   type Budget,
   type Category,
   type CategoryRule,
@@ -52,7 +53,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const loaded = await api.loadSnapshot();
-      setSnapshot({ ...EMPTY, ...loaded, categories: loaded.categories?.length ? loaded.categories : SEED_CATEGORIES });
+      // 使い始めた後で初期カテゴリに足したもの（値引き）は、保存済みの一覧に補う
+      setSnapshot({ ...EMPTY, ...loaded, categories: loaded.categories?.length ? withLaterSeeds(loaded.categories) : SEED_CATEGORIES });
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

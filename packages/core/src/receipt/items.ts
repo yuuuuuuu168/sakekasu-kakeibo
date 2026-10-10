@@ -1,4 +1,4 @@
-import { UNCATEGORIZED_ID } from '../categories';
+import { DISCOUNT_ID, UNCATEGORIZED_ID } from '../categories';
 
 /**
  * レシートの品目名からカテゴリを当てる表。
@@ -86,6 +86,10 @@ const ITEM_KEYWORDS: [keyword: string, categoryId: string][] = [
   // 手数料・年会費
   ['KINDLE UNLIMITED', 'fees-membership'],
   ['送料', 'fees-shipping'], ['配送料', 'fees-shipping'], ['配送手数料', 'fees-shipping'],
+
+  // 値引き。金額が負なら名前に関係なく値引きに入る（classifyItem）ので、ここは OCR が符号を
+  // 落としたときの拾い。「割引券」「クーポン券」のように物を買った行は少ないので、短い語のまま置く
+  ['値引', DISCOUNT_ID], ['割引', DISCOUNT_ID], ['クーポン', DISCOUNT_ID], ['値下', DISCOUNT_ID],
 ];
 
 function normalize(text: string): string {
@@ -106,8 +110,14 @@ const SORTED_KEYWORDS = ITEM_KEYWORDS.map(([keyword, categoryId]) => [normalize(
   (a, b) => b[0].length - a[0].length,
 );
 
-export function classifyItem(name: string, hint?: string): string {
+/**
+ * 品目のカテゴリ。hint（OCR やルール、人が選んだもの）があればそれを使い、無ければ金額と品目名で当てる。
+ * 負の金額の行は値引き。値引きがどの品目に掛かったかはレシートからは決められないので、
+ * 名前で食費や日用品に当てず、値引きの置き場にまとめる。
+ */
+export function classifyItem(name: string, hint?: string, amount?: number): string {
   if (hint && hint !== UNCATEGORIZED_ID) return hint;
+  if (amount !== undefined && amount < 0) return DISCOUNT_ID;
   if (!name) return UNCATEGORIZED_ID;
   const target = normalize(name);
   for (const [keyword, categoryId] of SORTED_KEYWORDS) {

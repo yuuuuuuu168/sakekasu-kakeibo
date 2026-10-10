@@ -2,6 +2,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import {
   SEED_CATEGORIES,
+  withLaterSeeds,
   buildMonthlyReport,
   previousMonth,
   type Budget,
@@ -87,7 +88,7 @@ async function generate(pk: string, month: string): Promise<void> {
   for (const item of items) {
     const sk = String(item.sk);
     if (sk.startsWith('TXN#')) transactions.push(item as unknown as Transaction);
-    else if (sk === 'CONFIG#categories' && Array.isArray(item.categories)) categories = item.categories as Category[];
+    else if (sk === 'CONFIG#categories' && Array.isArray(item.categories)) categories = withLaterSeeds(item.categories as Category[]);
     else if (sk === `BUDGET#${month}`) budget = { month, limits: (item.limits ?? {}) as Record<string, number> };
   }
 

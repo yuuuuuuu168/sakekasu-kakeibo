@@ -1,4 +1,4 @@
-import { TRANSFER_ID, UNCATEGORIZED_ID, childCategories, topLevelCategories } from './categories';
+import { DISCOUNT_ID, TRANSFER_ID, UNCATEGORIZED_ID, childCategories, topLevelCategories } from './categories';
 import type { Category } from './types';
 
 /**
@@ -111,7 +111,12 @@ function ask(kind: ClassifyKind, subject: ClassifySubject): string {
 
 /** 1 段目。大カテゴリを選ばせる */
 export function parentChoiceSpecs(target: ClassifyTarget): ChoiceSpec[] {
-  const criteria = Object.fromEntries(topLevelCategories(target.categories).map((category) => [category.id, describe(category)]));
+  // 値引きは選ばせない。負の金額の行は聞く前に値引きと決めてあり、正の金額の品目や店が値引きになることは無い
+  const criteria = Object.fromEntries(
+    topLevelCategories(target.categories)
+      .filter((category) => category.id !== DISCOUNT_ID)
+      .map((category) => [category.id, describe(category)]),
+  );
   if (Object.keys(criteria).length < 2) return [];
 
   return target.subjects.map((subject) => ({

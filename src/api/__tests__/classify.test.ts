@@ -50,6 +50,14 @@ describe('judgeReceiptItems', () => {
     expect(judged.warnings[0]).toContain('衣類・散髪');
   });
 
+  it('負の金額の行は判定に聞かず、値引きのまま残す', async () => {
+    api.classify.mockResolvedValue({});
+    const items: ReceiptItem[] = [...ITEMS, { name: 'ｺｼﾋｶﾘ 値引', amount: -200, categoryId: 'discount' }];
+    const judged = await judgeReceiptItems(items, '店', CATEGORIES);
+    expect(api.classify.mock.calls[0][0].subjects.map((subject) => subject.key)).toEqual(['0', '1']);
+    expect(judged.items[2].categoryId).toBe('discount');
+  });
+
   it('判断できなかった品目はキーワード表の答えを残す', async () => {
     api.classify.mockResolvedValue({ '1': { categoryId: UNCATEGORIZED_ID, confidence: 0.2, status: 'unresolved' } });
     const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);

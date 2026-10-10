@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { SEED_CATEGORIES, TRANSFER_ID, UNCATEGORIZED_ID } from '@kakeibo/core';
+import { DISCOUNT_ID, SEED_CATEGORIES, TRANSFER_ID, UNCATEGORIZED_ID } from '@kakeibo/core';
 import { CategoryOptions } from '../CategoryOptions';
 
 function renderSelect(exclude?: string[]) {
@@ -35,10 +35,10 @@ describe('CategoryOptions', () => {
     expect([...select.options].some((option) => option.value === 'food')).toBe(true);
   });
 
-  it('小カテゴリの無い振替と未分類は括らずに出す', () => {
+  it('小カテゴリの無い値引き・振替・未分類は括らずに出す', () => {
     const select = renderSelect();
     const loose = [...select.children].filter((child) => child.tagName === 'OPTION') as HTMLOptionElement[];
-    expect(loose.map((option) => option.value)).toEqual([TRANSFER_ID, UNCATEGORIZED_ID]);
+    expect(loose.map((option) => option.value)).toEqual([DISCOUNT_ID, TRANSFER_ID, UNCATEGORIZED_ID]);
   });
 
   it('外したカテゴリは出さない', () => {

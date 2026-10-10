@@ -67,6 +67,21 @@ describe('classifyItem', () => {
     expect(classifyItem('アサヒスーパードライ', 'food-alcohol')).toBe('food-alcohol');
     expect(classifyItem('ティッシュ', 'uncategorized')).toBe('daily-consumables');
   });
+
+  it('負の金額の行は、品目名に関係なく値引きに入れる', () => {
+    expect(classifyItem('クーポン値引', undefined, -50)).toBe('discount');
+    expect(classifyItem('おにぎり 30円引', undefined, -30)).toBe('discount');
+    expect(classifyItem('おにぎり 値引', 'uncategorized', -30)).toBe('discount');
+  });
+
+  it('符号を落とした値引きの行も、品目名で値引きに入れる', () => {
+    expect(classifyItem('セット割引')).toBe('discount');
+    expect(classifyItem('ｸｰﾎﾟﾝ')).toBe('discount');
+  });
+
+  it('人や OCR が付けたカテゴリは、負の金額でもそのまま使う', () => {
+    expect(classifyItem('割引', 'fees-shipping', -200)).toBe('fees-shipping');
+  });
 });
 
 describe('splitsFromReceipt', () => {
@@ -107,7 +122,7 @@ describe('splitsFromReceipt', () => {
     expect(splits.slice(2).every((split) => split.categoryId === 'fees-shipping')).toBe(true);
   });
 
-  it('送料と額の合わない割引は、行として残さず商品に配る', () => {
+  it('送料と額の合わない割引は、値引きの行として残す', () => {
     const receipt: Receipt = {
       ...CONBINI_RECEIPT,
       total: 1300,
@@ -119,10 +134,29 @@ describe('splitsFromReceipt', () => {
       ],
     };
     const splits = splitsFromReceipt(receipt, 1300);
+    expect(splits.map((split) => [split.name, split.categoryId, split.amount])).toEqual([
+      ['ティッシュ', 'daily-consumables', 1000],
+      ['おにぎり', 'food-deli', 500],
+      ['クーポン値引', 'discount', -300],
+      ['配送料', 'fees-shipping', 100],
+    ]);
+  });
+
+  it('値引きに入った割引でも、送料と同じ額なら配送料で相殺する', () => {
+    const receipt: Receipt = {
+      ...CONBINI_RECEIPT,
+      total: 1000,
+      items: [
+        { name: 'ティッシュ', amount: 1000 },
+        { name: '配送料', amount: 200 },
+        { name: '送料割引', amount: -200, categoryId: 'discount' },
+      ],
+    };
+    const splits = splitsFromReceipt(receipt, 1000);
     expect(splits.map((split) => [split.categoryId, split.amount])).toEqual([
-      ['daily-consumables', 800],
-      ['food-deli', 400],
-      ['fees-shipping', 100],
+      ['daily-consumables', 1000],
+      ['fees-shipping', 200],
+      ['fees-shipping', -200],
     ]);
   });
 

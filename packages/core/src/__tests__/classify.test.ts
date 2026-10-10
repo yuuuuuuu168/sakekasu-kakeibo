@@ -12,7 +12,7 @@ import {
   type ChoiceAnswer,
   type ClassifyTarget,
 } from '../classify';
-import { SEED_CATEGORIES, TRANSFER_ID, UNCATEGORIZED_ID } from '../categories';
+import { DISCOUNT_ID, SEED_CATEGORIES, TRANSFER_ID, UNCATEGORIZED_ID } from '../categories';
 import type { Category } from '../types';
 
 /** 初期カテゴリから切り離した形。小カテゴリは食費の下にだけ置いて、2 段目の扱いを見る */
@@ -43,6 +43,12 @@ describe('parentChoiceSpecs', () => {
     expect(specs.map((spec) => spec.name)).toEqual(['s0', 's1']);
     expect(Object.keys(specs[0].criteria)).toContain('food');
     expect(Object.keys(specs[0].criteria)).not.toContain('rice');
+  });
+
+  it('値引きは選択肢に入れない', () => {
+    const specs = parentChoiceSpecs({ ...RECEIPT, categories: SEED_CATEGORIES });
+    expect(Object.keys(specs[0].criteria)).toContain('food');
+    expect(Object.keys(specs[0].criteria)).not.toContain(DISCOUNT_ID);
   });
 
   it('レシートの店舗名を質問に混ぜる', () => {

@@ -80,6 +80,7 @@ describe('normalizeDraft', () => {
       '{"storeName":"店","date":"2026-09-01","total":1150,"items":[{"name":"おにぎり","amount":1200},{"name":"クーポン値引","amount":-50}]}'
     );
     expect(draft.items[1].amount).toBe(-50);
+    expect(draft.items[1].categoryId).toBe('discount');
   });
 
   /* タリーズのレシートで実際に起きた読み違い。「モーニングセット -¥100」を +100 で返してきた */
@@ -89,6 +90,7 @@ describe('normalizeDraft', () => {
       new Date('2026-09-08T12:00:00+09:00'),
     );
     expect(draft.items.map((item) => item.amount)).toEqual([510, 410, -100]);
+    expect(draft.items[2].categoryId).toBe('discount');
     expect(draft.warnings.join('')).toContain('「モーニングセット」を値引き');
     expect(draft.warnings.join('')).not.toContain('離れています');
   });

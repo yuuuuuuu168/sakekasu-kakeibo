@@ -188,7 +188,7 @@ export function normalizeDraft(
         name,
         amount: toYen(amount),
         ...(toNumber(item.quantity) !== undefined ? { quantity: toNumber(item.quantity) } : {}),
-        categoryId: classifyItem(name),
+        categoryId: classifyItem(name, undefined, toYen(amount)),
       };
     })
     .filter((item): item is DraftItem => item !== undefined);
@@ -235,6 +235,8 @@ function flipDiscount(items: DraftItem[], total: number): DraftItem | undefined 
   if (candidates.length !== 1) return undefined;
   const target = candidates[0];
   target.amount = -target.amount;
+  // 正の金額で付けたカテゴリ（食費など）のままだと、値引きが品目の側に混ざる
+  target.categoryId = classifyItem(target.name, undefined, target.amount);
   return target;
 }
 
