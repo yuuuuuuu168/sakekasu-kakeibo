@@ -125,6 +125,22 @@ describe('normalizeDraft', () => {
   });
 });
 
+describe('normalizeDraft の支払い方法', () => {
+  const body = (payment: string) =>
+    `{"storeName":"店","date":"2026-09-08","total":150,"paymentMethod":${payment},"items":[{"name":"おにぎり","amount":150}]}`;
+  const today = new Date('2026-09-08T12:00:00+09:00');
+
+  it('読めた支払い方法を返す', () => {
+    expect(normalizeDraft(body('"suica"'), today).paymentMethod).toBe('suica');
+    expect(normalizeDraft(body('"paypay"'), today).paymentMethod).toBe('paypay');
+  });
+
+  it('読めない、または選択肢に無い支払い方法は持たない', () => {
+    expect(normalizeDraft(body('null'), today)).not.toHaveProperty('paymentMethod');
+    expect(normalizeDraft(body('"商品券"'), today)).not.toHaveProperty('paymentMethod');
+  });
+});
+
 describe('sniffMediaType', () => {
   it('中身のバイト列から形式を決める', () => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0]);

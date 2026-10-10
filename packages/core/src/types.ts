@@ -1,5 +1,8 @@
-/** 明細の出どころ。CSV の列マッピングを保存する単位でもある */
-export type SourceKind = 'credit' | 'paypay' | 'cash' | 'manual';
+/**
+ * 明細の出どころ。CSV の列マッピングを保存する単位でもある。
+ * `unknown` はレシートから明細を作ったが払い方を覚えていないもの。取り込み元には出さない
+ */
+export type SourceKind = 'credit' | 'paypay' | 'suica' | 'cash' | 'unknown' | 'manual';
 
 export type Category = {
   id: string;
@@ -89,7 +92,13 @@ export type Receipt = {
   imageKey?: string;
   /** 紐付いた明細の ID */
   txnId?: string;
+  /**
+   * `cash` はレシートから支払い方法を選んで明細を作ったもの。名前は現金しか選べなかった頃の
+   * 名残で、保存済みのデータと揃えるために変えていない。何で払ったかは paidWith を見る
+   */
   status: 'pending' | 'matched' | 'cash' | 'discarded';
+  /** status が cash のときの支払い方法。無ければ現金（支払い方法を選べなかった頃の保存分） */
+  paidWith?: SourceKind;
   createdAt?: string;
 };
 

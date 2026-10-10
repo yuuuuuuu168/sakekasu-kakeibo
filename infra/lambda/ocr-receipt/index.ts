@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { classifyItem, toYen } from '@kakeibo/core';
+import { classifyItem, toPaymentMethod, toYen, type SourceKind } from '@kakeibo/core';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -101,6 +101,7 @@ function buildPrompt(): string {
   "storeName": "店舗名" または null,
   "date": "YYYY-MM-DD" または null,
   "total": 合計金額の整数 または null,
+  "paymentMethod": "cash" | "paypay" | "credit" | "suica" または null,
   "items": [
     { "name": "品目名", "amount": 金額の整数 または null, "quantity": 個数 }
   ]
@@ -119,12 +120,15 @@ function buildPrompt(): string {
 - total は「合計」の金額。「小計」「お預り」「対象」ではない
 - 店舗名はチェーン名と店名をつなげる（例: タリーズコーヒー 横浜駅店）
 - 日付は取引日。キャンペーンや有効期限の日付と取り違えない
+- paymentMethod は支払いの行から決める。お預り・現計は cash、PayPay は paypay、
+  クレジット・カード・VISA などは credit、交通系・Suica・PASMO・ICOCA などの交通系 IC は suica。
+  支払いの印字が無い、またはこの 4 つのどれでもない（他の QR 決済・電子マネー・商品券など）なら null
 - 品目名は印字の通り。略字はそのまま書く`;
 }
 
 async function analyze(
   image: { base64: string; mediaType: string },
-): Promise<{ storeName: string; date: string; total: number; items: unknown[]; warnings: string[] }> {
+): Promise<ReturnType<typeof normalizeDraft>> {
   const response = await bedrock.send(
     new InvokeModelCommand({
       modelId: MODEL_ID,
@@ -166,7 +170,7 @@ type DraftItem = { name: string; amount: number; quantity?: number; categoryId: 
 export function normalizeDraft(
   text: string,
   today: Date = new Date(),
-): { storeName: string; date: string; total: number; items: DraftItem[]; warnings: string[] } {
+): { storeName: string; date: string; total: number; items: DraftItem[]; paymentMethod?: SourceKind; warnings: string[] } {
   const warnings: string[] = [];
   const parsed = extractJson(text);
   if (!parsed) {
@@ -213,7 +217,9 @@ export function normalizeDraft(
     if (doubt) warnings.push(doubt);
   }
 
-  return { storeName, date, total: total ?? itemsTotal, items, warnings };
+  const paymentMethod = toPaymentMethod(parsed.paymentMethod);
+
+  return { storeName, date, total: total ?? itemsTotal, items, ...(paymentMethod ? { paymentMethod } : {}), warnings };
 }
 
 /**

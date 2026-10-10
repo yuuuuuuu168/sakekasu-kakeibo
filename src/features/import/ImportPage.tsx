@@ -13,6 +13,7 @@ import {
   mergeImported,
   monthOf,
   parseCsv,
+  SOURCE_LABELS,
   type ColumnMapping,
   type SourceKind,
   type Transaction,
@@ -31,12 +32,10 @@ type Loaded = {
   kind: 'csv' | 'pdf';
 };
 
-const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
-  { value: 'credit', label: 'クレジットカード' },
-  { value: 'paypay', label: 'PayPay' },
-  { value: 'cash', label: '現金' },
-  { value: 'manual', label: 'その他' },
-];
+/** 「不明」はレシートから明細を作るとき用で、取り込み元には出さない */
+const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = (['credit', 'paypay', 'suica', 'cash', 'manual'] as const).map(
+  (value) => ({ value, label: SOURCE_LABELS[value] }),
+);
 
 export function ImportPage() {
   const { snapshot, rules, saveTransactions, saveMapping, saveRules } = useStore();

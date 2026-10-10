@@ -17,3 +17,4 @@ export * from './receipt/split';
 export * from './receipt/match';
 export * from './duplicate';
 export * from './transfer';
+export * from './payment';
