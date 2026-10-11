@@ -184,6 +184,17 @@ reinvent `app/infra/lib/deploy-guardrail.mjs`。
   関数が消えたロールを指して止まる。ロールのプロパティ（タグ、境界、信頼ポリシーなど）を変える PR では、
   実物のロール名（`aws iam list-roles`）と照らし合わせる。境界は、名前が一致していれば
   `PutRolePermissionsBoundary` だけでその場で付く
+- **DESTROY のロググループは名前を変えられない。** 名前の変更は作り直しになり、cdkd は「保持中のログが消える」として
+  作り直しを拒んでスタックをロールバックする。ロググループは `RemovalPolicy.RETAIN` にしておく（古い方は残り、
+  保持期間で中身が消える）。2026-10-11 に learning の API の改名で止まった
+- **関数の名前を変えるときは、SNS の `LambdaSubscription` が作る実行許可で止まる。** 許可の作り直しで、同じ
+  StatementId の追加が既存の許可を返し、cdkd が古い方を消せずにロールバックする。許可を `addPermission` で
+  別の論理 ID として作れば、作り直しではなく新規作成と削除になる（builder の `devops-agent-stack.ts`）。
+  同じ構成でも通ることがある（builder の監視スタックは通った）ので、改名の PR では cdkd diff で許可が
+  `[+]` になっているかを見る
+- **ロールバックで残った新しいリソースは cdkd の管理外になる。** `UpdateReplacePolicy: Retain` のリソースは、
+  ロールバックで新しい方が残り、状態から外れる。次のデプロイで同じ名前を作れずに止まるので、手で消してから
+  デプロイし直す（ロールバックのログに `is RETAINED by this rollback` と出る）
 - **資産の上書きは止められない。** 資産置き場のキーは中身のハッシュだけで、アプリの接頭辞が無い。cdkd は
   `HeadObject` で有無を見てから `PutObject` するだけで、上書きを拒む条件を付けていない。止められるのは削除と、
   削除と同じ結果になるバケットの設定変更まで
