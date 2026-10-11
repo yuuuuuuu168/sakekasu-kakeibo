@@ -67,8 +67,11 @@ export interface KakeiboApi {
   deleteReceipt(id: string): Promise<void>;
   /** レシート画像の置き場所を用意する。ローカルモードでは使えない */
   requestUpload(contentType: string): Promise<UploadTarget>;
-  /** Bedrock で画像を読む。ローカルモードでは使えない */
-  analyzeReceipt(input: { key?: string; dataUrl?: string }): Promise<ReceiptDraft>;
+  /**
+   * Bedrock で画像を読む。ローカルモードでは使えない。
+   * 長いレシートを分けて撮ったときは keys に上から順に渡すと、1 枚のレシートとして読む
+   */
+  analyzeReceipt(input: { key?: string; keys?: string[]; dataUrl?: string }): Promise<ReceiptDraft>;
   /**
    * 品目名や店舗名のカテゴリを判定する（Jev）。ローカルモードでは使えない。
    * 返るのは投げた key ごとの結論。呼び出し側は落ちても進めること

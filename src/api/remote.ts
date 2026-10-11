@@ -54,7 +54,7 @@ export const remoteApi: KakeiboApi = {
   putReceipt: (receipt: Receipt) => request<void>('PUT', `/receipts/${encodeURIComponent(receipt.id)}`, receipt),
   deleteReceipt: (id: string) => request<void>('DELETE', `/receipts/${encodeURIComponent(id)}`),
   requestUpload: (contentType: string) => request<UploadTarget>('POST', '/uploads', { contentType }),
-  analyzeReceipt: (input: { key?: string; dataUrl?: string }) => request<ReceiptDraft>('POST', '/receipts/analyze', input),
+  analyzeReceipt: (input: { key?: string; keys?: string[]; dataUrl?: string }) => request<ReceiptDraft>('POST', '/receipts/analyze', input),
   classify: async (target: ClassifyTarget) => {
     const result = await request<{ verdicts?: Record<string, Verdict> }>('POST', '/classify', target);
     return result?.verdicts ?? {};

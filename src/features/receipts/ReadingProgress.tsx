@@ -11,8 +11,8 @@ export type Reading = {
   uploaded: number;
   /** いまの段に入った時刻（Date.now()）。経過秒数をここから数える */
   stageStartedAt: number;
-  /** 選んだ写真の object URL。何を送っているのかを見せる */
-  previewUrl?: string;
+  /** 選んだ写真の object URL。何を送っているのかを見せる。分けて撮ったレシートなら複数 */
+  previewUrls: string[];
 };
 
 const STEPS: { stage: ReadingStage; label: string }[] = [
@@ -35,8 +35,20 @@ export function ReadingProgress({ reading }: { reading: Reading }) {
 
   return (
     <div className="mt-3 flex gap-3 rounded-lg bg-plane p-3" role="status" aria-live="polite">
-      {reading.previewUrl && (
-        <img src={reading.previewUrl} alt="読み取り中のレシート" className="h-24 w-16 shrink-0 rounded-md object-cover ring-1 ring-black/10" />
+      {reading.previewUrls.length > 0 && (
+        <div className="flex shrink-0 gap-1">
+          {reading.previewUrls.map((url, index) => (
+            <img
+              key={url}
+              src={url}
+              alt={reading.previewUrls.length > 1 ? `読み取り中のレシート（${index + 1}/${reading.previewUrls.length} 枚目）` : '読み取り中のレシート'}
+              className={cn(
+                'shrink-0 rounded-md object-cover ring-1 ring-black/10',
+                reading.previewUrls.length > 1 ? 'h-24 w-8' : 'h-24 w-16',
+              )}
+            />
+          ))}
+        </div>
       )}
       <div className="min-w-0 flex-1">
         <ol className="space-y-1.5 text-sm">
@@ -70,7 +82,7 @@ export function ReadingProgress({ reading }: { reading: Reading }) {
         )}
         <p className="mt-2 text-xs text-ink-2">
           {reading.stage === 'upload'
-            ? '写真を送っています。電波の弱いところでは時間がかかります。'
+            ? `写真${reading.previewUrls.length > 1 ? `を ${reading.previewUrls.length} 枚` : ''}送っています。電波の弱いところでは時間がかかります。`
             : seconds >= SLOW_SECONDS
               ? '時間がかかっていますが、まだ読んでいます。このままお待ちください。'
               : '写真は届いています。読み取りにはふつう 10〜20 秒ほどかかります。'}
