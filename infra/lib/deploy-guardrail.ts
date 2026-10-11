@@ -32,6 +32,11 @@ export interface DeployGuardrailProps {
   resourceNamePrefix: string;
   /** 書き換えさせない GitHub Actions のロールの名前 */
   protectedRoleNames: string[];
+  /**
+   * アプリのロールに付ける Permissions Boundary の ARN（role-boundary.ts）。渡すと、
+   * 接頭辞の範囲のロールを境界なしで作ったり書き換えたりするのを拒否する
+   */
+  roleBoundaryArn?: string;
 }
 
 /**
@@ -51,7 +56,7 @@ export const CDKD_STACK_NAME_PATTERNS: Record<string, string[]> = {
  * 全アプリで共用するバケット（cdkd の状態と資産置き場）の削除と、削除・持ち出し・読めなくするのと
  * 同じ結果になる設定変更。どのアプリの cdkd もこれらを使わない
  */
-const SHARED_BUCKET_WRITE_ACTIONS = [
+export const SHARED_BUCKET_WRITE_ACTIONS = [
   's3:DeleteBucket',
   's3:PutBucketPolicy',
   's3:DeleteBucketPolicy',
@@ -91,7 +96,7 @@ const ROLE_WRITE_ACTIONS = [
 ];
 
 export function deployGuardrailStatements(props: DeployGuardrailProps): iam.PolicyStatement[] {
-  const { account, app, resourceNamePrefix, protectedRoleNames } = props;
+  const { account, app, resourceNamePrefix, protectedRoleNames, roleBoundaryArn } = props;
   const stateBucket = `arn:aws:s3:::cdkd-state-${account}`;
   const otherStacks = Object.entries(CDKD_STACK_NAME_PATTERNS)
     .filter(([name]) => name !== app)
@@ -191,6 +196,57 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
       actions: ['s3:DeleteObject', 's3:DeleteObjectVersion', ...SHARED_BUCKET_WRITE_ACTIONS],
       // ARN の * は / もまたぐので、バケットとその中のオブジェクトの両方に当たる
       resources: [`arn:aws:s3:::cdkd-assets-${account}-*`, `arn:aws:s3:::cdk-hnb659fds-assets-${account}-*`],
+    }),
+    ...(roleBoundaryArn ? roleBoundaryGuardStatements(account, resourceNamePrefix, roleBoundaryArn) : []),
+  ];
+}
+
+/**
+ * アプリのロールを Permissions Boundary の内側に閉じ込める。
+ *
+ * cdkd 用ロールは接頭辞の範囲のロールを作り替えられるので、Lambda の実行ロールに
+ * 管理者相当を書き込み、関数のコードを差し替えて呼べば、ガードレールの外の操作にも届く。
+ * 境界が付いていれば、ロールの実効権限は「ロール自身のポリシー ∩ 境界」で頭打ちになる。
+ *
+ * iam:PermissionsBoundary はロールの現在の境界（CreateRole では付けようとしている境界）を指す。
+ * 否定の条件はキーが無いときも当たるので、境界の無いロールへの書き込みも拒否される。
+ * このキーを渡すのは CreateRole、PutRolePolicy、AttachRolePolicy、PutRolePermissionsBoundary
+ * などに限られ、TagRole などに付けると常に不一致になるので、対応しているものだけを並べる。
+ * 権限を減らす操作（DeleteRolePolicy、DetachRolePolicy、DeleteRole）は止めない。
+ * cdkd がロールを消すときに境界の無いロールでも通す必要があるため。
+ *
+ * cdkd はロールの更新で境界を先に付けてからポリシーを書くので、境界を足す最初のデプロイも通る。
+ */
+function roleBoundaryGuardStatements(account: string, resourceNamePrefix: string, roleBoundaryArn: string): iam.PolicyStatement[] {
+  const appRoles = `arn:aws:iam::${account}:role/${resourceNamePrefix}*`;
+  return [
+    new iam.PolicyStatement({
+      sid: 'DenyRoleWritesWithoutBoundary',
+      effect: iam.Effect.DENY,
+      actions: ['iam:CreateRole', 'iam:PutRolePolicy', 'iam:AttachRolePolicy', 'iam:PutRolePermissionsBoundary'],
+      resources: [appRoles],
+      conditions: { ArnNotEquals: { 'iam:PermissionsBoundary': roleBoundaryArn } },
+    }),
+    // 信頼ポリシーを書き換えると、外のアカウントにロールを引き受けさせられる。境界は
+    // 引き受けた側の権限を絞るだけなので、これは境界では防げない。cdkd が呼ぶのは
+    // CDK 側で assumedBy を変えたときだけで、そのときは AccessDenied で止まるので人が直す
+    new iam.PolicyStatement({
+      sid: 'DenyRemovingBoundaryAndTrust',
+      effect: iam.Effect.DENY,
+      actions: ['iam:DeleteRolePermissionsBoundary', 'iam:UpdateAssumeRolePolicy'],
+      resources: [appRoles],
+    }),
+    // 境界そのものは CloudFormation のスタックで入れる。cdkd 用ロールからは書き換えさせない
+    new iam.PolicyStatement({
+      sid: 'DenyRewritingBoundary',
+      effect: iam.Effect.DENY,
+      actions: [
+        'iam:CreatePolicyVersion',
+        'iam:DeletePolicy',
+        'iam:DeletePolicyVersion',
+        'iam:SetDefaultPolicyVersion',
+      ],
+      resources: [roleBoundaryArn],
     }),
   ];
 }
