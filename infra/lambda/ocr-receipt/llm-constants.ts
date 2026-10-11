@@ -7,3 +7,9 @@
  */
 export const IDENTITY_TOKEN_AUDIENCE = 'https://api.anthropic.com';
 export const IDENTITY_TOKEN_SECONDS = 300;
+
+/**
+ * OCR の既定の呼び先（Claude API）のモデル。CDK が環境変数 ANTHROPIC_MODEL_OCR に入れ、
+ * llm.ts は環境変数が無いときの既定にも使う。精度が足りなければ claude-opus-5-5 に上げる。
+ */
+export const DEFAULT_ANTHROPIC_MODEL_OCR = 'claude-sonnet-5-5';

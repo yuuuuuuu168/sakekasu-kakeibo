@@ -10,7 +10,7 @@ import {
 import { oidcFederationProvider } from '@anthropic-ai/sdk/lib/credentials/oidc-federation';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { GetWebIdentityTokenCommand, STSClient } from '@aws-sdk/client-sts';
-import { IDENTITY_TOKEN_AUDIENCE, IDENTITY_TOKEN_SECONDS } from './llm-constants';
+import { DEFAULT_ANTHROPIC_MODEL_OCR, IDENTITY_TOKEN_AUDIENCE, IDENTITY_TOKEN_SECONDS } from './llm-constants';
 
 /**
  * レシートを読むモデルの呼び出し。呼び先は 2 つで、どちらも同じ Messages API の形で頼む。
@@ -68,7 +68,7 @@ type Config = {
 export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const bedrockModel = env.BEDROCK_MODEL_ID;
   if (!bedrockModel) throw new Error('BEDROCK_MODEL_ID is not set');
-  const anthropicModel = env.ANTHROPIC_MODEL_OCR || 'claude-sonnet-5-5';
+  const anthropicModel = env.ANTHROPIC_MODEL_OCR || DEFAULT_ANTHROPIC_MODEL_OCR;
 
   const ruleId = env.ANTHROPIC_FEDERATION_RULE_ID;
   const organizationId = env.ANTHROPIC_ORGANIZATION_ID;

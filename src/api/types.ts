@@ -68,7 +68,7 @@ export interface KakeiboApi {
   /** レシート画像の置き場所を用意する。ローカルモードでは使えない */
   requestUpload(contentType: string): Promise<UploadTarget>;
   /**
-   * Bedrock で画像を読む。ローカルモードでは使えない。
+   * レシートの写真を読む（Claude API、失敗したら Bedrock）。ローカルモードでは使えない。
    * 長いレシートを分けて撮ったときは keys に上から順に渡すと、1 枚のレシートとして読む
    */
   analyzeReceipt(input: { key?: string; keys?: string[]; dataUrl?: string }): Promise<ReceiptDraft>;
