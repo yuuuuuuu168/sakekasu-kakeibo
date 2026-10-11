@@ -281,9 +281,24 @@ dev については 2026-10-11 に済んでいる。人の手で行ったのは�
    画面に出る **Get Token Issuer URL**（`https://<uuid>.tokens.sts.global.api.aws`）を控える
 2. Claude Console: Settings → Workload identity → Connect workload → AWS で、次を作った
    - 発行者: 1 の Issuer URL（JWKS は discovery）
-   - ルール `sakekasu-workload`: IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-ocr-receipt`、
-     audience `https://api.anthropic.com`、ワークスペースは Default、寿命 600 秒
+   - ルール `sakekasu-kakeibo-workload`: IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-ocr-receipt`、
+     audience `https://api.anthropic.com`、ワークスペースは `sakekasu-kakeibo`、スコープ `workspace:developer`、寿命 600 秒
    - サービスアカウント `sakekasu-kakeibo-ocr`
+
+同じ Claude の組織を sakekasu-builder も使うので、ワークスペース・ルール・サービスアカウントはアプリごとに分ける。
+使用量とコストをアプリ別に見られ、利用上限（spend limit）もアプリ別にかけられる。課金とクレジットは組織に 1 つで、
+発行者と AWS アカウントの Outbound web identity federation はアプリの間で共有する。
+
+| アプリ | ルール | サービスアカウント | ワークスペース |
+| --- | --- | --- | --- |
+| kakeibo | `sakekasu-kakeibo-workload` | `sakekasu-kakeibo-ocr` | `sakekasu-kakeibo` |
+| builder | `sakekasu-builder-workload` | `sakekasu-builder` | `sakekasu-builder` |
+
+最初は Default ワークスペースに入っていた（ルール名も `sakekasu-workload`）。2026-10-11 に、ルールを
+`sakekasu-kakeibo-workload` に改名し、ワークスペース `sakekasu-kakeibo` を作って認可に足し、`cdk.json` の
+`workspaceId` をそちらに替えた。デプロイ後に Usage で `sakekasu-kakeibo` に使用量が付くのを確かめてから、
+ルールの認可から Default を外す。`workspaceId` は省かずに書いておく。ルールが複数のワークスペースを
+認可していると、省いたときにどちらへ入るかがサーバー側の判断になる。
 
 ルール・組織・サービスアカウント・ワークスペースの ID は `infra/cdk.json` の context `anthropicFederation` にある
 （秘密ではない）。CDK はこれを OCR の Lambda の環境変数（`ANTHROPIC_FEDERATION_RULE_ID` など）に渡し、

@@ -21,7 +21,7 @@
       "ruleId": "fdrl_01R8xap4MEfkrvAF7BFCwjee",
       "organizationId": "c155ee76-4f2a-4282-aae0-a453dd5145af",
       "serviceAccountId": "svac_013YQL3yjR64npq3BKSccX3m",
-      "workspaceId": "wrkspc_01Di2E3sdUtKughzMZ49idak"
+      "workspaceId": "wrkspc_01A9iz9nimVH68QmyCXaMVmM"
     },
     "@aws-cdk/core:defaultCrossStackReferences": "strong"
   }
