@@ -1,5 +1,5 @@
 import { diffDays } from './date';
-import { merchantSimilarity } from './merchant';
+import { merchantSimilarity, normalizeMerchant } from './merchant';
 import { MAX_DATE_GAP, dateScore } from './receipt/match';
 import type { Receipt, Transaction } from './types';
 
@@ -86,19 +86,22 @@ export function scoreDuplicate(a: Transaction, b: Transaction): DuplicatePair {
   return { a, b, score: byDate + byMerchant + bySource + byReceipt, reasons };
 }
 
+/** 「重複ではない」の印を持てるもの。明細とレシートの両方 */
+type Dismissable = { id: string; notDuplicateOf?: string[] };
+
 /** 一度「重複ではない」と言われた組は二度と出さない。印は両側に持たせる */
-export function isNotDuplicate(a: Transaction, b: Transaction): boolean {
+export function isNotDuplicate(a: Dismissable, b: Dismissable): boolean {
   return (a.notDuplicateOf?.includes(b.id) ?? false) || (b.notDuplicateOf?.includes(a.id) ?? false);
 }
 
-function rememberNotDuplicate(txn: Transaction, otherId: string): Transaction {
-  const current = txn.notDuplicateOf ?? [];
-  if (current.includes(otherId)) return txn;
-  return { ...txn, notDuplicateOf: [...current, otherId] };
+function rememberNotDuplicate<T extends Dismissable>(item: T, otherId: string): T {
+  const current = item.notDuplicateOf ?? [];
+  if (current.includes(otherId)) return item;
+  return { ...item, notDuplicateOf: [...current, otherId] };
 }
 
 /** 「重複ではない」の印を両側に付けた 2 件を返す。保存は呼ぶ側で */
-export function markNotDuplicate(a: Transaction, b: Transaction): [Transaction, Transaction] {
+export function markNotDuplicate<T extends Dismissable>(a: T, b: T): [T, T] {
   return [rememberNotDuplicate(a, b.id), rememberNotDuplicate(b, a.id)];
 }
 
@@ -144,15 +147,38 @@ export function duplicatesInvolving(pairs: DuplicatePair[], ids: Iterable<string
   return pairs.filter((pair) => target.has(pair.a.id) || target.has(pair.b.id));
 }
 
-function sameItems(a: Receipt, b: Receipt): boolean {
-  if (a.items.length === 0 || a.items.length !== b.items.length) return false;
-  return a.items.every((item, index) => item.name === b.items[index].name && item.amount === b.items[index].amount);
+/**
+ * 2 枚のレシートの品目がどれだけ重なるかを 0〜1 で返す。どちらかに品目が無ければ undefined（材料が無い）。
+ * 同じ金額で名前が近い品目どうしを 1 対 1 で当て、当たった数を多い側の品目数で割る。
+ * 同じレシートを撮り直すと OCR の読みが少し揺れるので、名前は完全一致まで求めない。
+ */
+export function itemOverlap(a: Receipt, b: Receipt): number | undefined {
+  if (a.items.length === 0 || b.items.length === 0) return undefined;
+  const unused = [...b.items];
+  let matched = 0;
+  for (const item of a.items) {
+    const name = normalizeMerchant(item.name);
+    const index = unused.findIndex(
+      (other) => other.amount === item.amount && (normalizeMerchant(other.name) === name || merchantSimilarity(item.name, other.name) >= 0.5),
+    );
+    if (index < 0) continue;
+    matched += 1;
+    unused.splice(index, 1);
+  }
+  return matched / Math.max(a.items.length, b.items.length);
 }
+
+/**
+ * 品目の重なりがこれより少なければ別の会計とみなし、候補に出さない。
+ * Amazon のように同じ店・同じ日・同じ合計の別注文はよくあり、店名と日付だけでは見分けられない
+ */
+export const MIN_ITEM_OVERLAP = 0.5;
 
 /**
  * 同じレシートを 2 回撮ったものを探す。レシート ID は撮った時刻から作るので、
  * 中身が同じでも必ず別 ID になり、ID では拾えない。
- * 捨てたレシートは相手にしない。合計の一致は明細と同じく必須。
+ * 捨てたレシートと、人が「別の買い物」と言った組は相手にしない。合計の一致は明細と同じく必須。
+ * 両方に品目があって中身が違うものも別の会計として外す。
  */
 export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair[] {
   const alive = receipts.filter((receipt) => receipt.status !== 'discarded');
@@ -170,8 +196,12 @@ export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair
     for (let left = 0; left < bucket.length; left += 1) {
       for (let right = left + 1; right < bucket.length; right += 1) {
         const [a, b] = orderPair(bucket[left], bucket[right]);
+        if (isNotDuplicate(a, b)) continue;
         const gap = diffDays(a.date, b.date);
         if (Math.abs(gap) > MAX_DUPLICATE_DATE_GAP) continue;
+
+        const overlap = itemOverlap(a, b);
+        if (overlap !== undefined && overlap < MIN_ITEM_OVERLAP) continue;
 
         const reasons: string[] = [];
         const whenReason = dateReason(gap);
@@ -181,8 +211,9 @@ export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair
         const whoReason = merchantReason(similarity);
         if (whoReason) reasons.push(whoReason);
 
-        const byItems = sameItems(a, b) ? 20 : 0;
-        if (byItems > 0) reasons.push('品目まで同じ');
+        const byItems = overlap === 1 ? 20 : 0;
+        if (overlap === 1) reasons.push('品目まで同じ');
+        else if (overlap !== undefined) reasons.push('品目が一部同じ');
 
         const score = dateScore(gap) + Math.round(similarity * 40) + byItems;
         if (score >= DUPLICATE_THRESHOLD) pairs.push({ a, b, score, reasons });

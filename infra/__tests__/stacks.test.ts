@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { ApiStack, CLASSIFY_BURST_LIMIT, CLASSIFY_RATE_LIMIT } from '../lib/api-stack';
+import {
+  ApiStack,
+  CLASSIFY_BURST_LIMIT,
+  CLASSIFY_RATE_LIMIT,
+  OCR_START_BURST_LIMIT,
+  OCR_START_RATE_LIMIT,
+  OCR_TIMEOUT_SECONDS,
+} from '../lib/api-stack';
+import { OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
 import type { SharedAuth } from '../lib/shared-auth';
+import type { AnthropicFederation } from '../lib/anthropic-federation';
 
 const env = { account: '123456789012', region: 'ap-northeast-1' };
 
@@ -16,7 +25,16 @@ const sharedAuth: SharedAuth = {
   clientId: 'testclientid0123456789',
 };
 
-function stacks() {
+/** テスト用の ID 連携の値。本物の値は cdk.json にある */
+const anthropicFederation: AnthropicFederation = {
+  ruleId: 'fdrl_test',
+  organizationId: '00000000-0000-0000-0000-000000000000',
+  serviceAccountId: 'svac_test',
+  workspaceId: 'wrkspc_test',
+};
+
+/** 既定は本番と同じく ID 連携あり。`{ federation: false }` で Bedrock だけの構成を組む */
+function stacks({ federation = true }: { federation?: boolean } = {}) {
   const app = new cdk.App();
   const data = new DataStack(app, 'test-data', { envName: 'test', env, receiptRetentionDays: 90 });
   const api = new ApiStack(app, 'test-api', {
@@ -26,6 +44,7 @@ function stacks() {
     receiptBucket: data.receiptBucket,
     sharedAuth,
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
+    ...(federation ? { anthropicFederation } : {}),
   });
   const site = new SiteStack(app, 'test-site', {
     envName: 'test',
@@ -66,6 +85,13 @@ describe('DataStack', () => {
       Replicas: Match.arrayWith([
         Match.objectLike({ PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true } }),
       ]),
+    });
+  });
+
+  // 読み取りのジョブの行（OCR#）を 1 日で消させる。明細やレシートの行はこの属性を持たない
+  it('TTL を expiresAt で有効にする', () => {
+    Template.fromStack(stacks().data).hasResourceProperties('AWS::DynamoDB::GlobalTable', {
+      TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
     });
   });
 });
@@ -122,6 +148,111 @@ describe('ApiStack', () => {
       FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
       ReservedConcurrentExecutions: 3,
     });
+  });
+
+  /*
+   * 読み取りは API Gateway の 30 秒を超えうるので、api の関数がジョブを積んで OCR の関数を
+   * 非同期で呼ぶ。OCR の関数を API Gateway に直接つながないこと、非同期の再試行で同じ画像を
+   * 読み直さないこと（モデルの課金が重なる）をここで固定する。
+   */
+  it('OCR の関数は API Gateway につながず、api の関数から再試行なしの非同期で呼ぶ', () => {
+    const template = Template.fromStack(stacks().api);
+    const integrations = Object.values(template.findResources('AWS::ApiGatewayV2::Integration'));
+    expect(JSON.stringify(integrations)).not.toContain('OcrFunction');
+
+    template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      FunctionName: Match.objectLike({ Ref: Match.stringLikeRegexp('^OcrFunction') }),
+      MaximumRetryAttempts: 0,
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Timeout: OCR_TIMEOUT_SECONDS,
+    });
+    expect(OCR_TIMEOUT_SECONDS * 1000).toBeLessThan(OCR_JOB_STALE_MS);
+
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const api = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('ApiFunctionServiceRole'));
+    const invoke = (api!.Properties.PolicyDocument.Statement as Record<string, unknown>[]).find((statement) =>
+      JSON.stringify(statement.Action).includes('lambda:InvokeFunction'),
+    );
+    expect(JSON.stringify(invoke!.Resource)).toContain('OcrFunction');
+  });
+
+  /*
+   * OCR の関数がテーブルに触れるのは、ジョブの行（OCR#）の更新だけ。明細のパーティション
+   * （USER#）は読めも書けもしない。
+   */
+  it('OCR の関数のテーブルの権限はジョブの行の更新だけ', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionRole'));
+    const statements = ocr!.Properties.PolicyDocument.Statement as Record<string, unknown>[];
+    const dynamo = statements.filter((statement) => JSON.stringify(statement.Action).includes('dynamodb:'));
+    expect(dynamo).toHaveLength(1);
+    expect(dynamo[0].Action).toBe('dynamodb:UpdateItem');
+    expect(dynamo[0].Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['OCR#*'] } });
+  });
+
+  /*
+   * Claude Console の ID 連携のルールは、このロールの ARN を照合している。名前が変わると
+   * Claude API に入れなくなり、毎回 Bedrock に読み直すことになる。
+   */
+  it('OCR の関数のロールは名前を固定する（ID 連携のルールが ARN を照合する）', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::IAM::Role', { RoleName: 'sakekasu-kakeibo-test-ocr-receipt' });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^OcrFunctionRole'), 'Arn'] },
+    });
+  });
+
+  it('ID 連携があれば、OCR は Claude API を既定にし、Bedrock を控えに持つ', () => {
+    Template.fromStack(stacks().api).hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Environment: {
+        Variables: Match.objectLike({
+          LLM_PROVIDER: 'anthropic',
+          ANTHROPIC_MODEL_OCR: 'claude-sonnet-5-5',
+          ANTHROPIC_FEDERATION_RULE_ID: 'fdrl_test',
+          ANTHROPIC_ORGANIZATION_ID: '00000000-0000-0000-0000-000000000000',
+          ANTHROPIC_SERVICE_ACCOUNT_ID: 'svac_test',
+          ANTHROPIC_WORKSPACE_ID: 'wrkspc_test',
+          BEDROCK_MODEL_ID: 'jp.anthropic.claude-sonnet-4-6',
+        }),
+      },
+    });
+  });
+
+  /*
+   * ID トークンは Anthropic 宛て・短命・RS256 のものだけ。ほかの宛先のトークン（別の外部サービスに
+   * 入るためのもの）をこのロールで作れないようにする。
+   */
+  it('STS の ID トークンは Anthropic 宛てで、寿命と署名を絞って許す', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionRole'));
+    const sts = (ocr!.Properties.PolicyDocument.Statement as Record<string, unknown>[]).find(
+      (statement) => statement.Action === 'sts:GetWebIdentityToken',
+    );
+    expect(sts).toMatchObject({
+      Effect: 'Allow',
+      Resource: '*',
+      Condition: {
+        'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': ['https://api.anthropic.com'] },
+        NumericLessThanEquals: { 'sts:DurationSeconds': 300 },
+        StringEquals: { 'sts:SigningAlgorithm': 'RS256' },
+      },
+    });
+  });
+
+  it('ID 連携が無ければ、OCR は Bedrock だけで読み、STS の権限も持たない', () => {
+    const template = Template.fromStack(stacks({ federation: false }).api);
+    const fn = Object.values(template.findResources('AWS::Lambda::Function')).find(
+      (resource) => resource.Properties.FunctionName === 'sakekasu-kakeibo-test-ocr-receipt',
+    );
+    expect(fn!.Properties.Environment.Variables.LLM_PROVIDER).toBe('bedrock');
+    expect(fn!.Properties.Environment.Variables.ANTHROPIC_FEDERATION_RULE_ID).toBeUndefined();
+    expect(JSON.stringify(template.findResources('AWS::IAM::Policy'))).not.toContain('sts:GetWebIdentityToken');
   });
 
   it('カテゴリ判定の同時実行にも天井を置く', () => {
@@ -193,6 +324,22 @@ describe('ApiStack', () => {
     });
     const routes = template.findResources('AWS::ApiGatewayV2::Route');
     expect(Object.values(routes).map((route) => route.Properties.RouteKey)).toContain('POST /classify');
+  });
+
+  /*
+   * 読み取りは非同期になり、OCR の同時実行の天井を超えた呼び出しも順番待ちで全部読まれる。
+   * 受け付けの段で絞る。/{proxy+} でも届く経路だが、routeSettings は RouteKey が一致する
+   * ルートにしか効かないので、明示のルートがあることも見る。
+   */
+  it('読み取りの受け付けに流量の上限を掛ける', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      RouteSettings: Match.objectLike({
+        'POST /receipts/analyze': { ThrottlingRateLimit: OCR_START_RATE_LIMIT, ThrottlingBurstLimit: OCR_START_BURST_LIMIT },
+      }),
+    });
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    expect(Object.values(routes).map((route) => route.Properties.RouteKey)).toContain('POST /receipts/analyze');
   });
 
   it('毎月 1 日にレポートを作る', () => {

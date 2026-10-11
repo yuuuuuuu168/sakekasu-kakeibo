@@ -20,7 +20,9 @@ import {
   refileDiscounts,
   shouldLearnRule,
   transactionsOfMonth,
+  type Category,
   type DuplicatePair,
+  type Receipt,
   type Transaction,
 } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
@@ -169,7 +171,13 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
       )}
 
       {filter === DUPLICATES_FILTER ? (
-        <DuplicatesCard pairs={duplicates} onRemove={removeTransaction} onDismiss={dismissDuplicate} />
+        <DuplicatesCard
+          pairs={duplicates}
+          categories={snapshot.categories}
+          receipts={snapshot.receipts}
+          onRemove={removeTransaction}
+          onDismiss={dismissDuplicate}
+        />
       ) : (
         <Card title={`${rows.length} 件`} action={<span className="tnum text-sm font-semibold text-ink">{formatYen(total)}</span>}>
           {rows.length === 0 ? (
@@ -269,16 +277,24 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
 /**
  * 重複候補は 1 件ずつではなく組で見せる。どちらを消すかを決めるには両方の日付と
  * 取り込み元が要るので、明細一覧の行の形では足りない。
+ * 金額は一致しているのが前提なので、見比べる材料は内訳・レシート・メモのほうにある。
+ * 店名だけでは同じ買い物か判断できないことがあるため、それらも並べて出す。
  */
 function DuplicatesCard({
   pairs,
+  categories,
+  receipts,
   onRemove,
   onDismiss,
 }: {
   pairs: DuplicatePair[];
+  categories: Category[];
+  receipts: Receipt[];
   onRemove: (id: string) => Promise<void>;
   onDismiss: (pair: DuplicatePair) => Promise<void>;
 }) {
+  const receiptById = useMemo(() => new Map(receipts.map((receipt) => [receipt.id, receipt])), [receipts]);
+
   return (
     <Card title={`重複の可能性 ${pairs.length} 組`}>
       {pairs.length === 0 ? (
@@ -294,24 +310,29 @@ function DuplicatesCard({
                 <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
               </div>
 
-              <ul className="mt-2 space-y-1">
+              <ul className="mt-2 grid gap-2 md:grid-cols-2">
                 {[pair.a, pair.b].map((txn) => (
-                  <li key={txn.id} className="flex items-center gap-2 rounded-lg bg-plane px-2 py-1.5">
-                    <span className="tnum text-xs text-muted">{txn.date.slice(5)}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{txn.rawMerchant || '（店名なし）'}</span>
-                    <span className="text-xs text-muted">{txn.sourceLabel}</span>
-                    {txn.receiptId && <Badge tone="good">レシートあり</Badge>}
-                    <span className="tnum text-sm font-semibold text-ink">{formatYen(txn.amount)}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm('この明細を消しますか。内訳も一緒に消えます')) void onRemove(txn.id);
-                      }}
-                      className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
-                      aria-label={`${txn.date} の ${txn.rawMerchant || '店名なし'}（${txn.sourceLabel}）を消す`}
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                  <li key={txn.id} className="rounded-lg bg-plane px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="tnum text-xs text-muted">{txn.date.slice(5)}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm text-ink">{txn.rawMerchant || '（店名なし）'}</span>
+                      <span className="tnum text-sm font-semibold text-ink">{formatYen(txn.amount)}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm('この明細を消しますか。内訳も一緒に消えます')) void onRemove(txn.id);
+                        }}
+                        className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
+                        aria-label={`${txn.date} の ${txn.rawMerchant || '店名なし'}（${txn.sourceLabel}）を消す`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                    <DuplicateDetail
+                      txn={txn}
+                      categories={categories}
+                      receipt={txn.receiptId ? receiptById.get(txn.receiptId) : undefined}
+                    />
                   </li>
                 ))}
               </ul>
@@ -327,4 +348,66 @@ function DuplicatesCard({
       )}
     </Card>
   );
+}
+
+/** 長いレシートで組が縦に伸びすぎないよう、内訳はここまで出して残りは開いたときだけ */
+const DETAIL_LINES = 5;
+
+/** 重複候補の片側の詳細。取り込み元、内訳、紐付いたレシート、メモを出す */
+function DuplicateDetail({ txn, categories, receipt }: { txn: Transaction; categories: Category[]; receipt?: Receipt }) {
+  const [expanded, setExpanded] = useState(false);
+  const splits = expanded ? txn.splits : txn.splits.slice(0, DETAIL_LINES);
+  const hidden = txn.splits.length - splits.length;
+
+  return (
+    <div className="mt-1.5 space-y-1.5 border-t border-grid pt-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5 text-muted">
+        <span className="tnum">{formatDateWithWeekday(txn.date)}</span>
+        <span>・{txn.sourceLabel}</span>
+        {txn.merchant && txn.merchant !== txn.rawMerchant && <span className="truncate">・{txn.merchant}</span>}
+        {txn.foreign && <span className="tnum">・{formatMoney(txn.foreign.amount, txn.foreign.currency)}</span>}
+        {txn.needsDetail && <Badge tone="accent">内訳待ち</Badge>}
+        {isTransfer(txn) && <Badge tone="neutral">振替・集計外</Badge>}
+      </div>
+
+      {receipt ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge tone="good">レシートあり</Badge>
+          <span className="truncate text-ink-2">{receipt.storeName || '（店名なし）'}</span>
+          <span className="tnum text-muted">{formatDateWithWeekday(receipt.date)}</span>
+          <span className="text-muted">{receipt.items.length} 品</span>
+        </div>
+      ) : (
+        txn.receiptId && <Badge tone="good">レシートあり</Badge>
+      )}
+
+      <ul className="space-y-0.5" aria-label={`${txn.rawMerchant || '店名なし'}（${txn.sourceLabel}）の内訳`}>
+        {splits.map((split) => (
+          <li key={split.id} className="flex items-baseline gap-2">
+            <span className="shrink-0 text-ink-2">{categoryLabel(categories, split.categoryId)}</span>
+            {split.name && <span className="truncate text-muted">{split.name}</span>}
+            <span className="flex-1 border-b border-dotted border-grid" />
+            <span className="tnum text-ink-2">{formatYen(split.amount)}</span>
+          </li>
+        ))}
+      </ul>
+      {txn.splits.length > DETAIL_LINES && (
+        <button type="button" onClick={() => setExpanded(!expanded)} className="text-accent">
+          {expanded ? '閉じる' : `ほか ${hidden} 行を見る`}
+        </button>
+      )}
+
+      {txn.note && <p className="whitespace-pre-wrap text-ink-2">メモ: {txn.note}</p>}
+    </div>
+  );
+}
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+
+/** 2026-10-10 → 2026/10/10（土）。曜日があると「平日の昼か週末か」で見分けが付くことがある */
+function formatDateWithWeekday(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  if (!y || !m || !d) return date;
+  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${y}/${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}（${weekday}）`;
 }

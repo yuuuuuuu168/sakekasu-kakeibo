@@ -6,6 +6,7 @@ let LOGGED_TRANSACTIONS: number;
 beforeAll(async () => {
   process.env.TABLE_NAME = 'test-table';
   process.env.RECEIPT_BUCKET = 'test-bucket';
+  process.env.OCR_FUNCTION_NAME = 'test-ocr';
   ({ describeRequest, LOGGED_TRANSACTIONS } = await import('../index'));
 });
 

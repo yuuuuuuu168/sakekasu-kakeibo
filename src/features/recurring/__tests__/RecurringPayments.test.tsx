@@ -112,6 +112,18 @@ describe('RecurringPayments', () => {
     expect(screen.getByText(/2026-09-27/)).toBeInTheDocument();
   });
 
+  it('追加の入力欄は登録済みの一覧より上に開く', async () => {
+    snapshot.recurring = [IPHONE];
+    await renderPage('iPhone 16 分割');
+
+    fireEvent.click(screen.getByRole('button', { name: '追加' }));
+
+    // 追加ボタンはカードの上にあるので、一覧の下まで送らないと入力欄が見えないのは困る
+    const nameInput = screen.getByLabelText('名前');
+    const firstRow = screen.getByText('iPhone 16 分割');
+    expect(nameInput.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('停止すると archived が立つ', async () => {
     snapshot.recurring = [IPHONE];
     await renderPage('iPhone 16 分割');

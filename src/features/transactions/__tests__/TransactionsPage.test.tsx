@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
-import { SEED_CATEGORIES, TRANSFER_ID, allRules, type CategoryRule, type Transaction } from '@kakeibo/core';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { SEED_CATEGORIES, TRANSFER_ID, allRules, type CategoryRule, type Receipt, type Transaction } from '@kakeibo/core';
 import type { Snapshot } from '../../../api/types';
 
 const store = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ const CARD: Transaction = {
 };
 
 function load(transactions: Transaction[]) {
-  store.snapshot = { ...store.snapshot, categories: SEED_CATEGORIES, transactions };
+  store.snapshot = { ...store.snapshot, categories: SEED_CATEGORIES, transactions, receipts: [] };
   store.rules = allRules([]);
 }
 
@@ -58,6 +58,59 @@ describe('TransactionsPage の重複の絞り込み', () => {
     expect(screen.getByText('セブン-イレブン品川駅前店')).toBeInTheDocument();
     expect(screen.getByText('セブン－イレブン品川')).toBeInTheDocument();
     expect(screen.getByText(/取り込み元が違う/)).toBeInTheDocument();
+  });
+
+  it('組の両側に、内訳・紐付いたレシート・メモ・曜日つきの日付を出す', () => {
+    const receipt: Receipt = {
+      id: 'r1',
+      storeName: 'セブン-イレブン 品川駅前店',
+      date: '2026-09-01',
+      total: 1200,
+      items: [
+        { name: 'おにぎり', amount: 300 },
+        { name: 'ボールペン', amount: 900 },
+      ],
+      txnId: 'cash1',
+      status: 'cash',
+    };
+    load([
+      {
+        ...CASH,
+        splits: [
+          { id: 'cash1-1', name: 'おにぎり', amount: 300, categoryId: 'food', origin: 'receipt' },
+          { id: 'cash1-2', name: 'ボールペン', amount: 900, categoryId: 'daily', origin: 'receipt' },
+        ],
+      },
+      { ...CARD, note: '会社の備品' },
+    ]);
+    store.snapshot = { ...store.snapshot, receipts: [receipt] };
+    render(<TransactionsPage month="2026-09" filter="duplicates" />);
+
+    const cash = within(screen.getByRole('list', { name: 'セブン-イレブン品川駅前店（現金）の内訳' }));
+    expect(cash.getByText('おにぎり')).toBeInTheDocument();
+    expect(cash.getByText('ボールペン')).toBeInTheDocument();
+    expect(screen.getByText('セブン-イレブン 品川駅前店')).toBeInTheDocument();
+    expect(screen.getByText('2 品')).toBeInTheDocument();
+    expect(screen.getByText('メモ: 会社の備品')).toBeInTheDocument();
+    expect(screen.getAllByText('2026/09/01（火）').length).toBeGreaterThan(0);
+    expect(screen.getByText('2026/09/03（木）')).toBeInTheDocument();
+  });
+
+  it('内訳が長い明細は途中までにして、開けば全部出す', () => {
+    const splits = Array.from({ length: 8 }, (_, i) => ({
+      id: `cash1-${i}`,
+      name: `品目${i}`,
+      amount: 150,
+      categoryId: 'food',
+      origin: 'receipt' as const,
+    }));
+    load([{ ...CASH, splits }, CARD]);
+    render(<TransactionsPage month="2026-09" filter="duplicates" />);
+
+    expect(screen.getByText('品目4')).toBeInTheDocument();
+    expect(screen.queryByText('品目5')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'ほか 3 行を見る' }));
+    expect(screen.getByText('品目7')).toBeInTheDocument();
   });
 
   it('組の片方を消せる', async () => {

@@ -26,7 +26,7 @@
 | 店舗名の正規化 | 半角カナ・全角英数・店舗番号・Amazon の注文 ID を落として名寄せする |
 | 自動分類 | 国内でよく出る店を 160 件ほど初期搭載。カテゴリを直すと「この店は今後もこれ」を覚える |
 | 内訳待ち | コンビニ・ドラッグストア・スーパー・Amazon・居酒屋など、1 回の支払いに複数カテゴリが混ざる店に印を付ける。確定するまで画面に「この数字は甘い」と出続ける |
-| レシート OCR | Bedrock（Claude Sonnet 4.6）が店名・日付・合計・品目を読む。品目のカテゴリはここでは品目名の表で仮に付けるだけ |
+| レシート OCR | Claude API（Claude Sonnet 5.5。失敗したら Bedrock の Sonnet 4.6）が店名・日付・合計・品目を読む。品目のカテゴリはここでは品目名の表で仮に付けるだけ |
 | カテゴリ判定 | 品目名と店舗名を TypeSafe の Jev に聞き、大カテゴリ → 小カテゴリの 2 段で決める。確信度で「そのまま入れる / 人に見せる / 未分類に落とす」を分け、人が直した品目は覚える。判定が落ちても品目名の表とルールで先へ進む |
 | 大カテゴリと小カテゴリ | 2 段まで。上限と月次レポートは大カテゴリの単位で数える |
 | 値引き・チャージ | レシートの値引きの行は「値引き」カテゴリに入れる。PayPay や Suica へのチャージは振替として支出から外し、外した額は別に出す |
@@ -115,6 +115,22 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 
 `bedrock:InvokeModel` の認可は、クロスリージョン推論プロファイル本体と、振り先の foundation-model の**両方**を見る。プロファイルの ARN だけを許可すると、振り先に当たったリクエストだけが `AccessDeniedException` で落ちる。毎回落ちないので気づきにくい。モデルを差し替えるときは `aws bedrock list-inference-profiles` で振り先リージョンを取り直すこと。詳細は [infra/lib/api-stack.ts](infra/lib/api-stack.ts) のコメントにある。
 
+### OCR は Claude API を ID 連携で呼び、Bedrock を控えに持つ
+
+OCR の既定の呼び先は Claude API（`claude-sonnet-5-5`）。Max プランに付く月々の API クレジットで払えるので、単純に課金される Bedrock より安く、新しいモデルも早く使える（Bedrock では最新モデルのクォータが 0 だった）。Bedrock の Sonnet 4.6 は消さずに控えとして残し、残高不足・認証の失敗・障害のときは同じ頼みを Bedrock で読み直す。
+
+Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が自分のロールで STS の `GetWebIdentityToken` を呼び、AWS が署名した JWT を Anthropic の短命のトークンと交換する。鍵を Secrets Manager にも環境変数にも置かないので、漏れる鍵が無い。
+
+| 変えたもの | 中身 |
+| --- | --- |
+| `infra/lambda/ocr-receipt/llm.ts` | 呼び先の選択、ID 連携、Bedrock への読み直し、消費（トークン数）のログ |
+| `infra/lib/api-stack.ts` | OCR のロール名を固定（ルールが ARN を照合する）、`sts:GetWebIdentityToken`（宛先・寿命・署名を条件で絞る）、環境変数、読み直しのアラーム |
+| `infra/cdk.json` | context `anthropicFederation`（ルール・組織・サービスアカウント・ワークスペースの ID。秘密ではない） |
+| 環境変数 | `LLM_PROVIDER`、`ANTHROPIC_MODEL_OCR`、`ANTHROPIC_FEDERATION_RULE_ID`、`ANTHROPIC_ORGANIZATION_ID`、`ANTHROPIC_SERVICE_ACCOUNT_ID`、`ANTHROPIC_WORKSPACE_ID`（Bedrock は従来の `BEDROCK_MODEL_ID`） |
+| IAM の差分 | OCR のロールに `sts:GetWebIdentityToken` を足しただけ。`bedrock:InvokeModel` は控えのために残す。Secrets Manager は使わない |
+
+設定の手順と、読み直したときの原因の見分け方は [docs/operations.md](docs/operations.md) の「Claude API の ID 連携（OCR）」にある。
+
 ## 構成
 
 ![構成図](docs/architecture.drawio.svg)
@@ -127,7 +143,7 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 |---|---|---|---|
 | `sakekasu-kakeibo-{env}-dns` | ap-northeast-1 | cdkd | `kakeibo.sakekasu-builder.com` のゾーン（管理アカウントの親ゾーンから委任） |
 | `sakekasu-kakeibo-{env}-data` | ap-northeast-1 | cdkd | DynamoDB、レシート画像の S3 |
-| `sakekasu-kakeibo-{env}-api` | ap-northeast-1 | cdkd | HTTP API、Lambda 4 本（api / ocr-receipt / classify / monthly-report）、EventBridge、Secrets Manager、アラーム |
+| `sakekasu-kakeibo-{env}-api` | ap-northeast-1 | cdkd | HTTP API、Lambda 4 本（api / ocr-receipt / classify / monthly-report）、EventBridge、Secrets Manager、アラーム。OCR のロールは Claude API の ID 連携用に名前を固定している |
 | `sakekasu-kakeibo-{env}-site` | ap-northeast-1 | cdkd | 画面の S3、CloudFront、Route 53 レコード。証明書は us-east-1 で発行済みのものを `certificateId` で参照する |
 | `sakekasu-kakeibo-cdkd-deploy` | ap-northeast-1 | CloudFormation（deploy.yml） | cdkd が使うロール |
 | `sakekasu-kakeibo-github-oidc` | ap-northeast-1 | CloudFormation（手動） | GitHub Actions が引き受けるロール |
@@ -140,7 +156,8 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 - AWS CDK + [cdkd](https://github.com/go-to-k/cdkd)（API Gateway HTTP API + Lambda + DynamoDB）
 - Amazon Cognito（4 アプリ共通のユーザープールとマネージドログイン）
 - AWS S3 + CloudFront（フロントの配信、レシート画像の保管）
-- Amazon Bedrock（Claude Sonnet 4.6）※レシートの OCR
+- Claude API（Claude Sonnet 5.5）※レシートの OCR。Workload Identity Federation で入り、API キーを持たない
+- Amazon Bedrock（Claude Sonnet 4.6）※OCR の控え（Claude API で失敗したとき）
 - TypeSafe Jev ※品目名と店舗名のカテゴリ判定。API キーは Secrets Manager
 - CloudWatch アラーム → 共通基盤の SNS → Slack
 - EventBridge（毎月 1 日のレポート生成）

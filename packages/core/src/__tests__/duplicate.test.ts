@@ -7,6 +7,7 @@ import {
   findDuplicateReceipts,
   findDuplicates,
   isNotDuplicate,
+  itemOverlap,
   markNotDuplicate,
   scoreDuplicate,
 } from '../duplicate';
@@ -164,6 +165,57 @@ describe('findDuplicateReceipts', () => {
 
   it('同じ店の別の日の買い物は拾わない', () => {
     expect(findDuplicateReceipts([first, receipt({ ...first, id: 'r2', date: '2026-09-20' })])).toEqual([]);
+  });
+
+  it('同じ日・同じ店・同じ合計でも、品目が違えば別の会計として拾わない', () => {
+    const order1 = receipt({ id: 'a1', date: '2026-09-02', total: 572, storeName: 'Amazon', items: [{ name: '単三電池 4本', amount: 572 }] });
+    const order2 = receipt({ id: 'a2', date: '2026-09-02', total: 572, storeName: 'Amazon', items: [{ name: 'キッチンペーパー', amount: 572 }] });
+    expect(findDuplicateReceipts([order1, order2])).toEqual([]);
+  });
+
+  it('撮り直しで品目名の読みが少し揺れても同じレシートとして拾う', () => {
+    const second = receipt({ ...first, id: 'r2', items: [{ name: 'おにぎり 鮭', amount: 700 }, { name: 'お茶', amount: 500 }] });
+    const pairs = findDuplicateReceipts([first, second]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].reasons).toContain('品目まで同じ');
+  });
+
+  it('品目が半分だけ重なる組は、拾うが「一部同じ」と添える', () => {
+    const second = receipt({ ...first, id: 'r2', items: [{ name: 'おにぎり', amount: 700 }, { name: 'パン', amount: 500 }] });
+    const pairs = findDuplicateReceipts([first, second]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].reasons).toContain('品目が一部同じ');
+  });
+
+  it('品目が片方に無ければ、店名と日付だけで判断する', () => {
+    expect(findDuplicateReceipts([first, receipt({ ...first, id: 'r2', items: [] })])).toHaveLength(1);
+  });
+
+  it('「別の買い物」と言われた組は二度と出さない', () => {
+    const second = receipt({ ...first, id: 'r2' });
+    const [a, b] = markNotDuplicate(first, second);
+    expect(a.notDuplicateOf).toEqual(['r2']);
+    expect(b.notDuplicateOf).toEqual(['r1']);
+    expect(findDuplicateReceipts([a, b])).toEqual([]);
+    // 片側だけ印が残っていても出さない
+    expect(findDuplicateReceipts([a, second])).toEqual([]);
+  });
+});
+
+describe('itemOverlap', () => {
+  const base = receipt({ id: 'x', date: '2026-09-01', total: 300, storeName: 'S', items: [{ name: 'A', amount: 100 }, { name: 'B', amount: 200 }] });
+
+  it('品目が無ければ材料なし', () => {
+    expect(itemOverlap(base, { ...base, items: [] })).toBeUndefined();
+  });
+
+  it('同じ金額の品目でも 1 対 1 でしか当てない', () => {
+    const twice = { ...base, items: [{ name: 'A', amount: 100 }, { name: 'A', amount: 100 }, { name: 'B', amount: 100 }] };
+    expect(itemOverlap({ ...base, items: [{ name: 'A', amount: 100 }] }, twice)).toBeCloseTo(1 / 3);
+  });
+
+  it('名前が同じでも金額が違えば当てない', () => {
+    expect(itemOverlap(base, { ...base, items: [{ name: 'A', amount: 150 }, { name: 'B', amount: 150 }] })).toBe(0);
   });
 });
 

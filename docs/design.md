@@ -12,7 +12,7 @@ API Gateway (HTTP API) ── Cognito JWT オーソライザ（共通ユーザ�
 Lambda (api)  ──▶ DynamoDB (シングルテーブル)
   │
   ├─▶ S3 (レシート画像)  … 署名付き URL を返すだけ。本体は通さない
-  ├─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)      … 画像から品目を起こす
+  ├─▶ Lambda (ocr-receipt) ──▶ Claude API（失敗したら Bedrock） … 画像から品目を起こす（非同期。結果はジョブの行に書く）
   └─▶ Lambda (classify)   ──▶ TypeSafe (Jev)         … 品目名・店舗名のカテゴリを決める
 
 EventBridge (毎月1日 09:00 JST) ──▶ Lambda (monthly-report) ──▶ DynamoDB
@@ -109,10 +109,46 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 | `PUT /budgets/{month}` | その月の上限を保存する |
 | `PUT /mappings/{sourceId}` | CSV の列の対応を保存する |
 | `POST /uploads` | レシート画像の署名付き URL を返す |
-| `POST /receipts/analyze` | 画像を OCR してレシートの下書きを返す（別の Lambda） |
+| `POST /receipts/analyze` | 画像の読み取りを受け付けて `jobId` を返す（202）。読み取りは別の Lambda が非同期で行う |
+| `GET /receipts/analyze/{jobId}` | 読み取りの結果を返す。`pending` / `done`（下書き付き）/ `failed`（理由付き） |
 | `POST /classify` | 品目名や店舗名のカテゴリを判定して返す（別の Lambda） |
 | `PUT /receipts/{id}` `DELETE /receipts/{id}` | レシートを保存・削除する |
 | `GET /reports/{month}` | 作っておいた月次レポートを返す |
+
+レシートの読み取りを非同期にしているのは、API Gateway（HTTP API）の統合タイムアウトが 30 秒で、
+引き上げられないため。1 枚の読み取りは 2〜13 秒（2026-10 の実測）だが、長いレシートを複数枚で読む、
+モデルが失敗して別のモデルで読み直す、といった場合は 30 秒を超える。流れは次のとおり。
+
+1. 画面が `POST /receipts/analyze` を呼ぶ（1 枚なら `key`、分けて撮った長いレシートなら `keys` に上から順に最大 4 枚）。
+   api の Lambda は画像のキーが本人のものか・枚数が上限内かを確かめ、
+   ジョブの行（`pk = OCR#{sub}`、`sk = JOB#{jobId}`、`status = pending`）を作って、
+   ocr-receipt を非同期（`InvocationType: Event`）で呼び、すぐ `jobId` を返す
+2. ocr-receipt は画像を読み、結果をジョブの行に書く（`done` と下書き、または `failed` と理由）。
+   失敗は握って正常に終える。非同期呼び出しの再試行は 0 にしてあり、同じ画像を読み直してモデルの課金を重ねない
+3. 画面は 2 秒おきに `GET /receipts/analyze/{jobId}` を聞き、`done` か `failed` で止まる（最大 5 分）。
+   ocr-receipt のタイムアウト（240 秒）を過ぎても `pending` のジョブは、api が `failed` として返す
+
+ジョブの行を明細と別のパーティションに置くのは、スナップショット（`USER#{sub}` の Query）に混ぜないため。
+行は `expiresAt` の TTL で 1 日後に消える。ocr-receipt の権限も、この接頭辞の行の `UpdateItem` だけに絞っている。
+形の定義は `infra/lambda/shared/ocr-job.ts` にある。
+
+読み取りのモデルは Claude API（`claude-sonnet-5-5`）を既定にし、Bedrock（Sonnet 4.6）を控えに持つ
+（`infra/lambda/ocr-receipt/llm.ts`）。Claude API は Max プランに付く月々のクレジットで払えるので、
+単純に課金される Bedrock より安く、新しいモデルも早く使える。どちらにも同じ Messages API の形で頼む。
+
+- Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が STS の
+  `GetWebIdentityToken` で AWS 署名の JWT をもらい、SDK が Anthropic の短命のトークンと交換する
+- 残高不足・認証や権限・流量の上限・過負荷や 5xx（SDK の再試行の後も）・通信の失敗・トークンの交換の失敗・
+  モデルが断ったときは、同じ頼みを Bedrock で読み直す。そのほかの 4xx（頼み方の誤り）は読み直さない
+- 読み直したら `[ocr] fallback` に `fallback: true` と原因（`errorType`）を JSON で出し、アラームで数える
+- 写真は送る前にブラウザで、モデルが読める上限（長辺 2576px・約 375 万画素）まで縮めて JPEG にする
+  （`src/features/receipts/shrinkPhoto.ts`）。それより大きい写真はサーバ側で縮められるだけなので読める字は変わらず、
+  1 枚 5MB の上限に掛からなくなり、アップロードも速くなる。写真の向きは画素に反映され、位置情報などのメタデータは落ちる。
+  縮められない写真（ブラウザが読めない形式）は元のまま送り、読めない形式ならその場で断る
+- 思考は止められない世代なので `effort: low` で浅くする。プロンプトキャッシュは入れていない
+  （指示文が短く、キャッシュの最小の長さに届かないうえ、5 分の間に次の読み取りが来ることも少ない）
+
+設定と確かめ方は docs/operations.md の「Claude API の ID 連携（OCR）」にある。
 
 書き込みは上書き（upsert）にしてある。同じ明細を二重に入れないための判定は取り込み画面側
 （`mergeImported`）が済ませているので、サーバ側で条件付き書き込みをしていない。
@@ -234,7 +270,7 @@ Amazon、ホームセンター、ネットスーパー。これに当たった�
 ## カテゴリ判定（2 段）
 
 OCR とカテゴリ判定は別のモデルに分けている。画像から印字を起こすのは生成の仕事で Claude
-（Bedrock / Sonnet 4.6）、「食費か日用品か」は選択肢から 1 つ選ぶ仕事で Jev（TypeSafe）。
+（Claude API / Sonnet 5.5。控えは Bedrock / Sonnet 4.6）、「食費か日用品か」は選択肢から 1 つ選ぶ仕事で Jev（TypeSafe）。
 Jev は答えと一緒に校正された確信度（0〜1）を返すので、そのまま入れる・人に見せる・
 未分類に落とす、の線を数字で引ける。
 
@@ -312,6 +348,12 @@ score = 日付の近さ (同日 40, 1日差 30, 2日差 20, 3〜4日差 10)
 拾いたいのは 2 つ。現金として保存したレシートの明細と、後から取り込んだカード明細。それと、
 取り込み元を選び違えて二重に増えた分。レシートを 2 回撮った分も、レシート ID が撮った時刻から
 できている以上 ID では拾えないので、同じ物差しで見る。
+
+レシートどうしは品目も見る。両方に品目があって、金額と名前で 1 対 1 に当てた重なりが半分に
+満たなければ別の会計として出さない。Amazon のように同じ店・同じ日・同じ合計の別注文はよくあり、
+店名と日付だけでは見分けられないため。残った組は人に聞き、「同じ」なら残す方を選んで片方を消す
+（支払い方法を選んで作った明細も一緒に消す）。「別の買い物」なら両側に `notDuplicateOf` を付け、
+明細と同じく二度と出さない。
 
 候補の条件は金額の完全一致と、日付の開きが 4 日以内。金額は符号のまま比べるので、同額の返金が
 支払いと組になることはない。点の付け方はレシートのマッチに倣う。

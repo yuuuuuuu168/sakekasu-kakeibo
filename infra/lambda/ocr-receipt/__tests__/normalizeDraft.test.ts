@@ -7,6 +7,7 @@ let sniffMediaType: typeof import('../index')['sniffMediaType'];
 beforeAll(async () => {
   process.env.RECEIPT_BUCKET = 'test-bucket';
   process.env.BEDROCK_MODEL_ID = 'test-model';
+  process.env.TABLE_NAME = 'test-table';
   const module = await import('../index');
   normalizeDraft = module.normalizeDraft;
   sniffMediaType = module.sniffMediaType;

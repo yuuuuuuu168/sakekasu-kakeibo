@@ -119,7 +119,13 @@ export type Receipt = {
    * レシートから明細を作るときは、この値で円の金額を決める
    */
   exchangeRate?: number;
+  /** 写真の置き場所。分けて撮ったレシートでは 1 枚目 */
   imageKey?: string;
+  /**
+   * 長いレシートを分けて撮ったときの全部の写真（上から順）。1 枚で撮ったものには付けない。
+   * imageKey はこの先頭と同じにしてあり、1 枚しか知らなかった頃の読み手もそのまま読める
+   */
+  imageKeys?: string[];
   /** 紐付いた明細の ID */
   txnId?: string;
   /**
@@ -130,6 +136,8 @@ export type Receipt = {
   /** status が cash のときの支払い方法。無ければ現金（支払い方法を選べなかった頃の保存分） */
   paidWith?: SourceKind;
   createdAt?: string;
+  /** 「同じレシートではない（別の買い物）」と人が言った相手のレシート ID。印は両側に持たせる */
+  notDuplicateOf?: string[];
 };
 
 export type Budget = {

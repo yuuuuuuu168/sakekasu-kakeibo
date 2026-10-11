@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
   CURRENCIES,
+  MAX_RECEIPT_PHOTOS,
+  RECEIPT_IMAGE_TYPES,
   CURRENCY_LABELS,
   RECEIPT_PAYMENT_METHODS,
   SOURCE_LABELS,
@@ -22,6 +24,7 @@ import {
   latestUsdRate,
   learnItemRules,
   linkedTransaction,
+  markNotDuplicate,
   receiptCategorySummary,
   receiptCurrency,
   receiptYenTotal,
@@ -29,6 +32,7 @@ import {
   transactionFromReceipt,
   usableRate,
   type Currency,
+  type DuplicateReceiptPair,
   type MatchCandidate,
   type Receipt,
   type ReceiptItem,
@@ -38,6 +42,7 @@ import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
 import { judgeReceiptItems } from '../../api/classify';
 import { uploadToS3 } from '../../api/remote';
+import { shrinkPhoto } from './shrinkPhoto';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { config } from '../../config';
@@ -55,6 +60,8 @@ type Draft = {
   /** ドルのときの 1 ドルの円。円のときは使わない */
   exchangeRate?: number;
   imageKey?: string;
+  /** 分けて撮ったときの全部の写真。1 枚なら持たない */
+  imageKeys?: string[];
   /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
   paidWith: SourceKind;
   warnings?: string[];
@@ -82,6 +89,7 @@ function draftFromReceipt(receipt: Receipt): Draft {
     currency: receiptCurrency(receipt),
     ...(receipt.exchangeRate !== undefined ? { exchangeRate: receipt.exchangeRate } : {}),
     ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
+    ...(receipt.imageKeys ? { imageKeys: receipt.imageKeys } : {}),
     paidWith: receipt.paidWith ?? 'cash',
   };
 }
@@ -107,11 +115,21 @@ function paymentPhrase(method: SourceKind): string {
 }
 
 /**
- * OCR が読める形式。読む側（ocr-receipt）が中身のバイト列で確かめるのもこの 3 つ。
+ * OCR が読める形式（core の RECEIPT_IMAGE_TYPES）。読む側（ocr-receipt）が中身のバイト列で確かめるのも、
+ * API が署名付き URL を出すのもこの 3 つ。
  * カメラロールから選ぶ入力にはこれを列挙して渡す。iOS は HEIC の写真をここに無い形式と見て
  * JPEG に直してから渡してくれる。`image/*` だと HEIC のまま届いて OCR で落ちることがある。
  */
-const READABLE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const READABLE_IMAGE_TYPES = Object.keys(RECEIPT_IMAGE_TYPES);
+
+/**
+ * 写真のキーを下書きの欄にする。1 枚目は imageKey、分けて撮ったときだけ imageKeys に全部を持たせる
+ * （1 枚で撮ったレシートの形はこれまでと変えない）
+ */
+function imageFields(keys: string[]): Pick<Draft, 'imageKey' | 'imageKeys'> {
+  if (keys.length === 0) return {};
+  return { imageKey: keys[0], ...(keys.length > 1 ? { imageKeys: keys } : {}) };
+}
 
 function emptyDraft(): Draft {
   return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [], currency: 'JPY', paidWith: 'cash' };
@@ -122,7 +140,7 @@ function emptyDraft(): Draft {
  * 写真 → OCR → 品目ごとのカテゴリ → 金額と日付で明細に自動マッチ、までを 1 画面で済ませる。
  */
 export function ReceiptsPage() {
-  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, saveRules } = useStore();
+  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, removeTransaction, saveRules } = useStore();
   const cameraRef = useRef<HTMLInputElement>(null);
   // 撮るのとは別の入力にする。capture を付けるとスマホはカメラしか開かず、撮り溜めた写真を選べない
   const libraryRef = useRef<HTMLInputElement>(null);
@@ -155,24 +173,76 @@ export function ReceiptsPage() {
     return findCandidates(receipt, snapshot.transactions);
   }, [draft, snapshot.transactions]);
 
-  async function onImage(file: File) {
+  /**
+   * 同じレシートだと言われた組。残す方を選んでもらい、もう片方を消す。
+   * 消す方から作った明細（支払い方法を選んで登録したもの）も一緒に消さないと、支払いが二重に残る。
+   * 取り込んだ明細に当てただけのレシートなら、明細は本物なのでそのまま残す
+   */
+  async function keepOneReceipt(keep: Receipt, drop: Receipt) {
+    const created = drop.status === 'cash' ? snapshot.transactions.find((txn) => txn.receiptId === drop.id) : undefined;
+    const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
+    if (!window.confirm(`${drop.date} の ${drop.storeName || '店名なし'} を消して、もう片方を残しますか${notice}`)) return;
+    await removeReceipt(drop.id);
+    if (created) await removeTransaction(created.id);
+    setMessage(`同じレシートとして片方を消しました。${keep.storeName || '店名なし'} のレシートが残っています。`);
+  }
+
+  /** 別の買い物だと言われた組。両側に印を付けて、次からは候補に出さない */
+  async function dismissDuplicateReceipts(pair: DuplicateReceiptPair) {
+    const [a, b] = markNotDuplicate(pair.a, pair.b);
+    await saveReceipt(a);
+    await saveReceipt(b);
+  }
+
+  /**
+   * 写真を読んで下書きにする。複数枚は、1 枚に収まらない長いレシートを分けて撮ったもの。
+   * まとめて 1 回の OCR に渡し、1 枚のレシートとして読ませる
+   */
+  async function onImages(files: File[]) {
     setMessage(undefined);
-    if (file.type && !READABLE_IMAGE_TYPES.includes(file.type)) {
-      setMessage('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
+    if (files.length > MAX_RECEIPT_PHOTOS) {
+      setMessage(`1 枚のレシートとして読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです。選び直してください。`);
       return;
     }
     setBusy(true);
-    const previewUrl = URL.createObjectURL(file);
-    const enter = (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrl });
+    // 送る前にモデルが読める大きさまで縮め、JPEG に直す（shrinkPhoto）。縮められなかった写真は元のまま
+    const photos = await Promise.all(files.map((file) => shrinkPhoto(file)));
+    if (photos.some((photo) => photo.type && !READABLE_IMAGE_TYPES.includes(photo.type))) {
+      setMessage('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
+      setBusy(false);
+      return;
+    }
+    const previewUrls = files.map((file) => URL.createObjectURL(file));
+    const enter = (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrls });
     enter('upload');
-    // 送り終えたあとに読み取りで落ちても、写真はレシートに付けて残す
-    let uploadedKey: string | undefined;
+    // 送った割合は全部の写真のバイト数で均す。1 枚目だけ 100% になって止まって見えないように
+    const sent = files.map(() => 0);
+    const totalBytes = photos.reduce((sum, photo) => sum + photo.size, 0);
+    const progress = () =>
+      totalBytes > 0
+        ? photos.reduce((sum, photo, index) => sum + photo.size * sent[index], 0) / totalBytes
+        : sent.reduce((sum, ratio) => sum + ratio, 0) / files.length;
+    // 届いた写真のキー（選んだ順）。途中で落ちても、届いた分はレシートに付けて残す
+    const uploaded: (string | undefined)[] = files.map(() => undefined);
+    const uploadedKeys = () => uploaded.filter((key): key is string => key !== undefined);
     try {
-      const target = await api.requestUpload(file.type || 'image/jpeg');
-      await uploadToS3(target, file, (ratio) => setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: ratio } : now)));
-      uploadedKey = target.key;
+      // 1 枚が落ちても、他の写真は送り終えるまで待つ（Promise.all だと届く前に諦めてしまう）
+      const results = await Promise.allSettled(
+        photos.map(async (photo, index) => {
+          const target = await api.requestUpload(photo.type || 'image/jpeg');
+          await uploadToS3(target, photo, (ratio) => {
+            sent[index] = ratio;
+            setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: progress() } : now));
+          });
+          uploaded[index] = target.key;
+        }),
+      );
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      const keys = uploadedKeys();
       enter('read');
-      const result = await api.analyzeReceipt({ key: target.key });
+      // 1 枚なら key で送る。これまでと同じ呼び方にしておく
+      const result = await api.analyzeReceipt(keys.length === 1 ? { key: keys[0] } : { keys });
       enter('classify');
       // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
       // 判定が届かなければキーワード表の答えがそのまま残る
@@ -188,7 +258,7 @@ export function ReceiptsPage() {
         items: judged.items,
         currency: result.currency ?? 'JPY',
         ...(result.currency === 'USD' ? { exchangeRate: latestUsdRate(snapshot.receipts) } : {}),
-        imageKey: target.key,
+        ...imageFields(keys),
         paidWith: result.paymentMethod ?? 'cash',
         ...(warnings.length > 0 ? { warnings } : {}),
       };
@@ -199,12 +269,19 @@ export function ReceiptsPage() {
       if (auto) setMessage(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
-      setMessage(uploadedKey ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）` : reason);
+      const keys = uploadedKeys();
+      setMessage(
+        keys.length === files.length
+          ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）`
+          : keys.length > 0
+            ? `${files.length} 枚のうち ${keys.length} 枚しか送れませんでした。届いた写真だけ付けておくので、下に手で入れてください。（${reason}）`
+            : reason,
+      );
       setEditing(undefined);
-      setDraft({ ...emptyDraft(), ...(uploadedKey ? { imageKey: uploadedKey } : {}) });
+      setDraft({ ...emptyDraft(), ...imageFields(keys) });
     } finally {
       setReading(undefined);
-      URL.revokeObjectURL(previewUrl);
+      previewUrls.forEach((url) => URL.revokeObjectURL(url));
       setBusy(false);
     }
   }
@@ -316,8 +393,8 @@ export function ReceiptsPage() {
   }
 
   function onPicked(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (file) void onImage(file);
+    const files = [...(event.target.files ?? [])];
+    if (files.length > 0) void onImages(files);
     // 同じ写真を選び直しても onChange が来るように空にしておく
     event.target.value = '';
   }
@@ -378,6 +455,7 @@ export function ReceiptsPage() {
             ref={libraryRef}
             type="file"
             accept={READABLE_IMAGE_TYPES.join(',')}
+            multiple
             className="hidden"
             onChange={onPicked}
           />
@@ -385,7 +463,7 @@ export function ReceiptsPage() {
         <p className="mt-2 text-xs text-muted">
           {config.mode === 'local'
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
-            : '写真を撮るか、カメラロールから選ぶと Bedrock が品目と金額を読み、金額と日付の近い明細に自動で当てます。'}
+            : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。`}
         </p>
         {reading && <ReadingProgress reading={reading} />}
         {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
@@ -648,43 +726,7 @@ export function ReceiptsPage() {
       )}
 
       {duplicates.length > 0 && (
-        <Card title={`同じレシートかもしれない組 ${duplicates.length} 件`}>
-          <p className="text-xs text-muted">
-            合計が一致して日付が近いレシートです。2 回撮ったものなら片方を消してください。別々の買い物ならそのままで構いません
-          </p>
-          <ul className="mt-2 divide-y divide-grid">
-            {duplicates.map((pair) => (
-              <li key={duplicateKey(pair)} className="py-2">
-                <div className="flex items-center gap-1.5">
-                  <Copy size={14} className="text-muted" aria-hidden />
-                  <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
-                </div>
-                <ul className="mt-1.5 space-y-1">
-                  {[pair.a, pair.b].map((item) => (
-                    <li key={item.id} className="flex items-center gap-2 rounded-lg bg-plane px-2 py-1.5">
-                      <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
-                      {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                      {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
-                      {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                      <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm('このレシートを消しますか')) void removeReceipt(item.id);
-                        }}
-                        className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
-                        aria-label={`${item.date} の ${item.storeName || '店名なし'} のレシートを消す`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <DuplicateReceiptsCard pairs={duplicates} onKeep={keepOneReceipt} onDismiss={dismissDuplicateReceipts} />
       )}
 
       <Card title={`保存済み ${snapshot.receipts.length} 枚`}>
@@ -728,6 +770,95 @@ export function ReceiptsPage() {
           </ul>
         )}
       </Card>
+    </div>
+  );
+}
+
+/** 見比べるのに出す品目の行数。長いレシートで組が縦に伸びすぎないよう、残りは開いたときだけ */
+const DUPLICATE_ITEM_LINES = 5;
+
+/**
+ * 同じレシートかもしれない組。合計は一致しているので、見比べる材料は品目のほうにある。
+ * 人に答えてもらう形にして、同じなら残す方を選んで片方を消し、別の買い物なら両方残して二度と聞かない。
+ */
+function DuplicateReceiptsCard({
+  pairs,
+  onKeep,
+  onDismiss,
+}: {
+  pairs: DuplicateReceiptPair[];
+  onKeep: (keep: Receipt, drop: Receipt) => Promise<void>;
+  onDismiss: (pair: DuplicateReceiptPair) => Promise<void>;
+}) {
+  return (
+    <Card title={`同じレシートかもしれない組 ${pairs.length} 件`}>
+      <p className="text-xs text-muted">
+        合計が一致して日付が近いレシートです。品目を見比べて、2 回撮ったものなら残す方を選んでください。別々の買い物なら「別の買い物」を押すと、この組は二度と出ません
+      </p>
+      <ul className="mt-2 divide-y divide-grid">
+        {pairs.map((pair) => (
+          <li key={duplicateKey(pair)} className="py-3">
+            <div className="flex items-center gap-1.5">
+              <Copy size={14} className="text-muted" aria-hidden />
+              <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
+            </div>
+            <ul className="mt-2 grid gap-2 md:grid-cols-2">
+              {[
+                [pair.a, pair.b],
+                [pair.b, pair.a],
+              ].map(([item, other]) => (
+                <li key={item.id} className="rounded-lg bg-plane px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
+                    {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
+                    {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
+                    {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
+                    <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
+                  </div>
+                  <DuplicateReceiptItems receipt={item} />
+                  <div className="mt-2 flex justify-end">
+                    <Button size="sm" onClick={() => void onKeep(item, other)}>
+                      同じレシート：こちらを残す
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => void onDismiss(pair)}>
+                別の買い物（両方残す）
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** 組の片側の品目。同じ会計かどうかはここを見比べて決めてもらう */
+function DuplicateReceiptItems({ receipt }: { receipt: Receipt }) {
+  const [expanded, setExpanded] = useState(false);
+  if (receipt.items.length === 0) return <p className="mt-1.5 border-t border-grid pt-1.5 text-xs text-muted">品目なし</p>;
+  const items = expanded ? receipt.items : receipt.items.slice(0, DUPLICATE_ITEM_LINES);
+  const hidden = receipt.items.length - items.length;
+  return (
+    <div className="mt-1.5 border-t border-grid pt-1.5 text-xs">
+      <ul className="space-y-0.5" aria-label={`${receipt.date} の ${receipt.storeName || '店名なし'} の品目`}>
+        {items.map((item, index) => (
+          <li key={index} className="flex items-baseline gap-2">
+            <span className="truncate text-ink-2">{item.name || '（品名なし）'}</span>
+            <span className="flex-1 border-b border-dotted border-grid" />
+            <span className="tnum text-ink-2">{formatMoney(item.amount, receiptCurrency(receipt))}</span>
+          </li>
+        ))}
+      </ul>
+      {receipt.items.length > DUPLICATE_ITEM_LINES && (
+        <button type="button" onClick={() => setExpanded(!expanded)} className="text-accent">
+          {expanded ? '閉じる' : `ほか ${hidden} 品を見る`}
+        </button>
+      )}
     </div>
   );
 }

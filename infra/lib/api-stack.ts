@@ -11,6 +11,13 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { OCR_JOB_PARTITION_PREFIX, OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
+import {
+  DEFAULT_ANTHROPIC_MODEL_OCR,
+  IDENTITY_TOKEN_AUDIENCE,
+  IDENTITY_TOKEN_SECONDS,
+} from '../lambda/ocr-receipt/llm-constants';
+import type { AnthropicFederation } from './anthropic-federation';
 import { NodejsFunction, type BundlingOptions } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -46,6 +53,13 @@ const BEDROCK_FOUNDATION_MODEL_ID = 'anthropic.claude-sonnet-4-6';
 const BEDROCK_INFERENCE_REGIONS = ['ap-northeast-1', 'ap-northeast-3'];
 
 /**
+ * OCR の既定の呼び先は Claude API（モデルは llm-constants.ts の DEFAULT_ANTHROPIC_MODEL_OCR）。
+ * Claude API は API キーではなく ID 連携で入るので、IAM で絞るものはモデルではなく
+ * STS の GetWebIdentityToken（宛先と寿命）になる。Bedrock はクレジット切れや障害のときの控え。
+ */
+const ANTHROPIC_MODEL_OCR = DEFAULT_ANTHROPIC_MODEL_OCR;
+
+/**
  * カテゴリ判定に使う TypeSafe のモデル。Bedrock には無いモデルなので、
  * こちらは推論プロファイルではなく TypeSafe の API を直接叩く。
  * `jev-latest` は世代が上がると中身が変わる。固定したいときは世代付きの ID に差し替える。
@@ -55,6 +69,25 @@ const TYPESAFE_MODEL_ID = 'jev-latest';
 /** カテゴリ判定の経路に掛ける流量の上限（毎秒の回数と瞬間の回数）。理由は経路を足すところにある */
 export const CLASSIFY_RATE_LIMIT = 1;
 export const CLASSIFY_BURST_LIMIT = 5;
+
+/**
+ * レシートの読み取りを受け付ける経路の流量の上限。読み取りは非同期になったので、
+ * OCR の同時実行の天井（3）を超えた呼び出しも弾かれずに Lambda の中で順番待ちになる。
+ * ループで叩かれるとモデルの課金が積み上がるので、受付の段で絞る。
+ * 画面はレシート 1 枚につき 1 回しか呼ばない。
+ */
+export const OCR_START_RATE_LIMIT = 1;
+export const OCR_START_BURST_LIMIT = 5;
+
+/**
+ * 読み取りの Lambda のタイムアウト。API Gateway の 30 秒には縛られない。
+ * 長いレシートを複数枚で読む、Claude API で失敗して Bedrock で読み直す、といった場合でも
+ * 収まる長さにしておく。ジョブを「落ちた」とみなす時間（OCR_JOB_STALE_MS）はこれより長く取る。
+ */
+export const OCR_TIMEOUT_SECONDS = 240;
+if (OCR_TIMEOUT_SECONDS * 1000 >= OCR_JOB_STALE_MS) {
+  throw new Error('OCR_JOB_STALE_MS は OCR の Lambda のタイムアウトより長くすること');
+}
 
 /**
  * AWS SDK も含めて 1 ファイルに固める。
@@ -72,6 +105,8 @@ export interface ApiStackProps extends cdk.StackProps {
   sharedAuth: SharedAuth;
   /** CORS で許す配信元。本番のドメインと開発用の localhost */
   allowedOrigins: string[];
+  /** OCR が Claude API に入るための ID 連携。無ければ OCR は Bedrock だけで読む */
+  anthropicFederation?: AnthropicFederation;
 }
 
 export class ApiStack extends cdk.Stack {
@@ -107,27 +142,92 @@ export class ApiStack extends cdk.Stack {
      * OCR は関数を分けてある。画像を運ぶので実行時間とメモリが一桁違い、
      * 同じ関数に相乗りさせると明細の読み書きまで重くなる。
      * 同時実行を絞っているのは、1 回の呼び出しが Bedrock の課金につながるため。
+     *
+     * API Gateway からは呼ばない。api の関数がジョブを積んで非同期で呼び、結果はテーブルの
+     * ジョブの行に書かせる（infra/lambda/shared/ocr-job.ts）。再試行を 0 にしているのは、
+     * 落ちたときに同じ画像を読み直してモデルの課金を重ねないため。失敗はジョブに書いて画面に返す。
      */
     const ocrFunctionName = `${prefix}-ocr-receipt`;
+    const ocrLogGroup = lambdaLogGroup(this, 'OcrLogs', ocrFunctionName);
+
+    /*
+     * ロールの名前を固定するのは、Claude Console の ID 連携のルールがこのロールの ARN を
+     * 照合するため（arn:aws:iam::<account>:role/sakekasu-kakeibo-{env}-ocr-receipt）。
+     * CDK に任せた名前は乱数が付き、作り直すたびに変わる。名前を変えるならルールも直す。
+     */
+    const ocrRole = new iam.Role(this, 'OcrFunctionRole', {
+      roleName: ocrFunctionName,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
+    });
+
     const ocrFunction = new NodejsFunction(this, 'OcrFunction', {
       functionName: ocrFunctionName,
+      role: ocrRole,
       entry: path.join(repoRoot, 'infra/lambda/ocr-receipt/index.ts'),
       handler: 'handler',
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       memorySize: 1024,
-      timeout: cdk.Duration.seconds(60),
+      timeout: cdk.Duration.seconds(OCR_TIMEOUT_SECONDS),
       reservedConcurrentExecutions: 3,
+      retryAttempts: 0,
       depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
       bundling: BUNDLING,
-      logGroup: lambdaLogGroup(this, 'OcrLogs', ocrFunctionName),
+      logGroup: ocrLogGroup,
       environment: {
         RECEIPT_BUCKET: props.receiptBucket.bucketName,
+        TABLE_NAME: props.table.tableName,
         BEDROCK_MODEL_ID,
+        ...(props.anthropicFederation
+          ? {
+              LLM_PROVIDER: 'anthropic',
+              ANTHROPIC_MODEL_OCR,
+              ANTHROPIC_FEDERATION_RULE_ID: props.anthropicFederation.ruleId,
+              ANTHROPIC_ORGANIZATION_ID: props.anthropicFederation.organizationId,
+              ANTHROPIC_SERVICE_ACCOUNT_ID: props.anthropicFederation.serviceAccountId,
+              ...(props.anthropicFederation.workspaceId
+                ? { ANTHROPIC_WORKSPACE_ID: props.anthropicFederation.workspaceId }
+                : {}),
+            }
+          : { LLM_PROVIDER: 'bedrock' }),
       },
     });
 
     props.receiptBucket.grantRead(ocrFunction);
+
+    // テーブルはジョブの行の更新だけ。明細のパーティション（USER#）には触らせない
+    ocrFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:UpdateItem'],
+        resources: [props.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${OCR_JOB_PARTITION_PREFIX}*`] },
+        },
+      }),
+    );
+
+    /*
+     * Claude API に入るための ID トークン（JWT）を STS からもらう権限。宛先は Anthropic だけ、
+     * 寿命は OCR が頼む長さまで、署名は RS256 に絞る。JWT は短命で、Anthropic の側でも
+     * ルール（発行者・このロールの ARN・宛先）に合うものしか交換されない。
+     */
+    if (props.anthropicFederation) {
+      ocrFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ['sts:GetWebIdentityToken'],
+          resources: ['*'],
+          conditions: {
+            'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': [IDENTITY_TOKEN_AUDIENCE] },
+            NumericLessThanEquals: { 'sts:DurationSeconds': IDENTITY_TOKEN_SECONDS },
+            StringEquals: { 'sts:SigningAlgorithm': 'RS256' },
+          },
+        }),
+      );
+    }
+
+    apiFunction.addEnvironment('OCR_FUNCTION_NAME', ocrFunction.functionName);
+    ocrFunction.grantInvoke(apiFunction);
     ocrFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel'],
@@ -242,17 +342,24 @@ export class ApiStack extends cdk.Stack {
       },
     });
 
-    // より具体的な経路が優先されるので、OCR とカテゴリ判定だけ別の関数に向ける
-    this.httpApi.addRoutes({
-      path: '/receipts/analyze',
-      methods: [apigwv2.HttpMethod.POST],
-      integration: new HttpLambdaIntegration('OcrIntegration', ocrFunction),
-    });
+    const apiIntegration = new HttpLambdaIntegration('ApiIntegration', apiFunction);
 
+    // より具体的な経路が優先されるので、カテゴリ判定だけ別の関数に向ける
     this.httpApi.addRoutes({
       path: '/classify',
       methods: [apigwv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration('ClassifyIntegration', classifyFunction),
+    });
+
+    /*
+     * レシートの読み取りの受け付け。中身は api の関数（ジョブを積んで OCR の関数を非同期で呼ぶ）で、
+     * /{proxy+} でも届くが、流量の上限（routeSettings）は RouteKey が一致するルートにしか効かないので
+     * 明示のルートにしておく。結果を聞きに来る GET /receipts/analyze/{jobId} は /{proxy+} で受ける。
+     */
+    this.httpApi.addRoutes({
+      path: '/receipts/analyze',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: apiIntegration,
     });
 
     /*
@@ -269,6 +376,7 @@ export class ApiStack extends cdk.Stack {
     const stage = this.httpApi.defaultStage!.node.defaultChild as apigwv2.CfnStage;
     stage.routeSettings = {
       'POST /classify': { ThrottlingRateLimit: CLASSIFY_RATE_LIMIT, ThrottlingBurstLimit: CLASSIFY_BURST_LIMIT },
+      'POST /receipts/analyze': { ThrottlingRateLimit: OCR_START_RATE_LIMIT, ThrottlingBurstLimit: OCR_START_BURST_LIMIT },
     };
 
     /*
@@ -291,7 +399,7 @@ export class ApiStack extends cdk.Stack {
         apigwv2.HttpMethod.PUT,
         apigwv2.HttpMethod.DELETE,
       ],
-      integration: new HttpLambdaIntegration('ApiIntegration', apiFunction),
+      integration: apiIntegration,
     });
 
     this.addAlarms(prefix, {
@@ -303,6 +411,8 @@ export class ApiStack extends cdk.Stack {
       ],
       reportLogGroup,
       reportScheduleName,
+      ocrLogGroup,
+      watchFallback: props.anthropicFederation !== undefined,
     });
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: this.httpApi.apiEndpoint });
@@ -331,6 +441,9 @@ export class ApiStack extends cdk.Stack {
     props: {
       functions: { key: string; fn: NodejsFunction; what: string }[];
       reportLogGroup: logs.ILogGroup;
+      ocrLogGroup: logs.ILogGroup;
+      /** OCR が Claude API から Bedrock に読み直した回数を見るか（ID 連携があるときだけ） */
+      watchFallback: boolean;
       /** 月次レポートを呼ぶ EventBridge のルール名（説明文と次元に使う。トークンにしないため文字列で渡す） */
       reportScheduleName: string;
     },
@@ -361,12 +474,62 @@ export class ApiStack extends cdk.Stack {
     alarms.add('Api5xxAlarm', {
       alarmName: `${prefix}-api-5xx`,
       description:
-        'HTTP API が 5xx を返しています。画面では保存・OCR・カテゴリ判定のどれかが失敗しています。' +
-        'まず api / ocr-receipt / classify の CloudWatch Logs で ERROR を探す' +
-        '（OCR は読めない画像でも 502、カテゴリ判定は鍵が未設定でも 502 を返す）。',
+        'HTTP API が 5xx を返しています。画面では保存・読み取りの受付・カテゴリ判定のどれかが失敗しています。' +
+        'まず api / classify の CloudWatch Logs で ERROR を探す（カテゴリ判定は鍵が未設定でも 502 を返す）。' +
+        '読み取りそのものの失敗はここには出ず、ocr-receipt-failures が鳴る。',
       metric: this.httpApi.metricServerError({ period: fiveMinutes, statistic: 'Sum' }),
       threshold: 1,
     });
+
+    /*
+     * 読み取りの失敗。OCR の関数は失敗をジョブに書いて正常に終えるので、Errors にも 5xx にも出ない。
+     * ログの行を数える。読めない画像（ピンぼけなど）でも鳴るのは、非同期にする前の 502 と同じ。
+     */
+    const ocrFailures = new logs.MetricFilter(this, 'OcrFailureFilter', {
+      logGroup: props.ocrLogGroup,
+      // infra/lambda/ocr-receipt/index.ts の console.error の文言と合わせる
+      filterPattern: logs.FilterPattern.literal('"[ocr] failed"'),
+      metricNamespace: 'sakekasu-kakeibo',
+      metricName: `${prefix}-ocr-receipt-failures`,
+      metricValue: '1',
+    });
+
+    alarms.add('OcrFailuresAlarm', {
+      alarmName: `${prefix}-ocr-receipt-failures`,
+      description:
+        'レシートの読み取りに失敗しました（画面には「読み取れませんでした」と出ている）。' +
+        `まず CloudWatch Logs の /aws/lambda/${prefix}-ocr-receipt で「[ocr] failed」を探す。` +
+        '読めない画像なら放っておいてよい。モデルの権限やクォータのエラーなら直す。',
+      metric: ocrFailures.metric({ period: fiveMinutes, statistic: 'Sum' }),
+      threshold: 1,
+    });
+
+    /*
+     * OCR が Claude API から Bedrock に読み直した回数。読み取り自体は成功しているので
+     * ocr-receipt-failures には出ない。残高切れ（credit_balance）・ID 連携の失敗（authentication,
+     * credentials）・障害のどれかで、続くなら Bedrock の課金に切り替わっている。
+     */
+    if (props.watchFallback) {
+      const ocrFallbacks = new logs.MetricFilter(this, 'OcrFallbackFilter', {
+        logGroup: props.ocrLogGroup,
+        // infra/lambda/ocr-receipt/llm.ts の console.warn の文言と合わせる
+        filterPattern: logs.FilterPattern.literal('"[ocr] fallback"'),
+        metricNamespace: 'sakekasu-kakeibo',
+        metricName: `${prefix}-ocr-receipt-fallbacks`,
+        metricValue: '1',
+      });
+
+      alarms.add('OcrFallbacksAlarm', {
+        alarmName: `${prefix}-ocr-receipt-fallbacks`,
+        description:
+          'レシートの読み取りが Claude API で失敗し、Bedrock で読み直しました（読み取りは続いている）。' +
+          `まず CloudWatch Logs の /aws/lambda/${prefix}-ocr-receipt で「[ocr] fallback」を探し、errorType を見る。` +
+          'credit_balance なら Claude Console のクレジット、authentication / credentials なら ID 連携の設定' +
+          '（docs/operations.md の「Claude API の ID 連携」）を疑う。',
+        metric: ocrFallbacks.metric({ period: fiveMinutes, statistic: 'Sum' }),
+        threshold: 1,
+      });
+    }
 
     /*
      * 月次レポートの失敗は 2 通り拾う。
