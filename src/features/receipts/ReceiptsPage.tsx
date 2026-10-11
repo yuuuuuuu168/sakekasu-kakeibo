@@ -3,6 +3,7 @@ import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
   CURRENCIES,
   MAX_RECEIPT_PHOTOS,
+  RECEIPT_IMAGE_TYPES,
   CURRENCY_LABELS,
   RECEIPT_PAYMENT_METHODS,
   SOURCE_LABELS,
@@ -111,11 +112,12 @@ function paymentPhrase(method: SourceKind): string {
 }
 
 /**
- * OCR が読める形式。読む側（ocr-receipt）が中身のバイト列で確かめるのもこの 3 つ。
+ * OCR が読める形式（core の RECEIPT_IMAGE_TYPES）。読む側（ocr-receipt）が中身のバイト列で確かめるのも、
+ * API が署名付き URL を出すのもこの 3 つ。
  * カメラロールから選ぶ入力にはこれを列挙して渡す。iOS は HEIC の写真をここに無い形式と見て
  * JPEG に直してから渡してくれる。`image/*` だと HEIC のまま届いて OCR で落ちることがある。
  */
-const READABLE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const READABLE_IMAGE_TYPES = Object.keys(RECEIPT_IMAGE_TYPES);
 
 /**
  * 写真のキーを下書きの欄にする。1 枚目は imageKey、分けて撮ったときだけ imageKeys に全部を持たせる

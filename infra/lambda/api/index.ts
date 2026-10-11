@@ -11,6 +11,7 @@ import {
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -364,9 +365,10 @@ async function remove(sub: string, sk: string): Promise<APIGatewayProxyResultV2>
 /** レシート画像の置き場所を用意する。画像そのものは API を通さず S3 へ直接送らせる */
 async function createUpload(sub: string, body: Json): Promise<APIGatewayProxyResultV2> {
   const contentType = typeof body.contentType === 'string' ? body.contentType : 'image/jpeg';
-  if (!contentType.startsWith('image/')) throw new BadRequest('画像だけ受け取れます');
+  // OCR が読める 3 つだけ。SVG などを置かせない（core の RECEIPT_IMAGE_TYPES に理由がある）
+  if (!isReceiptImageType(contentType)) throw new BadRequest('JPEG・PNG・WebP の画像だけ受け取れます');
 
-  const extension = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg';
+  const extension = RECEIPT_IMAGE_TYPES[contentType];
   const key = `receipts/${sub}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${extension}`;
 
   const uploadUrl = await getSignedUrl(
