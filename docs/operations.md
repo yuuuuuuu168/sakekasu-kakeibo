@@ -1016,12 +1016,18 @@ unset pw
   スタック間の参照で渡すことになるため。作るのは `infra/lib/alarms.ts` の `SharedAlarms` で、
   名前の接頭辞とリージョンが外れていると合成が止まる
 - 権限は足していない。トピックへの publish は共通基盤のトピックポリシーで許してあり、
-  cdkd 用ロール（AdministratorAccess）はアラームとメトリクスフィルタを作れる
+  cdkd 用ロール（AdministratorAccess）はアラーム、メトリクスフィルタ、Application Signals の SLO を作れる。
+  ガードレールも App タグが `kakeibo` のものは通すので、SLO にもタグを付けている（builder が SLO をタグから
+  外したのは、builder の cdkd 用ロールが許可リストで `application-signals:GetServiceLevelObjective` を持たないため）。
+  SLO に要るサービスリンクロール `AWSServiceRoleForCloudWatchApplicationSignals` は、builder が同じアカウントに
+  作ってある（2026-08-04）
 
 ### アラーム一覧
 
-`<env>` は `dev` / `prod`。どれも 5 分間の合計が 1 以上で鳴り、1 期間で判定する。
+`<env>` は `dev` / `prod`。SLO のもの以外は、5 分間の合計が 1 以上で鳴り、1 期間で判定する。
 データが無い期間は `NOT_BREACHING`（起きたときだけ値が出る指標なので、使っていない夜中に鳴らさない）。
+SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolling で動きが遅く、値が途切れた瞬間に
+「復旧」と判定されると、割ったままなのに OK が届くため。
 
 | アラーム名 | スタック | 見ているもの |
 | --- | --- | --- |
@@ -1035,6 +1041,7 @@ unset pw
 | `sakekasu-kakeibo-<env>-ocr-receipt-fallbacks` | api | OCR のログの `[ocr] fallback`（Claude API で失敗し Bedrock で読み直した回数。ID 連携があるときだけ作る） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
+| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify}-slo-availability` | api | 下の SLO の達成率（`AWS/ApplicationSignals` の `AttainmentRate`、次元 `SloName`）が 1 時間平均で 90 を割った（3 個） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
 | `sakekasu-kakeibo-<env>-dynamodb-write-throttles` | data | テーブルの `WriteThrottleEvents` |
 
@@ -1057,6 +1064,54 @@ unset pw
   残りの期間ずっと鳴り続けるため
 - DynamoDB はオンデマンドなので容量の設定は無いが、急な増加では弾かれる。`ThrottledRequests` は
   操作ごとの次元しか持たないので、テーブル単位の Read/WriteThrottleEvents を見ている
+
+### SLO（Lambda の成功率）
+
+CloudWatch Application Signals の SLO を、api / ocr-receipt / classify の Lambda に 1 つずつ置いている。
+作っているのは `infra/lib/slo.ts`。`<key>-errors` は 5 分で 1 回でも落ちれば鳴ってすぐ OK に戻るので、
+ぽつぽつ落ち続けているのか一度きりなのかが Slack の流れからは読みにくい。30 日の budget で見て、
+落ちた呼び出しが積み上がったときだけ 1 つの信号にする。
+
+| SLO 名 | SLI（request-based） | 目標 | 直近 30 日の実績（2026-10-11） |
+| --- | --- | --- | --- |
+| `sakekasu-kakeibo-<env>-api-availability` | `AWS/Lambda` の Errors ÷ Invocations（関数 `sakekasu-kakeibo-<env>-api`） | 30 日 rolling で 90% | 747 回 / エラー 0 |
+| `sakekasu-kakeibo-<env>-ocr-receipt-availability` | 同上（`-ocr-receipt`） | 同上 | 142 回 / エラー 0 |
+| `sakekasu-kakeibo-<env>-classify-availability` | 同上（`-classify`） | 同上 | 129 回 / エラー 0 |
+
+決めた理由。
+
+- **SLI を Lambda の標準メトリクスで組んでいる。** kakeibo の Lambda には Application Signals の計装（ADOT）を
+  入れていない。サービスとしては自動で認識されているが、`ApplicationSignals` 名前空間の Latency / Error / Fault は
+  出ていないので、サービスオペレーションの SLI（`keyAttributes` + `metricType`）では達成率が空になる。
+  代わりに `totalRequestCountMetric` に Invocations、`badCountMetric` に Errors（どちらも 1 分の Sum）を渡す
+- **Errors しか数えていない。** api / classify は処理の失敗を握って 500 / 502 を返し、OCR は失敗をジョブに書いて
+  正常に終えるので、それらはこの SLO に入らない（`api-5xx`、`ocr-receipt-failures` が見る）。
+  この SLO が見ているのは「関数が落ちずに返した割合」（タイムアウト・メモリ不足・初期化の失敗が入る）
+- **目標 90%。** 利用者が本人だけで呼び出しがまばら。厳しくしても数回の失敗で割り込み、鳴りっぱなしになるだけ
+  なので、builder と同じ値に置いた。api なら 30 日で 70 回ほどまでの失敗が budget に入る
+- **バーンレートの窓は 1 日だけ。** 1 時間窓だとほとんどがデータ無しになる。アラームもバーンレートではなく
+  達成率で見る。バーンレートはこの規模だと 1 回の失敗で跳ね、budget の考え方と噛み合わない
+- **月次レポートには置かない。** 月に 1 回しか呼ばれず、30 日の窓に 1 回しか入らない。成功率は 0% か 100% にしか
+  ならないので割合で見る意味が無い。失敗は `monthly-report-errors` / `-failures` が 1 回目から拾う
+- **所要時間の SLO は置かない。** request-based は「総数」と「良い（悪い）数」の 2 つのメトリクスを要するが、
+  Lambda の Duration は時間の統計しか出さず「しきい値を超えた回数」が標準メトリクスに無い。period-based なら
+  Duration の p99 を期間ごとに判定できるが、呼び出しがまばらで期間の大半がデータ無しになり、判定が成り立たない
+
+SLO の論理 ID（`slo.ts` の `idPrefix`）は変えない。変えると SLO が作り直され、30 日の達成率の履歴が消える。
+SLO 名とアラームの `SloName` は `sloNames()` の 1 か所で組み立てている。ずれるとアラームは
+`INSUFFICIENT_DATA` のまま居座り、何も鳴らない。
+
+達成率は読み取り専用のプロファイルで見られる。
+
+```sh
+aws application-signals get-service-level-objective --profile verify --region ap-northeast-1 \
+  --id sakekasu-kakeibo-dev-api-availability
+aws cloudwatch get-metric-statistics --profile verify --region ap-northeast-1 \
+  --namespace AWS/ApplicationSignals --metric-name AttainmentRate \
+  --dimensions Name=SloName,Value=sakekasu-kakeibo-dev-api-availability \
+  --start-time "$(date -u -d '-1 day' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
+  --period 3600 --statistics Average
+```
 
 ### 届いているかを確かめる
 
@@ -1092,9 +1147,10 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |
-| CloudWatch アラーム | 月 1.5 ドル。15 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| CloudWatch アラーム | 月 1.8 ドル。18 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| Application Signals の SLO | 月 0.5 ドル未満の見込み。SLO 1 つが SLI の期間（1 分）ごとに 2 シグナルを出すとして、3 つで月 26 万シグナルほど |
 
-既存のゾーンを使うなら、アラームの 1.5 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
+既存のゾーンを使うなら、アラームの 1.8 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
 OCR は Claude API のクレジットで払うので、AWS の請求に出るのは Bedrock で読み直した分だけになる。
 同時実行を 3 に、受け付けを毎秒 1 回（瞬間 5 回）に絞ってあるので暴走しても天井がある。
 カテゴリ判定は桁が 2 つ小さく、金額として数える意味がない。

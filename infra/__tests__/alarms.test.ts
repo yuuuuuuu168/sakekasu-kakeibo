@@ -5,6 +5,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { SharedAlarms } from '../lib/alarms';
 import { ApiStack } from '../lib/api-stack';
 import { DataStack } from '../lib/data-stack';
+import { SLO_ATTAINMENT_GOAL, SLO_FUNCTION_KEYS, sloNames } from '../lib/slo';
 
 const account = '123456789012';
 const env = { account, region: 'ap-northeast-1' };
@@ -83,10 +84,11 @@ describe('共通基盤へ送るアラーム', () => {
     }
   });
 
-  it('全アラームに説明があり、データ欠損では鳴らさない', () => {
+  it('全アラームに説明があり、データ欠損では鳴らさない（SLO の達成率は状態を保つ）', () => {
     for (const alarm of all) {
       expect(alarm.AlarmDescription, alarm.AlarmName).toMatch(/まず/);
-      expect(alarm.TreatMissingData, alarm.AlarmName).toBe('notBreaching');
+      const isSlo = alarm.MetricName === 'AttainmentRate';
+      expect(alarm.TreatMissingData, alarm.AlarmName).toBe(isSlo ? 'missing' : 'notBreaching');
     }
   });
 
@@ -166,8 +168,85 @@ describe('共通基盤へ送るアラーム', () => {
   });
 
   it('アラームの数（足したら docs/operations.md の一覧も直す）', () => {
-    expect(alarmsOf(api)).toHaveLength(13);
+    expect(alarmsOf(api)).toHaveLength(16);
     expect(alarmsOf(data)).toHaveLength(2);
+  });
+});
+
+type SloProps = {
+  Name: string;
+  Description: string;
+  Goal: { AttainmentGoal: number; Interval: { RollingInterval: { Duration: number; DurationUnit: string } } };
+  BurnRateConfigurations: { LookBackWindowMinutes: number }[];
+  RequestBasedSli: {
+    RequestBasedSliMetric: {
+      KeyAttributes?: unknown;
+      MetricType?: unknown;
+      TotalRequestCountMetric: unknown[];
+      MonitoredRequestCountMetric: { BadCountMetric: unknown[] };
+    };
+  };
+};
+
+describe('Lambda の成功率の SLO', () => {
+  const { api } = stacks();
+  const slos = Object.values(api.findResources('AWS::ApplicationSignals::ServiceLevelObjective')).map(
+    (r) => r.Properties as SloProps,
+  );
+  const lambdaSum = (functionName: string, id: string, metricName: string) => ({
+    Id: id,
+    MetricStat: {
+      Metric: { Namespace: 'AWS/Lambda', MetricName: metricName, Dimensions: [{ Name: 'FunctionName', Value: functionName }] },
+      Period: 60,
+      Stat: 'Sum',
+    },
+  });
+
+  it('対象は api / ocr-receipt / classify の 3 つ（月 1 回の monthly-report は外す）', () => {
+    expect(SLO_FUNCTION_KEYS).toEqual(['api', 'ocr-receipt', 'classify']);
+    expect(slos.map((s) => s.Name).sort()).toEqual(
+      ['api', 'classify', 'ocr-receipt'].map((key) => `sakekasu-kakeibo-test-${key}-availability`),
+    );
+  });
+
+  it.each(['api', 'ocr-receipt', 'classify'])('%s は Invocations を総数、Errors を失敗数として 30 日 90% で見る', (key) => {
+    const functionName = `sakekasu-kakeibo-test-${key}`;
+    const slo = slos.find((s) => s.Name === `${functionName}-availability`);
+    expect(slo).toBeDefined();
+    expect(slo?.Goal).toEqual({
+      AttainmentGoal: SLO_ATTAINMENT_GOAL,
+      Interval: { RollingInterval: { Duration: 30, DurationUnit: 'DAY' } },
+    });
+    expect(slo?.BurnRateConfigurations).toEqual([{ LookBackWindowMinutes: 1440 }]);
+    expect(slo?.RequestBasedSli.RequestBasedSliMetric).toEqual({
+      TotalRequestCountMetric: [lambdaSum(functionName, 'invocations', 'Invocations')],
+      MonitoredRequestCountMetric: { BadCountMetric: [lambdaSum(functionName, 'errors', 'Errors')] },
+    });
+  });
+
+  // 計装が無く ApplicationSignals のメトリクスが出ていないので、サービスの SLI に結び付けない
+  it('Application Signals のサービスの SLI（keyAttributes / metricType）を使わない', () => {
+    for (const slo of slos) {
+      expect(slo.RequestBasedSli.RequestBasedSliMetric.KeyAttributes, slo.Name).toBeUndefined();
+      expect(slo.RequestBasedSli.RequestBasedSliMetric.MetricType, slo.Name).toBeUndefined();
+    }
+  });
+
+  it.each(['api', 'ocr-receipt', 'classify'])('%s の達成率が目標を割ったら鳴り、SloName が SLO の名前と一致する', (key) => {
+    const names = sloNames('sakekasu-kakeibo-test', key);
+    const alarm = byName(api, names.alarmName);
+    expect(alarm).toMatchObject({
+      Namespace: 'AWS/ApplicationSignals',
+      MetricName: 'AttainmentRate',
+      Statistic: 'Average',
+      Period: 3600,
+      Threshold: SLO_ATTAINMENT_GOAL,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'LessThanThreshold',
+      TreatMissingData: 'missing',
+    });
+    expect(alarm.Dimensions).toEqual([{ Name: 'SloName', Value: names.sloName }]);
+    expect(slos.map((s) => s.Name)).toContain(names.sloName);
   });
 });
 

@@ -23,6 +23,11 @@ const app = new cdk.App();
 // cdkd はロールを更新するたびに名前が変わったとみなして作り直す（2026-10-04 にタグを足しただけで
 // 作り直しが起き、Lambda が消えたロールを指して止まった）。ロールはガードレールでも
 // 名前の接頭辞で範囲を絞る。
+//
+// Application Signals の SLO には付ける。sakekasu-builder は SLO を外しているが、それは builder の
+// cdkd 用ロールが許可リストで application-signals:GetServiceLevelObjective を持たず、cdkd が
+// Cloud Control でタグを更新する途中で断られたため。kakeibo の cdkd 用ロールは AdministratorAccess で、
+// ガードレールも App タグが kakeibo のものは通すので、同じ失敗は起きない（cdkd-deploy-stack.ts）。
 cdk.Tags.of(app).add('App', 'kakeibo', {
   excludeResourceTypes: ['AWS::IAM::Role'],
 });

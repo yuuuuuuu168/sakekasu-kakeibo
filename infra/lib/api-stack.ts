@@ -25,6 +25,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 import { SharedAlarms } from './alarms';
 import { lambdaLogGroup } from './log-group';
+import { addAvailabilitySlos } from './slo';
 import { userPoolRegion, type SharedAuth } from './shared-auth';
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -470,6 +471,9 @@ export class ApiStack extends cdk.Stack {
         threshold: 1,
       });
     }
+
+    // 30 日の成功率の SLO と、それを割ったときのアラーム。対象と理由は slo.ts にある
+    addAvailabilitySlos(this, alarms, prefix);
 
     alarms.add('Api5xxAlarm', {
       alarmName: `${prefix}-api-5xx`,
