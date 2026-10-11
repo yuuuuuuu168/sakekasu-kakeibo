@@ -274,7 +274,7 @@ JSON ではなく鍵の文字列そのままを入れること。`{"apiKey": "..
 OCR の Lambda が自分のロールで STS の `GetWebIdentityToken` を呼んで AWS が署名した JWT をもらい、
 SDK が Anthropic の短命のトークン（10 分）と交換する。鍵はどこにも置かない。
 
-dev については 2026-10-11 に済んでいる。人の手で行ったのは次の 2 つ。
+dev については 2026-10-11 に済んでいる。人の手で行ったのは次の 3 つ。
 
 1. AWS: IAM → アカウント設定 → **Outbound web identity federation** を有効にした（アカウント単位。
    sakekasu-builder と同じアカウントにかかるが、`sts:GetWebIdentityToken` を許したロールしかトークンを取れない）。
@@ -284,6 +284,12 @@ dev については 2026-10-11 に済んでいる。人の手で行ったのは�
    - ルール `sakekasu-kakeibo-workload`: IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-ocr-receipt`、
      audience `https://api.anthropic.com`、ワークスペースは `sakekasu-kakeibo`、スコープ `workspace:developer`、寿命 600 秒
    - サービスアカウント `sakekasu-kakeibo-ocr`
+3. Claude Console: Settings → Service accounts で `sakekasu-kakeibo-ocr` を開き、「ワークスペースに追加」で
+   `sakekasu-kakeibo` に役割 Developer で入れた。ルールの認可にワークスペースを足すだけでは足りない。
+   サービスアカウントがそのワークスペースのメンバーでないと、トークンの交換が 401 になり、
+   認証履歴に `sa_not_in_workspace` が出る。Default にだけは最初から暗黙に入っているので、
+   Default を使っている間は気づかない。ワークスペースの「メンバー」画面は人のアカウント用で、
+   サービスアカウントはここからは足せない
 
 同じ Claude の組織を sakekasu-builder も使うので、ワークスペース・ルール・サービスアカウントはアプリごとに分ける。
 使用量とコストをアプリ別に見られ、利用上限（spend limit）もアプリ別にかけられる。課金とクレジットは組織に 1 つで、
@@ -296,8 +302,9 @@ dev については 2026-10-11 に済んでいる。人の手で行ったのは�
 
 最初は Default ワークスペースに入っていた（ルール名も `sakekasu-workload`）。2026-10-11 に、ルールを
 `sakekasu-kakeibo-workload` に改名し、ワークスペース `sakekasu-kakeibo` を作って認可に足し、`cdk.json` の
-`workspaceId` をそちらに替えた。デプロイ後に Usage で `sakekasu-kakeibo` に使用量が付くのを確かめてから、
-ルールの認可から Default を外す。`workspaceId` は省かずに書いておく。ルールが複数のワークスペースを
+`workspaceId` をそちらに替えた。最初はサービスアカウントをワークスペースに入れ忘れて `sa_not_in_workspace` で
+落ち、Bedrock に読み直していた（上の 3 で直した）。Usage で `sakekasu-kakeibo` に使用量が付くのを確かめてから、
+同じ日にルールの認可から Default を外した。`workspaceId` は省かずに書いておく。ルールが複数のワークスペースを
 認可していると、省いたときにどちらへ入るかがサーバー側の判断になる。
 
 ルール・組織・サービスアカウント・ワークスペースの ID は `infra/cdk.json` の context `anthropicFederation` にある
@@ -320,7 +327,7 @@ context を消すと、OCR は Bedrock だけで読む構成に戻る（`LLM_PRO
 | --- | --- |
 | `credit_balance` | Claude Console のクレジット（月が替われば戻る。急ぐなら Billing を見る） |
 | `authentication` / `permission` | Claude Console のルール（ロールの ARN・audience・ワークスペース）。[認証履歴](https://platform.claude.com/settings/workload-identity-federation?tab=history)に拒否の理由が出る |
-| `credentials` | STS で JWT を取れていない。アカウント設定の Outbound web identity federation が無効、ロールの権限の条件と頼み方が合わない、など |
+| `credentials` | メッセージが `Token exchange failed with status 401` なら、JWT は取れていて Anthropic 側で断られている。認証履歴の `status.reason` を見る（`sa_not_in_workspace` ならサービスアカウントをワークスペースに入れる）。それ以外は STS で JWT を取れていない。アカウント設定の Outbound web identity federation が無効、ロールの権限の条件と頼み方が合わない、など |
 | `rate_limit` / `overloaded` / `server_error` / `timeout` / `connection` | Claude API 側の混雑や障害。続かなければ放っておいてよい |
 | `refusal` | モデルが読み取りを断った。写真を確かめる |
 
