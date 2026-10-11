@@ -14,6 +14,7 @@ import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
 import type { SharedAuth } from '../lib/shared-auth';
+import type { AnthropicFederation } from '../lib/anthropic-federation';
 
 const env = { account: '123456789012', region: 'ap-northeast-1' };
 
@@ -24,7 +25,16 @@ const sharedAuth: SharedAuth = {
   clientId: 'testclientid0123456789',
 };
 
-function stacks() {
+/** テスト用の ID 連携の値。本物の値は cdk.json にある */
+const anthropicFederation: AnthropicFederation = {
+  ruleId: 'fdrl_test',
+  organizationId: '00000000-0000-0000-0000-000000000000',
+  serviceAccountId: 'svac_test',
+  workspaceId: 'wrkspc_test',
+};
+
+/** 既定は本番と同じく ID 連携あり。`{ federation: false }` で Bedrock だけの構成を組む */
+function stacks({ federation = true }: { federation?: boolean } = {}) {
   const app = new cdk.App();
   const data = new DataStack(app, 'test-data', { envName: 'test', env, receiptRetentionDays: 90 });
   const api = new ApiStack(app, 'test-api', {
@@ -34,6 +44,7 @@ function stacks() {
     receiptBucket: data.receiptBucket,
     sharedAuth,
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
+    ...(federation ? { anthropicFederation } : {}),
   });
   const site = new SiteStack(app, 'test-site', {
     envName: 'test',
@@ -174,12 +185,74 @@ describe('ApiStack', () => {
   it('OCR の関数のテーブルの権限はジョブの行の更新だけ', () => {
     const template = Template.fromStack(stacks().api);
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
-    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionServiceRole'));
+    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionRole'));
     const statements = ocr!.Properties.PolicyDocument.Statement as Record<string, unknown>[];
     const dynamo = statements.filter((statement) => JSON.stringify(statement.Action).includes('dynamodb:'));
     expect(dynamo).toHaveLength(1);
     expect(dynamo[0].Action).toBe('dynamodb:UpdateItem');
     expect(dynamo[0].Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['OCR#*'] } });
+  });
+
+  /*
+   * Claude Console の ID 連携のルールは、このロールの ARN を照合している。名前が変わると
+   * Claude API に入れなくなり、毎回 Bedrock に読み直すことになる。
+   */
+  it('OCR の関数のロールは名前を固定する（ID 連携のルールが ARN を照合する）', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::IAM::Role', { RoleName: 'sakekasu-kakeibo-test-ocr-receipt' });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^OcrFunctionRole'), 'Arn'] },
+    });
+  });
+
+  it('ID 連携があれば、OCR は Claude API を既定にし、Bedrock を控えに持つ', () => {
+    Template.fromStack(stacks().api).hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Environment: {
+        Variables: Match.objectLike({
+          LLM_PROVIDER: 'anthropic',
+          ANTHROPIC_MODEL_OCR: 'claude-sonnet-5-5',
+          ANTHROPIC_FEDERATION_RULE_ID: 'fdrl_test',
+          ANTHROPIC_ORGANIZATION_ID: '00000000-0000-0000-0000-000000000000',
+          ANTHROPIC_SERVICE_ACCOUNT_ID: 'svac_test',
+          ANTHROPIC_WORKSPACE_ID: 'wrkspc_test',
+          BEDROCK_MODEL_ID: 'jp.anthropic.claude-sonnet-4-6',
+        }),
+      },
+    });
+  });
+
+  /*
+   * ID トークンは Anthropic 宛て・短命・RS256 のものだけ。ほかの宛先のトークン（別の外部サービスに
+   * 入るためのもの）をこのロールで作れないようにする。
+   */
+  it('STS の ID トークンは Anthropic 宛てで、寿命と署名を絞って許す', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionRole'));
+    const sts = (ocr!.Properties.PolicyDocument.Statement as Record<string, unknown>[]).find(
+      (statement) => statement.Action === 'sts:GetWebIdentityToken',
+    );
+    expect(sts).toMatchObject({
+      Effect: 'Allow',
+      Resource: '*',
+      Condition: {
+        'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': ['https://api.anthropic.com'] },
+        NumericLessThanEquals: { 'sts:DurationSeconds': 300 },
+        StringEquals: { 'sts:SigningAlgorithm': 'RS256' },
+      },
+    });
+  });
+
+  it('ID 連携が無ければ、OCR は Bedrock だけで読み、STS の権限も持たない', () => {
+    const template = Template.fromStack(stacks({ federation: false }).api);
+    const fn = Object.values(template.findResources('AWS::Lambda::Function')).find(
+      (resource) => resource.Properties.FunctionName === 'sakekasu-kakeibo-test-ocr-receipt',
+    );
+    expect(fn!.Properties.Environment.Variables.LLM_PROVIDER).toBe('bedrock');
+    expect(fn!.Properties.Environment.Variables.ANTHROPIC_FEDERATION_RULE_ID).toBeUndefined();
+    expect(JSON.stringify(template.findResources('AWS::IAM::Policy'))).not.toContain('sts:GetWebIdentityToken');
   });
 
   it('カテゴリ判定の同時実行にも天井を置く', () => {

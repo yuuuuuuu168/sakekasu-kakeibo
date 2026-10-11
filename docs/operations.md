@@ -266,6 +266,60 @@ JSON ではなく鍵の文字列そのままを入れること。`{"apiKey": "..
 入っているかどうかは、判定を 1 回通してみるか CloudWatch Logs の
 `sakekasu-kakeibo-dev-classify` を見るほうで確かめる。
 
+### 6.5 Claude API の ID 連携（OCR）
+
+レシートの OCR は Claude API（`api.anthropic.com`）を既定にし、失敗したら Bedrock で読み直す
+（`infra/lambda/ocr-receipt/llm.ts`）。Claude API には API キーではなく
+[Workload Identity Federation](https://platform.claude.com/docs/en/manage-claude/wif-providers/aws) で入る。
+OCR の Lambda が自分のロールで STS の `GetWebIdentityToken` を呼んで AWS が署名した JWT をもらい、
+SDK が Anthropic の短命のトークン（10 分）と交換する。鍵はどこにも置かない。
+
+dev については 2026-10-11 に済んでいる。人の手で行ったのは次の 2 つ。
+
+1. AWS: IAM → アカウント設定 → **Outbound web identity federation** を有効にした（アカウント単位。
+   sakekasu-builder と同じアカウントにかかるが、`sts:GetWebIdentityToken` を許したロールしかトークンを取れない）。
+   画面に出る **Get Token Issuer URL**（`https://<uuid>.tokens.sts.global.api.aws`）を控える
+2. Claude Console: Settings → Workload identity → Connect workload → AWS で、次を作った
+   - 発行者: 1 の Issuer URL（JWKS は discovery）
+   - ルール `sakekasu-workload`: IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-ocr-receipt`、
+     audience `https://api.anthropic.com`、ワークスペースは Default、寿命 600 秒
+   - サービスアカウント `sakekasu-kakeibo-ocr`
+
+ルール・組織・サービスアカウント・ワークスペースの ID は `infra/cdk.json` の context `anthropicFederation` にある
+（秘密ではない）。CDK はこれを OCR の Lambda の環境変数（`ANTHROPIC_FEDERATION_RULE_ID` など）に渡し、
+ロールに `sts:GetWebIdentityToken` を許す（宛先・寿命・署名を条件で絞る）。
+context を消すと、OCR は Bedrock だけで読む構成に戻る（`LLM_PROVIDER=bedrock`）。
+
+| 環境変数 | 値 | 意味 |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `anthropic` / `bedrock` | 既定の呼び先。ID 連携の値が無ければ `bedrock` |
+| `ANTHROPIC_MODEL_OCR` | `claude-sonnet-5-5` | Claude API のモデル。精度が足りなければ `claude-opus-5-5` に上げる（`api-stack.ts`） |
+| `BEDROCK_MODEL_ID` | `jp.anthropic.claude-sonnet-4-6` | 控えの Bedrock のモデル（推論プロファイル） |
+| `ANTHROPIC_FEDERATION_RULE_ID` ほか 3 つ | `cdk.json` の値 | ID 連携で交換するルール・組織・サービスアカウント・ワークスペース |
+
+**確かめ方。** 読み取りのたびに OCR のログへ `[ocr] llm {...}` が 1 行出る（呼び先・モデル・秒数・トークン数）。
+`provider` が `anthropic` なら Claude API で読めている。Claude API で失敗して Bedrock で読み直したときは
+`[ocr] fallback {"fallback":true,...,"errorType":...}` が出て、アラーム `ocr-receipt-fallbacks` が鳴る。
+
+| `errorType` | 疑うところ |
+| --- | --- |
+| `credit_balance` | Claude Console のクレジット（月が替われば戻る。急ぐなら Billing を見る） |
+| `authentication` / `permission` | Claude Console のルール（ロールの ARN・audience・ワークスペース）。[認証履歴](https://platform.claude.com/settings/workload-identity-federation?tab=history)に拒否の理由が出る |
+| `credentials` | STS で JWT を取れていない。アカウント設定の Outbound web identity federation が無効、ロールの権限の条件と頼み方が合わない、など |
+| `rate_limit` / `overloaded` / `server_error` / `timeout` / `connection` | Claude API 側の混雑や障害。続かなければ放っておいてよい |
+| `refusal` | モデルが読み取りを断った。写真を確かめる |
+
+トークン数を集計するときは CloudWatch Logs Insights で次を流す。
+
+```
+fields @timestamp, @message
+| filter @message like /\[ocr\] llm/
+| parse @message '"provider":"*"' as provider
+| parse @message '"input":*,' as input
+| parse @message '"output":*,' as output
+| stats count() as n, avg(input) as avgInput, avg(output) as avgOutput by provider
+```
+
 ### 7. フロントを置く
 
 ふだんは deploy ワークフローが行う。手で置くときは次のとおり。ログインの値（共通ログイン）は
@@ -946,6 +1000,7 @@ unset pw
 | `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report}-throttles` | api | 上の 4 本の Throttles（4 個） |
 | `sakekasu-kakeibo-<env>-api-5xx` | api | HTTP API の `5xx`（次元 `ApiId`） |
 | `sakekasu-kakeibo-<env>-ocr-receipt-failures` | api | OCR のログの `[ocr] failed`（メトリクスフィルタで数える） |
+| `sakekasu-kakeibo-<env>-ocr-receipt-fallbacks` | api | OCR のログの `[ocr] fallback`（Claude API で失敗し Bedrock で読み直した回数。ID 連携があるときだけ作る） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
@@ -959,8 +1014,10 @@ unset pw
 - レシートの読み取りは非同期で、OCR の関数は API Gateway につながっていない（api の関数がジョブを積んで
   非同期で呼ぶ）。失敗はジョブに書いて正常に終えるので、`api-5xx` にも `ocr-receipt-errors` にも出ず、
   `ocr-receipt-failures` が見る。読めない画像（ピンぼけなど）でも鳴る。`ocr-receipt-errors` が鳴るのは、
-  タイムアウト（120 秒）など関数そのものが落ちたときで、そのジョブは画面に「時間内に読み取れませんでした」と出る。
+  タイムアウト（240 秒）など関数そのものが落ちたときで、そのジョブは画面に「時間内に読み取れませんでした」と出る。
   ログの文言（`infra/lambda/ocr-receipt/index.ts`）を変えるときは、`api-stack.ts` のフィルタも合わせる
+- `ocr-receipt-fallbacks` は読み取りが続いているときにも鳴る。Claude API で失敗して Bedrock で読み直した印で、
+  続くなら Bedrock の課金に切り替わっている。ログの `errorType` で原因を見分ける（「Claude API の ID 連携」の節）
 - 月次レポートは利用者ごとの失敗を握って正常終了するので、`monthly-report-errors` では拾えない。
   `monthly-report-failures` がその分を見る。ログの文言（`infra/lambda/monthly-report/index.ts`）を変えるときは、
   `api-stack.ts` のフィルタも合わせる
@@ -998,14 +1055,16 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Lambda | 無料枠の中 |
 | API Gateway（HTTP API） | 月 0.01 ドル未満 |
 | CloudFront | 無料枠の中 |
-| Bedrock（Claude Sonnet 4.6） | レシート 1 枚で 2〜3 円ほど（画像と書き起こしで入力 2,000・出力 1,000 トークン前後）。月 100 枚で 300 円ほど |
+| Claude API（Claude Sonnet 5.5） | Max プランに付く月々の API クレジットで払う。レシート 1 枚で入力 2,000〜20,000・出力 1,000〜4,000 トークン（写真の枚数と長さによる）、1 回 0.01〜0.1 ドルほど |
+| Bedrock（Claude Sonnet 4.6） | Claude API で失敗したときの控え。読み直した分だけ。1 枚で 2〜3 円ほど |
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |
-| CloudWatch アラーム | 月 1.4 ドル。14 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| CloudWatch アラーム | 月 1.5 ドル。15 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
 
-既存のゾーンを使うなら、アラームの 1.4 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
-Bedrock の OCR がその次で、同時実行を 3 に、受け付けを毎秒 1 回（瞬間 5 回）に絞ってあるので暴走しても天井がある。
+既存のゾーンを使うなら、アラームの 1.5 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
+OCR は Claude API のクレジットで払うので、AWS の請求に出るのは Bedrock で読み直した分だけになる。
+同時実行を 3 に、受け付けを毎秒 1 回（瞬間 5 回）に絞ってあるので暴走しても天井がある。
 カテゴリ判定は桁が 2 つ小さく、金額として数える意味がない。
 
 ## 消すとき

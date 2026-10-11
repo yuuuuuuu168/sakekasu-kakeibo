@@ -8,6 +8,7 @@ import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
 import { parseSharedAuth, userPoolRegion } from '../lib/shared-auth';
+import { parseAnthropicFederation } from '../lib/anthropic-federation';
 
 const app = new cdk.App();
 
@@ -113,6 +114,12 @@ function buildApplicationStacks(): void {
    */
   const sharedAuth = parseSharedAuth(app.node.tryGetContext('sharedAuth'));
 
+  /*
+   * レシートの OCR が Claude API に入るための ID 連携（Workload Identity Federation）の値。
+   * 無ければ OCR は Bedrock だけで読む。値と手順は lib/anthropic-federation.ts にある。
+   */
+  const anthropicFederation = parseAnthropicFederation(app.node.tryGetContext('anthropicFederation'));
+
   const dataStack = new DataStack(app, `${prefix}-data`, {
     envName,
     env,
@@ -143,6 +150,7 @@ function buildApplicationStacks(): void {
     receiptBucket: dataStack.receiptBucket,
     sharedAuth,
     allowedOrigins,
+    anthropicFederation,
   });
 
   if (!certificateArn && domainName && hostedZoneId && zoneName) {

@@ -12,7 +12,7 @@ API Gateway (HTTP API) ── Cognito JWT オーソライザ（共通ユーザ�
 Lambda (api)  ──▶ DynamoDB (シングルテーブル)
   │
   ├─▶ S3 (レシート画像)  … 署名付き URL を返すだけ。本体は通さない
-  ├─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)      … 画像から品目を起こす（非同期。結果はジョブの行に書く）
+  ├─▶ Lambda (ocr-receipt) ──▶ Claude API（失敗したら Bedrock） … 画像から品目を起こす（非同期。結果はジョブの行に書く）
   └─▶ Lambda (classify)   ──▶ TypeSafe (Jev)         … 品目名・店舗名のカテゴリを決める
 
 EventBridge (毎月1日 09:00 JST) ──▶ Lambda (monthly-report) ──▶ DynamoDB
@@ -125,12 +125,26 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
    ocr-receipt を非同期（`InvocationType: Event`）で呼び、すぐ `jobId` を返す
 2. ocr-receipt は画像を読み、結果をジョブの行に書く（`done` と下書き、または `failed` と理由）。
    失敗は握って正常に終える。非同期呼び出しの再試行は 0 にしてあり、同じ画像を読み直してモデルの課金を重ねない
-3. 画面は 2 秒おきに `GET /receipts/analyze/{jobId}` を聞き、`done` か `failed` で止まる（最大 3 分）。
-   ocr-receipt のタイムアウト（120 秒）を過ぎても `pending` のジョブは、api が `failed` として返す
+3. 画面は 2 秒おきに `GET /receipts/analyze/{jobId}` を聞き、`done` か `failed` で止まる（最大 5 分）。
+   ocr-receipt のタイムアウト（240 秒）を過ぎても `pending` のジョブは、api が `failed` として返す
 
 ジョブの行を明細と別のパーティションに置くのは、スナップショット（`USER#{sub}` の Query）に混ぜないため。
 行は `expiresAt` の TTL で 1 日後に消える。ocr-receipt の権限も、この接頭辞の行の `UpdateItem` だけに絞っている。
 形の定義は `infra/lambda/shared/ocr-job.ts` にある。
+
+読み取りのモデルは Claude API（`claude-sonnet-5-5`）を既定にし、Bedrock（Sonnet 4.6）を控えに持つ
+（`infra/lambda/ocr-receipt/llm.ts`）。Claude API は Max プランに付く月々のクレジットで払えるので、
+単純に課金される Bedrock より安く、新しいモデルも早く使える。どちらにも同じ Messages API の形で頼む。
+
+- Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が STS の
+  `GetWebIdentityToken` で AWS 署名の JWT をもらい、SDK が Anthropic の短命のトークンと交換する
+- 残高不足・認証や権限・流量の上限・過負荷や 5xx（SDK の再試行の後も）・通信の失敗・トークンの交換の失敗・
+  モデルが断ったときは、同じ頼みを Bedrock で読み直す。そのほかの 4xx（頼み方の誤り）は読み直さない
+- 読み直したら `[ocr] fallback` に `fallback: true` と原因（`errorType`）を JSON で出し、アラームで数える
+- 思考は止められない世代なので `effort: low` で浅くする。プロンプトキャッシュは入れていない
+  （指示文が短く、キャッシュの最小の長さに届かないうえ、5 分の間に次の読み取りが来ることも少ない）
+
+設定と確かめ方は docs/operations.md の「Claude API の ID 連携（OCR）」にある。
 
 書き込みは上書き（upsert）にしてある。同じ明細を二重に入れないための判定は取り込み画面側
 （`mergeImported`）が済ませているので、サーバ側で条件付き書き込みをしていない。
@@ -252,7 +266,7 @@ Amazon、ホームセンター、ネットスーパー。これに当たった�
 ## カテゴリ判定（2 段）
 
 OCR とカテゴリ判定は別のモデルに分けている。画像から印字を起こすのは生成の仕事で Claude
-（Bedrock / Sonnet 4.6）、「食費か日用品か」は選択肢から 1 つ選ぶ仕事で Jev（TypeSafe）。
+（Claude API / Sonnet 5.5。控えは Bedrock / Sonnet 4.6）、「食費か日用品か」は選択肢から 1 つ選ぶ仕事で Jev（TypeSafe）。
 Jev は答えと一緒に校正された確信度（0〜1）を返すので、そのまま入れる・人に見せる・
 未分類に落とす、の線を数字で引ける。
 

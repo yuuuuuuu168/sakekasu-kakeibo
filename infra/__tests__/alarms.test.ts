@@ -22,6 +22,11 @@ function stacks() {
     receiptBucket: data.receiptBucket,
     sharedAuth: { domain: 'auth.example.com', userPoolId: 'ap-northeast-1_TestPool1', clientId: 'testclientid0123456789' },
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
+    anthropicFederation: {
+      ruleId: 'fdrl_test',
+      organizationId: '00000000-0000-0000-0000-000000000000',
+      serviceAccountId: 'svac_test',
+    },
   });
   return { data: Template.fromStack(data), api: Template.fromStack(api) };
 }
@@ -137,6 +142,18 @@ describe('共通基盤へ送るアラーム', () => {
     expect(alarm).toMatchObject({ Namespace: 'sakekasu-kakeibo', Threshold: 1 });
   });
 
+  // 読み直しは読み取りとしては成功するので failures には出ない。残高切れや ID 連携の不具合に気づくため
+  it('Claude API から Bedrock への読み直しをログから数え、ログの文言と合わせてある', () => {
+    api.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '"[ocr] fallback"',
+      MetricTransformations: [
+        { MetricNamespace: 'sakekasu-kakeibo', MetricName: 'sakekasu-kakeibo-test-ocr-receipt-fallbacks', MetricValue: '1' },
+      ],
+    });
+    const alarm = byName(api, 'sakekasu-kakeibo-test-ocr-receipt-fallbacks');
+    expect(alarm).toMatchObject({ Namespace: 'sakekasu-kakeibo', Threshold: 1 });
+  });
+
   it('月次レポートを EventBridge が呼べなかったことを見る', () => {
     const alarm = byName(api, 'sakekasu-kakeibo-test-monthly-report-invocation-failures');
     expect(alarm).toMatchObject({ Namespace: 'AWS/Events', MetricName: 'FailedInvocations', Threshold: 1 });
@@ -149,7 +166,7 @@ describe('共通基盤へ送るアラーム', () => {
   });
 
   it('アラームの数（足したら docs/operations.md の一覧も直す）', () => {
-    expect(alarmsOf(api)).toHaveLength(12);
+    expect(alarmsOf(api)).toHaveLength(13);
     expect(alarmsOf(data)).toHaveLength(2);
   });
 });

@@ -26,7 +26,7 @@
 | 店舗名の正規化 | 半角カナ・全角英数・店舗番号・Amazon の注文 ID を落として名寄せする |
 | 自動分類 | 国内でよく出る店を 160 件ほど初期搭載。カテゴリを直すと「この店は今後もこれ」を覚える |
 | 内訳待ち | コンビニ・ドラッグストア・スーパー・Amazon・居酒屋など、1 回の支払いに複数カテゴリが混ざる店に印を付ける。確定するまで画面に「この数字は甘い」と出続ける |
-| レシート OCR | Bedrock（Claude Sonnet 4.6）が店名・日付・合計・品目を読む。品目ごとのカテゴリも推定し、外したぶんは品目名の表で拾い直す |
+| レシート OCR | Claude API（Claude Sonnet 5.5。失敗したら Bedrock の Sonnet 4.6）が店名・日付・合計・品目を読む。品目ごとのカテゴリも推定し、外したぶんは品目名の表で拾い直す |
 | 明細との自動マッチ | 合計金額の一致を必須に、日付の近さと店名の近さでスコアを付ける。迷いの無い候補が 1 件だけなら自動で紐付け、それ以外は候補を並べる |
 | ワンタップ分割 | レシートが無いとき用。1,200 円を 食費 800 / 日用品 400 に割る。均等割りもある |
 | 明細の無い支払いの登録 | 対応する明細が無いレシートは、支払い方法（現金・PayPay・クレジットカード・Suica・不明）を選んでそのまま支出として登録できる。支払いの印字から読めた支払い方法が初期値になる |
@@ -107,6 +107,22 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 
 `bedrock:InvokeModel` の認可は、クロスリージョン推論プロファイル本体と、振り先の foundation-model の**両方**を見る。プロファイルの ARN だけを許可すると、振り先に当たったリクエストだけが `AccessDeniedException` で落ちる。毎回落ちないので気づきにくい。モデルを差し替えるときは `aws bedrock list-inference-profiles` で振り先リージョンを取り直すこと。詳細は [infra/lib/api-stack.ts](infra/lib/api-stack.ts) のコメントにある。
 
+### OCR は Claude API を ID 連携で呼び、Bedrock を控えに持つ
+
+OCR の既定の呼び先は Claude API（`claude-sonnet-5-5`）。Max プランに付く月々の API クレジットで払えるので、単純に課金される Bedrock より安く、新しいモデルも早く使える（Bedrock では最新モデルのクォータが 0 だった）。Bedrock の Sonnet 4.6 は消さずに控えとして残し、残高不足・認証の失敗・障害のときは同じ頼みを Bedrock で読み直す。
+
+Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が自分のロールで STS の `GetWebIdentityToken` を呼び、AWS が署名した JWT を Anthropic の短命のトークンと交換する。鍵を Secrets Manager にも環境変数にも置かないので、漏れる鍵が無い。
+
+| 変えたもの | 中身 |
+| --- | --- |
+| `infra/lambda/ocr-receipt/llm.ts` | 呼び先の選択、ID 連携、Bedrock への読み直し、消費（トークン数）のログ |
+| `infra/lib/api-stack.ts` | OCR のロール名を固定（ルールが ARN を照合する）、`sts:GetWebIdentityToken`（宛先・寿命・署名を条件で絞る）、環境変数、読み直しのアラーム |
+| `infra/cdk.json` | context `anthropicFederation`（ルール・組織・サービスアカウント・ワークスペースの ID。秘密ではない） |
+| 環境変数 | `LLM_PROVIDER`、`ANTHROPIC_MODEL_OCR`、`ANTHROPIC_FEDERATION_RULE_ID`、`ANTHROPIC_ORGANIZATION_ID`、`ANTHROPIC_SERVICE_ACCOUNT_ID`、`ANTHROPIC_WORKSPACE_ID`（Bedrock は従来の `BEDROCK_MODEL_ID`） |
+| IAM の差分 | OCR のロールに `sts:GetWebIdentityToken` を足しただけ。`bedrock:InvokeModel` は控えのために残す。Secrets Manager は使わない |
+
+設定の手順と、読み直したときの原因の見分け方は [docs/operations.md](docs/operations.md) の「Claude API の ID 連携（OCR）」にある。
+
 ## 技術スタック
 
 - React 19 + TypeScript 5.8
@@ -115,7 +131,8 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 - AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
 - Amazon Cognito（4 アプリ共通のユーザープールとマネージドログイン）
 - AWS S3 + CloudFront（フロントの配信、レシート画像の保管）
-- Amazon Bedrock（Claude Sonnet 4.6）※レシートの OCR
+- Claude API（Claude Sonnet 5.5）※レシートの OCR。Workload Identity Federation で入り、API キーを持たない
+- Amazon Bedrock（Claude Sonnet 4.6）※OCR の控え（Claude API で失敗したとき）
 - EventBridge（毎月 1 日のレポート生成）
 - pdfjs-dist（PDF のテキスト抽出。動的 import で初回表示に載せない）
 - Vitest + Testing Library + fast-check（コア・画面・インフラ）
