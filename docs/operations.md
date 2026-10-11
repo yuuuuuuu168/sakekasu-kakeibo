@@ -547,7 +547,7 @@ table=sakekasu-kakeibo-dev
 - **Permissions Boundary**：アプリのロール（Lambda の実行ロール）にはすべて、管理ポリシー
   `sakekasu-kakeibo-role-boundary` を境界として付けている。cdkd 用ロールは境界の無いロールを
   作れず、境界の取り外しや信頼ポリシーの書き換え、境界そのものの書き換えもできない。
-  境界は IAM・STS・Organizations と、他のアプリのリソース・cdkd の状態バケットを天井から外す。
+  境界は IAM・ロールの引き受け・Organizations と、他のアプリのリソース・cdkd の状態バケットを天井から外す。
   Lambda から他のアプリのリソースを使う処理を足すと、デプロイは通っても実行時に AccessDenied になる。
   CDK 側でロールの `assumedBy` を変えたときも、cdkd の UpdateAssumeRolePolicy が拒否されて止まる。
   そのときは人が直す。中身は `infra/lib/role-boundary.ts`

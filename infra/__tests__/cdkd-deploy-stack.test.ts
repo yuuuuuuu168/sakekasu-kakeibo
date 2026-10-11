@@ -123,13 +123,15 @@ describe('CdkdDeployStack', () => {
       return found as Record<string, unknown>;
     }
 
-    it('境界の管理ポリシーを名前で作り、IAM と STS を天井から外す', () => {
+    it('境界の管理ポリシーを名前で作り、IAM とロールの引き受けを天井から外す', () => {
       const t = template();
       t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'sakekasu-kakeibo-role-boundary' });
       const policy = Object.values(t.findResources('AWS::IAM::ManagedPolicy'))[0];
       const statements = policy.Properties.PolicyDocument.Statement as { Sid: string; Effect: string; Action: string[] }[];
       const deny = statements.find((s) => s.Sid === 'DenyIdentityAndAccountControl');
-      expect(deny?.Action).toEqual(expect.arrayContaining(['iam:*', 'sts:*', 'organizations:*']));
+      expect(deny?.Action).toEqual(expect.arrayContaining(['iam:*', 'sts:AssumeRole*', 'organizations:*']));
+      // Claude API の ID 連携が sts:GetWebIdentityToken を呼ぶので、STS をまるごとは止めない
+      expect(deny?.Action).not.toContain('sts:*');
       expect(statements.find((s) => s.Sid === 'DenyOtherAppsResources')).toMatchObject({
         Effect: 'Deny',
         Condition: { StringNotEquals: { 'aws:ResourceTag/App': 'kakeibo' } },

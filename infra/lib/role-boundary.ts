@@ -17,8 +17,9 @@ import { SHARED_BUCKET_WRITE_ACTIONS } from './deploy-guardrail';
  * 1 で何を書き込まれても境界の外には出られない。
  *
  * 中身は「全部許して、昇格と他のアプリに届くものだけ抜く」形。境界は許可を与えないので、
- * 天井を `*` にしてもアプリの権限は増えない。アプリのロールはどれも IAM・STS を使わず、
- * 他のアプリのリソースにも、cdkd の状態や資産置き場にも触れない。
+ * 天井を `*` にしてもアプリの権限は増えない。アプリのロールはどれも IAM を使わず、STS は
+ * Claude API の ID 連携に使う GetWebIdentityToken だけを呼ぶ。他のアプリのリソースにも、
+ * cdkd の状態や資産置き場にも触れない。
  * 他のアプリのリソースを使う処理を足すと、デプロイは通っても実行時に AccessDenied になる。
  */
 export const ROLE_BOUNDARY_NAME = 'sakekasu-kakeibo-role-boundary';
@@ -56,7 +57,11 @@ export function createRoleBoundary(scope: Construct, id: string): iam.ManagedPol
         effect: iam.Effect.DENY,
         actions: [
           'iam:*',
-          'sts:*',
+          // sts:* にはしない。Claude API の ID 連携（api-stack.ts）が sts:GetWebIdentityToken を呼ぶ。
+          // 取れるのは外部のサービス向けの ID トークンで、AWS の権限は増えない。宛先と寿命はロール側の条件で絞ってある
+          'sts:AssumeRole*',
+          'sts:GetFederationToken',
+          'sts:GetSessionToken',
           'organizations:*',
           'account:*',
           'sso:*',
