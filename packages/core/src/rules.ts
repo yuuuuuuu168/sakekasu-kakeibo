@@ -89,7 +89,8 @@ export function learnRule(rawMerchant: string, categoryId: string): CategoryRule
 export function learnItemRule(name: string, categoryId: string): CategoryRule {
   const pattern = normalizeItemName(name);
   return {
-    id: `learned-item-${pattern.slice(0, 40)}`,
+    // 品目名を切り詰めない。通販の商品名は 40 文字を超えることが多く、切ると先頭が同じ別の品目と ID が重なる
+    id: `learned-item-${pattern}`,
     pattern,
     matchType: 'equals',
     categoryId,
@@ -125,18 +126,39 @@ export function applyItemRules(
 
 /**
  * 保存するレシートの品目のうち、人がカテゴリを選び直したものからルールを作る。
- * 未分類を選んだものは覚えない（「分からない」を覚えても次に役立たない）。
- * 同じ名前が 2 回あれば後の方が勝つ。
+ * 同じ名前が 2 回あれば後の方が勝つ。次のものは覚えない。
+ *
+ * - 未分類を選んだもの（「分からない」を覚えても次に役立たない）
+ * - 金額がマイナスの行（値引き・クーポン・ポイント利用）。「アプリポイント利用」のような行は
+ *   どの店のレシートにも出るので、品目名だけで覚えると別の店の行まで同じカテゴリにしてしまう。
+ *   値引きは内訳を作るときに他の品目へ按分されるので、カテゴリを覚えても集計には効かない
  */
-export function learnItemRules(items: { name: string; categoryId?: string; categoryEdited?: boolean }[]): CategoryRule[] {
+export function learnItemRules(
+  items: { name: string; amount?: number; categoryId?: string; categoryEdited?: boolean }[],
+): CategoryRule[] {
   const byId = new Map<string, CategoryRule>();
   for (const item of items) {
     if (!item.categoryEdited || !item.categoryId || item.categoryId === UNCATEGORIZED_ID) continue;
+    if (item.amount !== undefined && item.amount < 0) continue;
     if (normalizeItemName(item.name) === '') continue;
     const rule = learnItemRule(item.name, item.categoryId);
     byId.set(rule.id, rule);
   }
   return [...byId.values()];
+}
+
+/**
+ * 覚えた品目のルールを、保存済みのルールに足す。同じ品目名の古いルールは消してから足す。
+ * ID ではなく品目名で突き合わせるのは、ID の作り方を変える前（品目名を 40 文字で切っていた頃）の
+ * ルールも置き換えるため。ID で突き合わせると、古い方が残って同じ品目のルールが 2 つになる。
+ */
+export function mergeItemRules(saved: CategoryRule[], learned: CategoryRule[]): CategoryRule[] {
+  const patterns = new Set(learned.map((rule) => normalizeItemName(rule.pattern)));
+  const ids = new Set(learned.map((rule) => rule.id));
+  const kept = saved.filter(
+    (rule) => !ids.has(rule.id) && !(rule.target === 'item' && patterns.has(normalizeItemName(rule.pattern))),
+  );
+  return [...kept, ...learned];
 }
 
 type Seed = [pattern: string, categoryId: string, ambiguous?: true];
