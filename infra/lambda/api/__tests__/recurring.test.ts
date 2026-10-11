@@ -73,6 +73,7 @@ const PAYMENT = {
 beforeAll(async () => {
   process.env.TABLE_NAME = 'test-table';
   process.env.RECEIPT_BUCKET = 'test-bucket';
+  process.env.OCR_FUNCTION_NAME = 'test-ocr';
   handler = (await import('../index')).handler;
 });
 

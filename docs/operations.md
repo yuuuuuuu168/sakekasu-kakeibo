@@ -945,6 +945,7 @@ unset pw
 | `sakekasu-kakeibo-<env>-monthly-report-errors` | api | 月次レポートの Lambda の Errors |
 | `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report}-throttles` | api | 上の 4 本の Throttles（4 個） |
 | `sakekasu-kakeibo-<env>-api-5xx` | api | HTTP API の `5xx`（次元 `ApiId`） |
+| `sakekasu-kakeibo-<env>-ocr-receipt-failures` | api | OCR のログの `[ocr] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
@@ -952,9 +953,14 @@ unset pw
 
 読むときの注意。
 
-- api / ocr-receipt / classify は例外を握って 500 / 502 を返す。処理の失敗は Lambda の Errors ではなく
+- api / classify は例外を握って 500 / 502 を返す。処理の失敗は Lambda の Errors ではなく
   `api-5xx` に出る。Errors が鳴るのは、タイムアウト・メモリ不足・初期化の失敗など関数そのものが落ちたとき
-- `api-5xx` は、OCR が読めない画像を受けたとき（502）と、カテゴリ判定の鍵が未設定のとき（502）にも鳴る
+- `api-5xx` は、カテゴリ判定の鍵が未設定のとき（502）にも鳴る
+- レシートの読み取りは非同期で、OCR の関数は API Gateway につながっていない（api の関数がジョブを積んで
+  非同期で呼ぶ）。失敗はジョブに書いて正常に終えるので、`api-5xx` にも `ocr-receipt-errors` にも出ず、
+  `ocr-receipt-failures` が見る。読めない画像（ピンぼけなど）でも鳴る。`ocr-receipt-errors` が鳴るのは、
+  タイムアウト（120 秒）など関数そのものが落ちたときで、そのジョブは画面に「時間内に読み取れませんでした」と出る。
+  ログの文言（`infra/lambda/ocr-receipt/index.ts`）を変えるときは、`api-stack.ts` のフィルタも合わせる
 - 月次レポートは利用者ごとの失敗を握って正常終了するので、`monthly-report-errors` では拾えない。
   `monthly-report-failures` がその分を見る。ログの文言（`infra/lambda/monthly-report/index.ts`）を変えるときは、
   `api-stack.ts` のフィルタも合わせる
@@ -996,10 +1002,10 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |
-| CloudWatch アラーム | 月 1.3 ドル。13 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| CloudWatch アラーム | 月 1.4 ドル。14 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
 
-既存のゾーンを使うなら、アラームの 1.3 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
-Bedrock の OCR がその次で、同時実行を 3 に絞ってあるので暴走しても天井がある。
+既存のゾーンを使うなら、アラームの 1.4 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
+Bedrock の OCR がその次で、同時実行を 3 に、受け付けを毎秒 1 回（瞬間 5 回）に絞ってあるので暴走しても天井がある。
 カテゴリ判定は桁が 2 つ小さく、金額として数える意味がない。
 
 ## 消すとき

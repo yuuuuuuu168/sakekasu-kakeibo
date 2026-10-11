@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { ApiStack, CLASSIFY_BURST_LIMIT, CLASSIFY_RATE_LIMIT } from '../lib/api-stack';
+import {
+  ApiStack,
+  CLASSIFY_BURST_LIMIT,
+  CLASSIFY_RATE_LIMIT,
+  OCR_START_BURST_LIMIT,
+  OCR_START_RATE_LIMIT,
+  OCR_TIMEOUT_SECONDS,
+} from '../lib/api-stack';
+import { OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
@@ -68,6 +76,13 @@ describe('DataStack', () => {
       ]),
     });
   });
+
+  // 読み取りのジョブの行（OCR#）を 1 日で消させる。明細やレシートの行はこの属性を持たない
+  it('TTL を expiresAt で有効にする', () => {
+    Template.fromStack(stacks().data).hasResourceProperties('AWS::DynamoDB::GlobalTable', {
+      TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
+    });
+  });
 });
 
 describe('ApiStack', () => {
@@ -122,6 +137,49 @@ describe('ApiStack', () => {
       FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
       ReservedConcurrentExecutions: 3,
     });
+  });
+
+  /*
+   * 読み取りは API Gateway の 30 秒を超えうるので、api の関数がジョブを積んで OCR の関数を
+   * 非同期で呼ぶ。OCR の関数を API Gateway に直接つながないこと、非同期の再試行で同じ画像を
+   * 読み直さないこと（モデルの課金が重なる）をここで固定する。
+   */
+  it('OCR の関数は API Gateway につながず、api の関数から再試行なしの非同期で呼ぶ', () => {
+    const template = Template.fromStack(stacks().api);
+    const integrations = Object.values(template.findResources('AWS::ApiGatewayV2::Integration'));
+    expect(JSON.stringify(integrations)).not.toContain('OcrFunction');
+
+    template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      FunctionName: Match.objectLike({ Ref: Match.stringLikeRegexp('^OcrFunction') }),
+      MaximumRetryAttempts: 0,
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-ocr-receipt',
+      Timeout: OCR_TIMEOUT_SECONDS,
+    });
+    expect(OCR_TIMEOUT_SECONDS * 1000).toBeLessThan(OCR_JOB_STALE_MS);
+
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const api = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('ApiFunctionServiceRole'));
+    const invoke = (api!.Properties.PolicyDocument.Statement as Record<string, unknown>[]).find((statement) =>
+      JSON.stringify(statement.Action).includes('lambda:InvokeFunction'),
+    );
+    expect(JSON.stringify(invoke!.Resource)).toContain('OcrFunction');
+  });
+
+  /*
+   * OCR の関数がテーブルに触れるのは、ジョブの行（OCR#）の更新だけ。明細のパーティション
+   * （USER#）は読めも書けもしない。
+   */
+  it('OCR の関数のテーブルの権限はジョブの行の更新だけ', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const ocr = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('OcrFunctionServiceRole'));
+    const statements = ocr!.Properties.PolicyDocument.Statement as Record<string, unknown>[];
+    const dynamo = statements.filter((statement) => JSON.stringify(statement.Action).includes('dynamodb:'));
+    expect(dynamo).toHaveLength(1);
+    expect(dynamo[0].Action).toBe('dynamodb:UpdateItem');
+    expect(dynamo[0].Condition).toEqual({ 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['OCR#*'] } });
   });
 
   it('カテゴリ判定の同時実行にも天井を置く', () => {
@@ -193,6 +251,22 @@ describe('ApiStack', () => {
     });
     const routes = template.findResources('AWS::ApiGatewayV2::Route');
     expect(Object.values(routes).map((route) => route.Properties.RouteKey)).toContain('POST /classify');
+  });
+
+  /*
+   * 読み取りは非同期になり、OCR の同時実行の天井を超えた呼び出しも順番待ちで全部読まれる。
+   * 受け付けの段で絞る。/{proxy+} でも届く経路だが、routeSettings は RouteKey が一致する
+   * ルートにしか効かないので、明示のルートがあることも見る。
+   */
+  it('読み取りの受け付けに流量の上限を掛ける', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      RouteSettings: Match.objectLike({
+        'POST /receipts/analyze': { ThrottlingRateLimit: OCR_START_RATE_LIMIT, ThrottlingBurstLimit: OCR_START_BURST_LIMIT },
+      }),
+    });
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    expect(Object.values(routes).map((route) => route.Properties.RouteKey)).toContain('POST /receipts/analyze');
   });
 
   it('毎月 1 日にレポートを作る', () => {

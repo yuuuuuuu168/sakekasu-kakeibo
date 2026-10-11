@@ -12,7 +12,7 @@ API Gateway (HTTP API) ── Cognito JWT オーソライザ（共通ユーザ�
 Lambda (api)  ──▶ DynamoDB (シングルテーブル)
   │
   ├─▶ S3 (レシート画像)  … 署名付き URL を返すだけ。本体は通さない
-  ├─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)      … 画像から品目を起こす
+  ├─▶ Lambda (ocr-receipt) ──▶ Bedrock (Claude)      … 画像から品目を起こす（非同期。結果はジョブの行に書く）
   └─▶ Lambda (classify)   ──▶ TypeSafe (Jev)         … 品目名・店舗名のカテゴリを決める
 
 EventBridge (毎月1日 09:00 JST) ──▶ Lambda (monthly-report) ──▶ DynamoDB
@@ -109,10 +109,28 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 | `PUT /budgets/{month}` | その月の上限を保存する |
 | `PUT /mappings/{sourceId}` | CSV の列の対応を保存する |
 | `POST /uploads` | レシート画像の署名付き URL を返す |
-| `POST /receipts/analyze` | 画像を OCR してレシートの下書きを返す（別の Lambda） |
+| `POST /receipts/analyze` | 画像の読み取りを受け付けて `jobId` を返す（202）。読み取りは別の Lambda が非同期で行う |
+| `GET /receipts/analyze/{jobId}` | 読み取りの結果を返す。`pending` / `done`（下書き付き）/ `failed`（理由付き） |
 | `POST /classify` | 品目名や店舗名のカテゴリを判定して返す（別の Lambda） |
 | `PUT /receipts/{id}` `DELETE /receipts/{id}` | レシートを保存・削除する |
 | `GET /reports/{month}` | 作っておいた月次レポートを返す |
+
+レシートの読み取りを非同期にしているのは、API Gateway（HTTP API）の統合タイムアウトが 30 秒で、
+引き上げられないため。1 枚の読み取りは 2〜13 秒（2026-10 の実測）だが、長いレシートを複数枚で読む、
+モデルが失敗して別のモデルで読み直す、といった場合は 30 秒を超える。流れは次のとおり。
+
+1. 画面が `POST /receipts/analyze` を呼ぶ（1 枚なら `key`、分けて撮った長いレシートなら `keys` に上から順に最大 4 枚）。
+   api の Lambda は画像のキーが本人のものか・枚数が上限内かを確かめ、
+   ジョブの行（`pk = OCR#{sub}`、`sk = JOB#{jobId}`、`status = pending`）を作って、
+   ocr-receipt を非同期（`InvocationType: Event`）で呼び、すぐ `jobId` を返す
+2. ocr-receipt は画像を読み、結果をジョブの行に書く（`done` と下書き、または `failed` と理由）。
+   失敗は握って正常に終える。非同期呼び出しの再試行は 0 にしてあり、同じ画像を読み直してモデルの課金を重ねない
+3. 画面は 2 秒おきに `GET /receipts/analyze/{jobId}` を聞き、`done` か `failed` で止まる（最大 3 分）。
+   ocr-receipt のタイムアウト（120 秒）を過ぎても `pending` のジョブは、api が `failed` として返す
+
+ジョブの行を明細と別のパーティションに置くのは、スナップショット（`USER#{sub}` の Query）に混ぜないため。
+行は `expiresAt` の TTL で 1 日後に消える。ocr-receipt の権限も、この接頭辞の行の `UpdateItem` だけに絞っている。
+形の定義は `infra/lambda/shared/ocr-job.ts` にある。
 
 書き込みは上書き（upsert）にしてある。同じ明細を二重に入れないための判定は取り込み画面側
 （`mergeImported`）が済ませているので、サーバ側で条件付き書き込みをしていない。

@@ -1,14 +1,6 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MAX_RECEIPT_PHOTOS } from '@kakeibo/core';
-
-/** モジュールの読み込み時に環境変数を見るので、先に置いてから動的に読み込む */
-let parseKeys: typeof import('../index')['parseKeys'];
-
-beforeAll(async () => {
-  process.env.RECEIPT_BUCKET = 'test-bucket';
-  process.env.BEDROCK_MODEL_ID = 'test-model';
-  parseKeys = (await import('../index')).parseKeys;
-});
+import { parseKeys } from '../ocr-job';
 
 const mine = (name: string) => `receipts/user-1/2026-10-10/${name}.jpg`;
 

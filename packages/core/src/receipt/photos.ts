@@ -3,7 +3,8 @@
  * 上から分けて撮った写真をまとめて OCR に渡す。
  *
  * 画面（選べる枚数）と OCR の Lambda（受け付ける枚数）の両方がこれを読む。
- * 増やすと 1 回の Bedrock の呼び出しが重くなり、API Gateway の 30 秒に近づく。
+ * 増やすと 1 回のモデルの呼び出しが重くなる。読み取りは非同期なので API Gateway の 30 秒には縛られないが、
+ * OCR の Lambda のタイムアウト（infra/lib/api-stack.ts の OCR_TIMEOUT_SECONDS）には収めること。
  */
 export const MAX_RECEIPT_PHOTOS = 4;
 
