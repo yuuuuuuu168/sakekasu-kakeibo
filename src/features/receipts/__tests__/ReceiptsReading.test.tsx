@@ -5,19 +5,23 @@ import { StoreProvider } from '../../../api/store';
 import { MAX_RECEIPT_PHOTOS } from '@kakeibo/core';
 import { ReceiptsPage } from '../ReceiptsPage';
 
-type Upload = { progress?: (ratio: number) => void; finish: () => void };
+type Upload = { progress?: (ratio: number) => void; finish: () => void; file?: Blob };
 /** progress と finish は最後に始まった送信のもの。all は始まった順の全部 */
 const upload = vi.hoisted(() => ({ progress: undefined as Upload['progress'], finish: () => {}, all: [] as Upload[] }));
 
 vi.mock('../../../api/remote', async (original) => ({
   ...(await original<typeof import('../../../api/remote')>()),
-  uploadToS3: (_target: unknown, _file: Blob, onProgress?: (ratio: number) => void) =>
+  uploadToS3: (_target: unknown, file: Blob, onProgress?: (ratio: number) => void) =>
     new Promise<void>((resolve) => {
       upload.progress = onProgress;
       upload.finish = resolve;
-      upload.all.push({ progress: onProgress, finish: resolve });
+      upload.all.push({ progress: onProgress, finish: resolve, file });
     }),
 }));
+
+/** 送る前の縮小。既定は元のファイルのまま（jsdom に canvas が無いときと同じ）。テストごとに差し替える */
+const shrink = vi.hoisted(() => ({ impl: async (file: File): Promise<Blob> => file }));
+vi.mock('../shrinkPhoto', () => ({ shrinkPhoto: (file: File) => shrink.impl(file) }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -45,6 +49,7 @@ const photo = (name: string, size: number) => new File(['x'.repeat(size)], name,
 describe('レシートを読んでいるあいだ', () => {
   beforeEach(() => {
     upload.all = [];
+    shrink.impl = async (file) => file;
     // jsdom は object URL も scrollTo も持たない
     URL.createObjectURL = vi.fn(() => 'blob:receipt');
     URL.revokeObjectURL = vi.fn();
@@ -181,5 +186,36 @@ describe('レシートを読んでいるあいだ', () => {
 
     expect(await screen.findByText(new RegExp(`${MAX_RECEIPT_PHOTOS} 枚までです`))).toBeInTheDocument();
     expect(api.requestUpload).not.toHaveBeenCalled();
+  });
+
+  it('縮めた JPEG を送る（元の写真ではなく）', async () => {
+    const shrunk = new Blob(['small'], { type: 'image/jpeg' });
+    shrink.impl = async () => shrunk;
+    vi.spyOn(api, 'analyzeReceipt').mockReturnValue(new Promise(() => {}));
+    const { container } = render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    pickFromLibrary(container, [new File(['x'.repeat(5000)], 'receipt.png', { type: 'image/png' })]);
+
+    await screen.findByText('0%');
+    expect(api.requestUpload).toHaveBeenCalledWith('image/jpeg');
+    expect(upload.all[0]!.file).toBe(shrunk);
+  });
+
+  it('読めない形式でも、縮めて JPEG にできれば送る（カメラの HEIC など）', async () => {
+    shrink.impl = async () => new Blob(['small'], { type: 'image/jpeg' });
+    vi.spyOn(api, 'analyzeReceipt').mockReturnValue(new Promise(() => {}));
+    const { container } = render(
+      <StoreProvider>
+        <ReceiptsPage />
+      </StoreProvider>,
+    );
+    pickFromLibrary(container, [new File(['heic'], 'IMG_0001.heic', { type: 'image/heic' })]);
+
+    await screen.findByText('0%');
+    expect(api.requestUpload).toHaveBeenCalledWith('image/jpeg');
+    expect(screen.queryByText(/この形式の画像は読めません/)).not.toBeInTheDocument();
   });
 });

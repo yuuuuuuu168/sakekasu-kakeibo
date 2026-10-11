@@ -40,6 +40,7 @@ import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
 import { judgeReceiptItems } from '../../api/classify';
 import { uploadToS3 } from '../../api/remote';
+import { shrinkPhoto } from './shrinkPhoto';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { config } from '../../config';
@@ -180,20 +181,23 @@ export function ReceiptsPage() {
       setMessage(`1 枚のレシートとして読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです。選び直してください。`);
       return;
     }
-    if (files.some((file) => file.type && !READABLE_IMAGE_TYPES.includes(file.type))) {
+    setBusy(true);
+    // 送る前にモデルが読める大きさまで縮め、JPEG に直す（shrinkPhoto）。縮められなかった写真は元のまま
+    const photos = await Promise.all(files.map((file) => shrinkPhoto(file)));
+    if (photos.some((photo) => photo.type && !READABLE_IMAGE_TYPES.includes(photo.type))) {
       setMessage('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
+      setBusy(false);
       return;
     }
-    setBusy(true);
     const previewUrls = files.map((file) => URL.createObjectURL(file));
     const enter = (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrls });
     enter('upload');
     // 送った割合は全部の写真のバイト数で均す。1 枚目だけ 100% になって止まって見えないように
     const sent = files.map(() => 0);
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    const totalBytes = photos.reduce((sum, photo) => sum + photo.size, 0);
     const progress = () =>
       totalBytes > 0
-        ? files.reduce((sum, file, index) => sum + file.size * sent[index], 0) / totalBytes
+        ? photos.reduce((sum, photo, index) => sum + photo.size * sent[index], 0) / totalBytes
         : sent.reduce((sum, ratio) => sum + ratio, 0) / files.length;
     // 届いた写真のキー（選んだ順）。途中で落ちても、届いた分はレシートに付けて残す
     const uploaded: (string | undefined)[] = files.map(() => undefined);
@@ -201,9 +205,9 @@ export function ReceiptsPage() {
     try {
       // 1 枚が落ちても、他の写真は送り終えるまで待つ（Promise.all だと届く前に諦めてしまう）
       const results = await Promise.allSettled(
-        files.map(async (file, index) => {
-          const target = await api.requestUpload(file.type || 'image/jpeg');
-          await uploadToS3(target, file, (ratio) => {
+        photos.map(async (photo, index) => {
+          const target = await api.requestUpload(photo.type || 'image/jpeg');
+          await uploadToS3(target, photo, (ratio) => {
             sent[index] = ratio;
             setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: progress() } : now));
           });
@@ -436,7 +440,7 @@ export function ReceiptsPage() {
         <p className="mt-2 text-xs text-muted">
           {config.mode === 'local'
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
-            : `写真を撮るか、カメラロールから選ぶと Bedrock が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。`}
+            : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。`}
         </p>
         {reading && <ReadingProgress reading={reading} />}
         {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}

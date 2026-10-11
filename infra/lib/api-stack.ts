@@ -12,7 +12,11 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { OCR_JOB_PARTITION_PREFIX, OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
-import { IDENTITY_TOKEN_AUDIENCE, IDENTITY_TOKEN_SECONDS } from '../lambda/ocr-receipt/llm-constants';
+import {
+  DEFAULT_ANTHROPIC_MODEL_OCR,
+  IDENTITY_TOKEN_AUDIENCE,
+  IDENTITY_TOKEN_SECONDS,
+} from '../lambda/ocr-receipt/llm-constants';
 import type { AnthropicFederation } from './anthropic-federation';
 import { NodejsFunction, type BundlingOptions } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
@@ -49,11 +53,11 @@ const BEDROCK_FOUNDATION_MODEL_ID = 'anthropic.claude-sonnet-4-6';
 const BEDROCK_INFERENCE_REGIONS = ['ap-northeast-1', 'ap-northeast-3'];
 
 /**
- * OCR の既定の呼び先（Claude API）のモデル。精度が足りなければ claude-opus-5-5 に上げる。
+ * OCR の既定の呼び先は Claude API（モデルは llm-constants.ts の DEFAULT_ANTHROPIC_MODEL_OCR）。
  * Claude API は API キーではなく ID 連携で入るので、IAM で絞るものはモデルではなく
  * STS の GetWebIdentityToken（宛先と寿命）になる。Bedrock はクレジット切れや障害のときの控え。
  */
-const ANTHROPIC_MODEL_OCR = 'claude-sonnet-5-5';
+const ANTHROPIC_MODEL_OCR = DEFAULT_ANTHROPIC_MODEL_OCR;
 
 /**
  * カテゴリ判定に使う TypeSafe のモデル。Bedrock には無いモデルなので、
