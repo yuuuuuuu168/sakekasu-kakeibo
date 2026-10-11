@@ -154,8 +154,8 @@ export function CategoriesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-semibold text-ink">カテゴリと上限</h2>
+      {/* 見出し「カテゴリと上限」は設定画面の開閉する節の側にある */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={() => void copyPreviousLimits()}>
             前月の上限をコピー
