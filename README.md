@@ -26,7 +26,12 @@
 | 店舗名の正規化 | 半角カナ・全角英数・店舗番号・Amazon の注文 ID を落として名寄せする |
 | 自動分類 | 国内でよく出る店を 160 件ほど初期搭載。カテゴリを直すと「この店は今後もこれ」を覚える |
 | 内訳待ち | コンビニ・ドラッグストア・スーパー・Amazon・居酒屋など、1 回の支払いに複数カテゴリが混ざる店に印を付ける。確定するまで画面に「この数字は甘い」と出続ける |
-| レシート OCR | Bedrock（Claude Sonnet 4.6）が店名・日付・合計・品目を読む。品目ごとのカテゴリも推定し、外したぶんは品目名の表で拾い直す |
+| レシート OCR | Bedrock（Claude Sonnet 4.6）が店名・日付・合計・品目を読む。品目のカテゴリはここでは品目名の表で仮に付けるだけ |
+| カテゴリ判定 | 品目名と店舗名を TypeSafe の Jev に聞き、大カテゴリ → 小カテゴリの 2 段で決める。確信度で「そのまま入れる / 人に見せる / 未分類に落とす」を分け、人が直した品目は覚える。判定が落ちても品目名の表とルールで先へ進む |
+| 大カテゴリと小カテゴリ | 2 段まで。上限と月次レポートは大カテゴリの単位で数える |
+| 値引き・チャージ | レシートの値引きの行は「値引き」カテゴリに入れる。PayPay や Suica へのチャージは振替として支出から外し、外した額は別に出す |
+| ドルのレシート | レシートのレートで円に直し、円の請求額から ±6% 以内の明細を候補にする |
+| 重複の検知 | 現金で保存したレシートと後から取り込んだカード明細など、取り込み元の違う同じ支払いを拾う。片方を消すか、重複ではないと印を付ける |
 | 明細との自動マッチ | 合計金額の一致を必須に、日付の近さと店名の近さでスコアを付ける。迷いの無い候補が 1 件だけなら自動で紐付け、それ以外は候補を並べる |
 | ワンタップ分割 | レシートが無いとき用。1,200 円を 食費 800 / 日用品 400 に割る。均等割りもある |
 | 明細の無い支払いの登録 | 対応する明細が無いレシートは、支払い方法（現金・PayPay・クレジットカード・Suica・不明）を選んでそのまま支出として登録できる。支払いの印字から読めた支払い方法が初期値になる |
@@ -42,6 +47,8 @@
 | カテゴリの改名と統合 | 統合すると過去の明細の内訳も付け替わる。最初の数か月で作り直す前提 |
 | 月末の叱りレポート | 毎月 1 日に前月分を作る。超過率で 5 段階（天晴れ / よし / むむ / 喝 / 激怒） |
 | 店舗別の集計 | 「何に散財しているか」はカテゴリより店で見たほうが早いことがある |
+| 定期支払い | サブスクなどを登録しておくと、着地見込みに入れ、取り込んだ明細と突き合わせる |
+| 身に覚えの確かめ | レシートにも定期支払いにも突き合わないカード・PayPay の支払いを、月次レポートの「これ大丈夫？」に並べる |
 
 ### アカウント・基盤
 
@@ -50,9 +57,10 @@
 | 共通ログイン | 4 アプリ共通の Cognito ユーザープールのマネージドログイン（`auth.sakekasu-builder.com`）へリダイレクトして入る（認可コード + PKCE）。セルフサインアップなし、MFA（認証アプリの TOTP）は必須 |
 | データ保護 | DynamoDB の PITR、S3 の公開禁止と暗号化、4 つの主要リソースは `RemovalPolicy.RETAIN` |
 | レシート画像の自動削除 | 90 日。OCR で品目を取り出した後の画像は残す意味が薄い |
-| 配信 | S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中に置いた |
+| 配信 | S3 + CloudFront（OAC）。`kakeibo.sakekasu-builder.com` で配信し、セキュリティヘッダも CDK の中に置いた |
 | ローカルモード | AWS が無くても `npm run dev` で通しで動く。データは localStorage |
 | PR ごとのテスト・lint・型検査 | GitHub Actions がフロントとインフラの 2 系統を並べて走らせる |
+| アラーム | Lambda・API・DynamoDB・月次レポートの失敗を、共通基盤の SNS 経由で Slack に送る |
 
 ### これから
 
@@ -97,7 +105,7 @@
 
 ### 配信を最初から IaC に載せた
 
-sakekasu-builder は Amplify Hosting で配信しているが、あちらの [docs/amplify-exit.md](https://github.com/yuuuuuuu168/sakekasu-builder/blob/main/docs/amplify-exit.md) が「配信設定だけが IaC の外にある」ことを唯一の移行動機として挙げている。新しく作るものを同じ状態から始める理由が無いので、S3 + CloudFront を最初から CDK に置いた。セキュリティヘッダ 7 種も `ResponseHeadersPolicy` に入れてある。
+sakekasu-builder は Amplify Hosting で配信していた頃、[docs/amplify-exit.md](https://github.com/yuuuuuuu168/sakekasu-builder/blob/main/docs/amplify-exit.md) で「配信設定だけが IaC の外にある」ことを移行の動機に挙げていた（あちらも後に S3 + CloudFront へ移った）。新しく作るものを同じ状態から始める理由が無いので、S3 + CloudFront を最初から CDK に置いた。セキュリティヘッダ 7 種も `ResponseHeadersPolicy` に入れてある。
 
 配信物は GitHub Actions から `aws s3 sync` で置く。CDK の `BucketDeployment` は使わない。`Custom::CDKBucketDeployment` というカスタムリソースが増え、あちらが [#129](https://github.com/yuuuuuuu168/sakekasu-builder-archive/issues/129) で 6 個消したのと同じ性質のものを持ち込むことになる。ロググループを `logRetention` で作らず明示しているのも同じ理由。
 
@@ -107,15 +115,33 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 
 `bedrock:InvokeModel` の認可は、クロスリージョン推論プロファイル本体と、振り先の foundation-model の**両方**を見る。プロファイルの ARN だけを許可すると、振り先に当たったリクエストだけが `AccessDeniedException` で落ちる。毎回落ちないので気づきにくい。モデルを差し替えるときは `aws bedrock list-inference-profiles` で振り先リージョンを取り直すこと。詳細は [infra/lib/api-stack.ts](infra/lib/api-stack.ts) のコメントにある。
 
+## 構成
+
+![構成図](docs/architecture.drawio.svg)
+
+[docs/architecture.drawio.svg](docs/architecture.drawio.svg) は draw.io（VS Code の Draw.io 拡張でも可）でそのまま開いて編集できる。
+アカウント ID は図に書かない。スタックとデータモデルの詳細は [docs/design.md](docs/design.md) にある。
+
+| スタック | リージョン | デプロイ | 中身 |
+|---|---|---|---|
+| `sakekasu-kakeibo-{env}-dns` | ap-northeast-1 | cdkd | `kakeibo.sakekasu-builder.com` のゾーン（管理アカウントの親ゾーンから委任） |
+| `sakekasu-kakeibo-{env}-data` | ap-northeast-1 | cdkd | DynamoDB、レシート画像の S3 |
+| `sakekasu-kakeibo-{env}-api` | ap-northeast-1 | cdkd | HTTP API、Lambda 4 本（api / ocr-receipt / classify / monthly-report）、EventBridge、Secrets Manager、アラーム |
+| `sakekasu-kakeibo-{env}-site` | ap-northeast-1 | cdkd | 画面の S3、CloudFront、Route 53 レコード。証明書は us-east-1 で発行済みのものを `certificateId` で参照する |
+| `sakekasu-kakeibo-cdkd-deploy` | ap-northeast-1 | CloudFormation（deploy.yml） | cdkd が使うロール |
+| `sakekasu-kakeibo-github-oidc` | ap-northeast-1 | CloudFormation（手動） | GitHub Actions が引き受けるロール |
+
 ## 技術スタック
 
 - React 19 + TypeScript 5.8
 - Vite 7
 - Tailwind CSS v4（`@theme` ディレクティブ、`tailwind.config.js` 不使用）
-- AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
+- AWS CDK + [cdkd](https://github.com/go-to-k/cdkd)（API Gateway HTTP API + Lambda + DynamoDB）
 - Amazon Cognito（4 アプリ共通のユーザープールとマネージドログイン）
 - AWS S3 + CloudFront（フロントの配信、レシート画像の保管）
 - Amazon Bedrock（Claude Sonnet 4.6）※レシートの OCR
+- TypeSafe Jev ※品目名と店舗名のカテゴリ判定。API キーは Secrets Manager
+- CloudWatch アラーム → 共通基盤の SNS → Slack
 - EventBridge（毎月 1 日のレポート生成）
 - pdfjs-dist（PDF のテキスト抽出。動的 import で初回表示に載せない）
 - Vitest + Testing Library + fast-check（コア・画面・インフラ）
@@ -130,6 +156,12 @@ packages/core/     # AWS に依存しない純粋関数。画面と Lambda の�
     statement/     # CSV の解析・文字コード判定・列の推定・明細への正規化
     receipt/       # 品目のカテゴリ推定・内訳の分割・明細とのマッチ
     rules.ts       # 店舗名からの自動分類と初期搭載ルール
+    classify.ts    # カテゴリ判定（Jev）の材料づくりと採否
+    recurring.ts   # 定期支払い
+    duplicate.ts   # 重複の検知
+    unverified.ts  # 身に覚えの確かめ
+    transfer.ts    # チャージ（振替）の扱い
+    currency.ts    # ドルのレシートの換算
     merchant.ts    # 店舗名の正規化と近さの計算
     budget.ts      # 月次の集計と着地見込み
     report.ts      # 月次レポートと叱りの生成
@@ -142,14 +174,17 @@ src/
     receipts/      # レシートの読み取りと明細への紐付け
     categories/    # カテゴリと上限
     report/        # 月末の叱りレポート
+    recurring/     # 定期支払い
+    settings/      # 設定
   api/             # API クライアント（remote / local の 2 実装）とストア
   components/ui/   # Card / Button / Meter / StatTile / Dialog など
 infra/
-  lib/             # CDK スタック（auth / data / api / site / cert）
-  lambda/          # Lambda 関数（api, ocr-receipt, monthly-report）
+  lib/             # CDK スタック（dns / data / api / site / cert / github-oidc / cdkd-deploy）とアラーム・ガードレール
+  lambda/          # Lambda 関数（api, ocr-receipt, classify, monthly-report）
 docs/              # 要件・設計・運用
 .kiro/steering/    # プロジェクトの前提（Claude Code が常に読む）
-.github/           # GitHub Actions（test / deploy）
+.github/           # GitHub Actions（test / deploy / claude-review / claude-hooks）
+scripts/           # Claude Code のフックと AWS 確認用のスクリプト
 ```
 
 `packages/core` はビルドしない。TypeScript のソースをそのまま公開し、Vite と esbuild（NodejsFunction）の双方から読ませる。月次レポートの集計が画面と Lambda で食い違わないようにするため、ここを 2 回書かない。
@@ -160,7 +195,9 @@ docs/              # 要件・設計・運用
 |------------|------|
 | [docs/requirements.md](docs/requirements.md) | 何を解きたいか、機能要件、非機能要件、やらないこと |
 | [docs/design.md](docs/design.md) | 構成、スタック、データモデル、API、分類とマッチの決め方、叱りの段階 |
-| [docs/operations.md](docs/operations.md) | 手元での動かし方、デプロイ、証明書とドメインの 3 通り、費用の目安 |
+| [docs/operations.md](docs/operations.md) | 手元での動かし方、デプロイ、証明書とドメイン、費用の目安 |
+| [docs/security-requirements.md](docs/security-requirements.md) | セキュリティ要件（Claude のレビューの観点） |
+| [docs/claude-code-web.md](docs/claude-code-web.md) | Claude Code のクラウド環境（フック・MCP・AWS の読み取り専用ログイン） |
 | [CLAUDE.md](CLAUDE.md) | 開発の進め方（ブランチ運用・AWS 確認の認証フロー） |
 
 ## セットアップ
@@ -187,21 +224,15 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 
 ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。依存の取得とテストも認証情報を入れる前に済ませている。詳しい理由は [docs/operations.md](docs/operations.md) にある。
 
-手元から打つのは、最初の 1 回だけ。
+cdkd が使うロール（`sakekasu-kakeibo-cdkd-deploy`）は deploy ワークフローが CloudFormation で入れる。
+手元から打つのは、CDK のブートストラップと、Actions が引き受けるロールの github-oidc スタックだけ。
+Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。
 
 ```bash
 npm ci && cd infra && npm ci
 npx cdk bootstrap  # このアカウントで CDK 初回のときだけ
 npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ```
-
-Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。cdkd が使うロール（`sakekasu-kakeibo-cdkd-deploy`）と、CloudFormation から cdkd への移行は、deploy ワークフローが自分で済ませる。
-
-スタックは 4 つ。`-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。ログインのユーザープールは共通基盤（sakekasu-integrated_environment）の持ち物で、このリポジトリでは作らない。
-
-ドメインはまだ付けていない。CloudFront の既定ドメインで配信している。`sakekasu-builder.com` の委任先ゾーンがデプロイ先のアカウントに無く、そのままでは証明書の DNS 検証が通らないため。経緯と、付けるときの手順（サブドメインの委任）は [docs/operations.md](docs/operations.md) にある。
-
-2 回目以降は `.github/workflows/deploy.yml` を手で起動する。使う前にリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に、GitHub OIDC で引き受けられるロールの ARN を入れておく。sakekasu-builder にも同じ仕組みのスタックがあるが、あちらのロールは信頼ポリシーが `yuuuuuuu168/sakekasu-builder` に絞られているので、このリポジトリからは引き受けられない。
 
 ## テスト
 
@@ -227,3 +258,9 @@ PR の差分は Claude にもレビューさせる（`.github/workflows/claude-r
 検証済みの既定パレットをそのまま使っている。上限の達成状況は status の 4 色（good / warning / serious / critical）で表し、色だけで意味を持たせないようアイコンと「余裕あり / 超過」の文字を必ず添える。金額の棒は単一色相の表現で、系列ごとの色分けはしない。
 
 ダークモードは OS の設定に追従する（`prefers-color-scheme`）。トークンは `src/index.css` の `@theme` で定義。金額の桁が縦に揃わないと比べられないので、表と目盛りだけ `font-variant-numeric: tabular-nums` にしてある。
+
+## Claude Code（クラウド環境）
+
+claude.ai/code のクラウドセッションで開発する。セッションは GitHub へ push と PR 作成まで行い、マージは人が行う。
+AWS へは読み取り専用の SSO（`verify` / `verify-org` / `verify-ops`）だけで入り、変更操作は `PreToolUse` フックでも止める。
+フック・MCP・環境の作り方は [docs/claude-code-web.md](docs/claude-code-web.md)、運用ルールは [CLAUDE.md](CLAUDE.md) にある。
