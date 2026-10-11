@@ -1,3 +1,5 @@
+import { MAX_RECEIPT_PHOTOS } from '@kakeibo/core';
+
 /**
  * レシートの読み取りジョブ。api の Lambda が積み、ocr-receipt の Lambda が結果を書き込む。
  *
@@ -27,10 +29,32 @@ export const OCR_JOB_STALE_MS = 150_000;
 
 export type OcrJobStatus = 'pending' | 'done' | 'failed';
 
-/** api が ocr-receipt を非同期で呼ぶときの本文 */
-export type OcrJobRequest = { jobId: string; sub: string; key: string };
+/** api が ocr-receipt を非同期で呼ぶときの本文。keys は上から順（分けて撮った長いレシートなら複数） */
+export type OcrJobRequest = { jobId: string; sub: string; keys: string[] };
 
-/** 自分が上げた画像だけを読ませる。キーの組み立ては api の createUpload と揃えてある */
-export function ownsReceiptKey(sub: string, key: string): boolean {
-  return key.startsWith(`receipts/${sub}/`);
+/**
+ * 読む写真のキーを取り出す。1 枚なら `key`、分けて撮った長いレシートなら `keys`（上から順）。
+ * どのキーも呼び出した人が上げたものに限る。キーの組み立ては api の createUpload と揃えてある。
+ *
+ * api が受け付けるときと、ocr-receipt が読む前の 2 か所で通す。他人の画像を読む経路は二重に塞いでおく。
+ */
+export function parseKeys(
+  body: Record<string, unknown>,
+  sub: string,
+): { keys: string[] } | { error: string; status: 400 | 403; keys?: string[] } {
+  const keys = Array.isArray(body.keys)
+    ? body.keys.filter((key): key is string => typeof key === 'string' && key !== '')
+    : typeof body.key === 'string' && body.key !== ''
+      ? [body.key]
+      : [];
+  if (keys.length === 0 || (Array.isArray(body.keys) && keys.length !== body.keys.length)) {
+    return { error: '画像のキーが要ります', status: 400 };
+  }
+  if (keys.length > MAX_RECEIPT_PHOTOS) {
+    return { error: `一度に読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです`, status: 400 };
+  }
+  if (new Set(keys).size !== keys.length) return { error: '同じ写真が重なっています', status: 400 };
+  const foreign = keys.filter((key) => !key.startsWith(`receipts/${sub}/`));
+  if (foreign.length > 0) return { error: 'その画像は読めません', status: 403, keys: foreign };
+  return { keys };
 }

@@ -19,6 +19,9 @@ describe('ReceiptsPage', () => {
     // capture が付いているとスマホはカメラしか開かない
     const library = inputs.find((input) => !input.hasAttribute('capture'));
     expect(library?.accept).toBe('image/jpeg,image/png,image/webp');
+    // 長いレシートを分けて撮った写真をまとめて選べる。カメラの方は 1 枚ずつ
+    expect(library?.multiple).toBe(true);
+    expect(camera?.multiple).toBe(false);
   });
 
   it('支払い方法を選んで、そのまま明細として登録できる', async () => {

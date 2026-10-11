@@ -48,7 +48,7 @@ vi.mock('@aws-sdk/client-bedrock-runtime', () => ({
 let handler: typeof import('../index')['handler'];
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);
-const JOB = { jobId: 'job-1', sub: 'user-1', key: 'receipts/user-1/2026-10-11/a.jpg' };
+const JOB = { jobId: 'job-1', sub: 'user-1', keys: ['receipts/user-1/2026-10-11/a.jpg'] };
 
 function updates(): Record<string, unknown>[] {
   return sent.filter((call) => call.kind === 'update').map((call) => call.input);
@@ -85,6 +85,15 @@ describe('OCR の関数（ジョブを受けて結果を書く）', () => {
     expect(values[':draft']).toMatchObject({ storeName: 'ローソン', total: 540 });
   });
 
+  it('分けて撮った写真は全部読んでから 1 回で書く', async () => {
+    await handler({ ...JOB, keys: ['receipts/user-1/2026-10-11/a.jpg', 'receipts/user-1/2026-10-11/b.jpg'] });
+    expect(sent.filter((call) => call.kind === 's3').map((call) => call.input.Key)).toEqual([
+      'receipts/user-1/2026-10-11/a.jpg',
+      'receipts/user-1/2026-10-11/b.jpg',
+    ]);
+    expect(updates()).toHaveLength(1);
+  });
+
   it('モデルが失敗しても投げずに failed と理由を書く（非同期の再試行で読み直させない）', async () => {
     modelError = new Error('ThrottlingException');
     await expect(handler(JOB)).resolves.toBeUndefined();
@@ -102,7 +111,7 @@ describe('OCR の関数（ジョブを受けて結果を書く）', () => {
   });
 
   it('他人の画像のキーは読まずに failed にする', async () => {
-    await handler({ ...JOB, key: 'receipts/someone-else/a.jpg' });
+    await handler({ ...JOB, keys: ['receipts/user-1/2026-10-11/a.jpg', 'receipts/someone-else/a.jpg'] });
     expect(sent.some((call) => call.kind === 's3')).toBe(false);
     const values = updates()[0].ExpressionAttributeValues as Record<string, unknown>;
     expect(values[':status']).toBe('failed');

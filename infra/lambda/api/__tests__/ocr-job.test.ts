@@ -88,7 +88,7 @@ describe('POST /receipts/analyze（読み取りの受け付け）', () => {
       pk: 'OCR#user-1',
       sk: `JOB#${jobId}`,
       status: 'pending',
-      key: 'receipts/user-1/2026-10-11/a.jpg',
+      keys: ['receipts/user-1/2026-10-11/a.jpg'],
     });
     expect(typeof (put?.input.Item as Record<string, unknown>).expiresAt).toBe('number');
 
@@ -97,12 +97,29 @@ describe('POST /receipts/analyze（読み取りの受け付け）', () => {
     expect(JSON.parse(Buffer.from(invoke!.input.Payload as Uint8Array).toString())).toEqual({
       jobId,
       sub: 'user-1',
-      key: 'receipts/user-1/2026-10-11/a.jpg',
+      keys: ['receipts/user-1/2026-10-11/a.jpg'],
     });
   });
 
+  it('分けて撮った写真は keys の順のまま OCR に渡す', async () => {
+    const keys = ['receipts/user-1/2026-10-11/a.jpg', 'receipts/user-1/2026-10-11/b.jpg'];
+    const response = await handler(event('POST', '/receipts/analyze', { keys }));
+    expect(response).toMatchObject({ statusCode: 202 });
+    const invoke = sent.find((call) => call.kind === 'invoke');
+    expect(JSON.parse(Buffer.from(invoke!.input.Payload as Uint8Array).toString()).keys).toEqual(keys);
+  });
+
+  it('枚数の上限を超えたら 400 で、OCR を呼ばない', async () => {
+    const keys = ['a', 'b', 'c', 'd', 'e'].map((name) => `receipts/user-1/2026-10-11/${name}.jpg`);
+    const response = await handler(event('POST', '/receipts/analyze', { keys }));
+    expect(response).toMatchObject({ statusCode: 400 });
+    expect(sent).toEqual([]);
+  });
+
   it('他人の画像のキーは受け付けず、OCR も呼ばない', async () => {
-    const response = await handler(event('POST', '/receipts/analyze', { key: 'receipts/someone-else/a.jpg' }));
+    const response = await handler(
+      event('POST', '/receipts/analyze', { keys: ['receipts/user-1/2026-10-11/a.jpg', 'receipts/someone-else/a.jpg'] }),
+    );
     expect(response).toMatchObject({ statusCode: 403 });
     expect(sent).toEqual([]);
   });

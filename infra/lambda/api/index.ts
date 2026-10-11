@@ -12,11 +12,12 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
 import {
   OCR_JOB_STALE_MS,
   OCR_JOB_TTL_SECONDS,
   ocrJobKey,
-  ownsReceiptKey,
+  parseKeys,
   type OcrJobRequest,
   type OcrJobStatus,
 } from '../shared/ocr-job';
@@ -375,12 +376,15 @@ async function remove(sub: string, sk: string): Promise<APIGatewayProxyResultV2>
  * 読み取りは API Gateway の 30 秒を超えうるので、ここでは待たない（shared/ocr-job.ts）。
  */
 async function startOcrJob(sub: string, body: Json): Promise<APIGatewayProxyResultV2> {
-  const key = typeof body.key === 'string' ? body.key : '';
-  if (!key) throw new BadRequest('画像のキーが要ります');
-  if (!ownsReceiptKey(sub, key)) {
-    console.warn('[api] ocr key does not belong to caller', { sub, key });
-    return json(403, { message: 'その画像は読めません' });
+  const parsed = parseKeys(body, sub);
+  if ('error' in parsed) {
+    if (parsed.status === 403) {
+      console.warn('[api] ocr key does not belong to caller', { sub, keys: parsed.keys });
+      return json(403, { message: parsed.error });
+    }
+    throw new BadRequest(parsed.error);
   }
+  const { keys } = parsed;
 
   const jobId = randomUUID();
   const now = Date.now();
@@ -390,14 +394,14 @@ async function startOcrJob(sub: string, body: Json): Promise<APIGatewayProxyResu
       Item: {
         ...ocrJobKey(sub, jobId),
         status: 'pending' satisfies OcrJobStatus,
-        key,
+        keys,
         createdAt: new Date(now).toISOString(),
         expiresAt: Math.floor(now / 1000) + OCR_JOB_TTL_SECONDS,
       },
     }),
   );
 
-  const request: OcrJobRequest = { jobId, sub, key };
+  const request: OcrJobRequest = { jobId, sub, keys };
   await lambda.send(
     new InvokeCommand({
       FunctionName: OCR_FUNCTION_NAME,
@@ -431,9 +435,10 @@ async function getOcrJob(sub: string, jobId: string): Promise<APIGatewayProxyRes
 /** レシート画像の置き場所を用意する。画像そのものは API を通さず S3 へ直接送らせる */
 async function createUpload(sub: string, body: Json): Promise<APIGatewayProxyResultV2> {
   const contentType = typeof body.contentType === 'string' ? body.contentType : 'image/jpeg';
-  if (!contentType.startsWith('image/')) throw new BadRequest('画像だけ受け取れます');
+  // OCR が読める 3 つだけ。SVG などを置かせない（core の RECEIPT_IMAGE_TYPES に理由がある）
+  if (!isReceiptImageType(contentType)) throw new BadRequest('JPEG・PNG・WebP の画像だけ受け取れます');
 
-  const extension = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg';
+  const extension = RECEIPT_IMAGE_TYPES[contentType];
   const key = `receipts/${sub}/${new Date().toISOString().slice(0, 10)}/${randomUUID()}.${extension}`;
 
   const uploadUrl = await getSignedUrl(

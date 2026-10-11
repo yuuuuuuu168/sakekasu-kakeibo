@@ -2,8 +2,15 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { classifyItem, formatMoney, toMinor, toPaymentMethod, type Currency, type SourceKind } from '@kakeibo/core';
-import { ocrJobKey, ownsReceiptKey, type OcrJobRequest } from '../shared/ocr-job';
+import {
+  classifyItem,
+  formatMoney,
+  toMinor,
+  toPaymentMethod,
+  type Currency,
+  type SourceKind,
+} from '@kakeibo/core';
+import { ocrJobKey, parseKeys, type OcrJobRequest } from '../shared/ocr-job';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
 const TABLE_NAME = requireEnv('TABLE_NAME');
@@ -44,23 +51,24 @@ type RawItem = {
  * 同じ画像で読み直し、モデルの課金が重なるため（api-stack でも再試行を 0 にしてある）。
  */
 export async function handler(event: Partial<OcrJobRequest>): Promise<void> {
-  const { jobId, sub, key } = event;
-  if (typeof jobId !== 'string' || typeof sub !== 'string' || sub === '' || typeof key !== 'string') {
+  const { jobId, sub, keys } = event;
+  if (typeof jobId !== 'string' || typeof sub !== 'string' || sub === '' || !Array.isArray(keys)) {
     // api が組み立てた本文以外では呼ばれない。書き込む先も分からないので、ログだけ残す
     console.error('[ocr] failed', { reason: 'ジョブの本文が足りない', jobId });
     return;
   }
 
   // api でも確かめているが、他人の画像を読む経路は二重に塞いでおく
-  if (!ownsReceiptKey(sub, key)) {
-    console.warn('[ocr] key does not belong to caller', { sub, key });
-    await finish(sub, jobId, { status: 'failed', message: 'その画像は読めません' });
+  const parsed = parseKeys({ keys }, sub);
+  if ('error' in parsed) {
+    if (parsed.status === 403) console.warn('[ocr] key does not belong to caller', { sub, keys: parsed.keys });
+    await finish(sub, jobId, { status: 'failed', message: parsed.error });
     return;
   }
 
   try {
-    const image = await loadImage(key);
-    const draft = await analyze(image);
+    const images = await Promise.all(parsed.keys.map(loadImage));
+    const draft = await analyze(images);
     await finish(sub, jobId, { status: 'done', draft });
   } catch (cause) {
     console.error('[ocr] failed', cause);
@@ -133,8 +141,12 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
  * JSON は前から順に生成されるので、先に全体を読ませてから値を拾わせる形になる。
  * いきなり項目を埋めさせると、読めていない欄をそれらしい値で埋めてくる。
  */
-function buildPrompt(): string {
-  return `レシートの写真です。ほとんどは日本の円のレシートで、たまに米ドルのレシートがあります。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
+function buildPrompt(photos: number): string {
+  const intro =
+    photos > 1
+      ? `1 枚の長いレシートを ${photos} 枚に分けて撮った写真です。つなげて 1 枚のレシートとして読んでください。写真の並びは前後していることがあります。店名のある写真が先頭、合計のある写真が末尾になるよう、印字のつながりで並べてから読むこと。境目は重ねて撮っていることがあるので、2 枚に写っている同じ行は 1 回だけ数えること。`
+      : 'レシートの写真です。';
+  return `${intro}ほとんどは日本の円のレシートで、たまに米ドルのレシートがあります。次の JSON だけを返してください。前後に説明や\`\`\`を付けないこと。
 
 {
   "lines": ["印字を上から 1 行ずつ書き起こしたもの"],
@@ -169,7 +181,7 @@ function buildPrompt(): string {
 }
 
 async function analyze(
-  image: { base64: string; mediaType: string },
+  images: { base64: string; mediaType: string }[],
 ): Promise<ReturnType<typeof normalizeDraft>> {
   const response = await bedrock.send(
     new InvokeModelCommand({
@@ -183,8 +195,11 @@ async function analyze(
           {
             role: 'user',
             content: [
-              { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } },
-              { type: 'text', text: buildPrompt() },
+              ...images.map((image) => ({
+                type: 'image',
+                source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
+              })),
+              { type: 'text', text: buildPrompt(images.length) },
             ],
           },
         ],

@@ -54,7 +54,7 @@ export const remoteApi: KakeiboApi = {
   putReceipt: (receipt: Receipt) => request<void>('PUT', `/receipts/${encodeURIComponent(receipt.id)}`, receipt),
   deleteReceipt: (id: string) => request<void>('DELETE', `/receipts/${encodeURIComponent(id)}`),
   requestUpload: (contentType: string) => request<UploadTarget>('POST', '/uploads', { contentType }),
-  analyzeReceipt: (input: { key?: string; dataUrl?: string }) => analyzeReceipt(input),
+  analyzeReceipt: (input: { key?: string; keys?: string[]; dataUrl?: string }) => analyzeReceipt(input),
   classify: async (target: ClassifyTarget) => {
     const result = await request<{ verdicts?: Record<string, Verdict> }>('POST', '/classify', target);
     return result?.verdicts ?? {};
@@ -81,7 +81,7 @@ type OcrJobResponse =
  * `wait` はテストから待ち時間を飛ばすための差し替え口。
  */
 export async function analyzeReceipt(
-  input: { key?: string; dataUrl?: string },
+  input: { key?: string; keys?: string[]; dataUrl?: string },
   wait: (ms: number) => Promise<void> = sleep,
 ): Promise<ReceiptDraft> {
   const started = await request<{ jobId?: string } | undefined>('POST', '/receipts/analyze', input);

@@ -119,7 +119,8 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 引き上げられないため。1 枚の読み取りは 2〜13 秒（2026-10 の実測）だが、長いレシートを複数枚で読む、
 モデルが失敗して別のモデルで読み直す、といった場合は 30 秒を超える。流れは次のとおり。
 
-1. 画面が `POST /receipts/analyze` を呼ぶ。api の Lambda は画像のキーが本人のものかを確かめ、
+1. 画面が `POST /receipts/analyze` を呼ぶ（1 枚なら `key`、分けて撮った長いレシートなら `keys` に上から順に最大 4 枚）。
+   api の Lambda は画像のキーが本人のものか・枚数が上限内かを確かめ、
    ジョブの行（`pk = OCR#{sub}`、`sk = JOB#{jobId}`、`status = pending`）を作って、
    ocr-receipt を非同期（`InvocationType: Event`）で呼び、すぐ `jobId` を返す
 2. ocr-receipt は画像を読み、結果をジョブの行に書く（`done` と下書き、または `failed` と理由）。
