@@ -11,6 +11,7 @@ import { ReceiptsPage } from './features/receipts/ReceiptsPage';
 import { ReportPage } from './features/report/ReportPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { SignOutButton } from './features/auth/SignOutButton';
+import { AppsLink } from './features/auth/AppsLink';
 
 export function App() {
   return (
@@ -37,6 +38,7 @@ function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
             <span className="rounded-md bg-warning/20 px-1.5 py-0.5 text-xs text-ink">ローカルモード</span>
           )}
           <div className="flex-1" />
+          <AppsLink />
           <a
             href={SETTINGS_PATH}
             aria-label="設定"
