@@ -584,15 +584,16 @@ table=sakekasu-kakeibo-dev
   cdkd はそれを新規作成とみなし、テーブルやバケットは名前の衝突で落ち、Cognito の
   UserPool は 2 つ目を黙って作る
 
-cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 つあり、スクリプトで避けている。
-どちらも cdkd 側で直ったら回避を消す。
+cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 つあった。
 
 - CloudFormation を読むクライアントが、スタックのリージョンではなく実行時の `AWS_REGION` で
   作られる。us-east-1 の `-cert` スタックが見つからず、全リソースが「not found」になる。
-  スタックごとに `AWS_REGION` を合わせて打つ
+  スタックごとに `AWS_REGION` を合わせて打つ。0.296.28 でも直っていないので、回避は残している
 - Cognito の UserPoolClient の ID を CloudFormation の値（ClientId だけ）のまま渡すので、
   Cloud Control が求める `UserPoolId|ClientId` の形にならず取り込みに失敗する。
-  CloudFormation から両方を引いて `--resource` で明示する
+  0.294.7 で cdkd がテンプレートの値から組み立てるようになったので、`--resource` で明示する回避は外した
+
+どちらも詳しくは sakekasu-learning の cdkd メモ（#7、#8）にある。
 
 ### ジョブを 2 つに分けている理由
 
