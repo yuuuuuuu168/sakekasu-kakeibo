@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 /** モジュールの読み込み時に環境変数を見るので、先に置いてから動的に読み込む */
 let normalizeDraft: typeof import('../index')['normalizeDraft'];
 let sniffMediaType: typeof import('../index')['sniffMediaType'];
+let summarizeDraft: typeof import('../index')['summarizeDraft'];
 
 beforeAll(async () => {
   process.env.RECEIPT_BUCKET = 'test-bucket';
@@ -10,6 +11,7 @@ beforeAll(async () => {
   process.env.TABLE_NAME = 'test-table';
   const module = await import('../index');
   normalizeDraft = module.normalizeDraft;
+  summarizeDraft = module.summarizeDraft;
   sniffMediaType = module.sniffMediaType;
 });
 
@@ -183,5 +185,21 @@ describe('sniffMediaType', () => {
     expect(sniffMediaType(png)).toBe('image/png');
     expect(sniffMediaType(text)).toBeUndefined();
     expect(sniffMediaType(new Uint8Array([0xff]))).toBeUndefined();
+  });
+});
+
+describe('summarizeDraft', () => {
+  it('品目と注意の数、支払い方法だけを出し、読んだ中身は出さない', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"タリーズコーヒー","date":"2026-09-08","total":820,"paymentMethod":"suica","items":[{"name":"アイスGコーヒー","amount":510},{"name":"マフィン","amount":410},{"name":"モーニングセット","amount":-100}]}',
+      new Date('2026-09-08T12:00:00+09:00'),
+    );
+    const summary = summarizeDraft(draft);
+    expect(summary).toEqual({ items: 3, warnings: 0, paymentMethod: 'suica' });
+    expect(JSON.stringify(summary)).not.toMatch(/タリーズ|コーヒー|820|2026/);
+  });
+
+  it('読めなかったときは 0 件と注意を数える', () => {
+    expect(summarizeDraft(normalizeDraft('読み取れませんでした'))).toEqual({ items: 0, warnings: 1, paymentMethod: null });
   });
 });
