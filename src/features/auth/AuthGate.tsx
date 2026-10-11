@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { getCurrentUser, signInWithRedirect, signOut } from 'aws-amplify/auth';
 import { Hub } from 'aws-amplify/utils';
 import { LogIn } from 'lucide-react';
 import { Button, Card } from '../../components/ui/primitives';
 import { config } from '../../config';
+import { isOAuthCallback, readSsoHint } from './ssoHint';
 
 type Phase = 'checking' | 'signed-out' | 'redirecting' | 'signed-in';
 
@@ -23,6 +24,12 @@ const ALREADY_SIGNED_IN = 'UserAlreadyAuthenticatedException';
  * 自動でリダイレクトせず、ボタンを押させる。戻ってきた後の失敗（期限切れのコードなど）で
  * 送り出しと失敗を繰り返す輪に入らないようにするため。
  *
+ * 例外はポータルから `?sso=1` 付きで来たときだけ。共通ログインを済ませた人なので、送り出しても
+ * 画面を出さずに戻ってくる。このときは未サインインと分かった時点で 1 回だけ自動で送り出す。
+ * 合図は読んだ直後に history.replaceState で URL から消し、戻り先（redirect_uri）も素のルートなので、
+ * 戻ってきたページには合図が無い。戻りで失敗しても、その先はボタンを押させる通常の流れになり、
+ * 輪には入らない。?code / ?error が付いている（戻りの最中）ときや、サインイン済みのときは送り出さない。
+ *
  * ログイン中のユーザー名やメールアドレスは画面に出さない（要らないという要望）。
  *
  * ローカルモード（設定が無いとき）は Cognito を一切呼ばず、そのまま中身を出す。
@@ -30,37 +37,9 @@ const ALREADY_SIGNED_IN = 'UserAlreadyAuthenticatedException';
 export function AuthGate({ children }: { children: (signOutFn: () => Promise<void>) => ReactNode }) {
   const [phase, setPhase] = useState<Phase>(config.mode === 'remote' ? 'checking' : 'signed-in');
   const [error, setError] = useState<string | undefined>();
-
-  useEffect(() => {
-    if (config.mode !== 'remote') return;
-    let live = true;
-
-    const check = () =>
-      getCurrentUser()
-        .then(() => {
-          if (live) setPhase('signed-in');
-        })
-        .catch(() => {
-          if (live) setPhase((current) => (current === 'signed-in' ? current : 'signed-out'));
-        });
-
-    const stop = Hub.listen('auth', ({ payload }) => {
-      if (!live) return;
-      if (payload.event === 'signInWithRedirect') {
-        setError(undefined);
-        void check();
-      } else if (payload.event === 'signInWithRedirect_failure') {
-        setError(describe(payload.data?.error));
-        setPhase('signed-out');
-      }
-    });
-
-    void check();
-    return () => {
-      live = false;
-      stop();
-    };
-  }, []);
+  // ?sso=1 で来て、まだ自動の送り出しを使っていないか。StrictMode で effect が 2 回走っても
+  // 1 回目で URL から合図を消すので、ref に覚えておく
+  const autoSignIn = useRef(false);
 
   const handleSignIn = useCallback(async () => {
     setError(undefined);
@@ -77,6 +56,49 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
       setPhase('signed-out');
     }
   }, []);
+
+  useEffect(() => {
+    if (config.mode !== 'remote') return;
+    let live = true;
+
+    const { hint, cleaned } = readSsoHint(window.location);
+    if (cleaned !== undefined) window.history.replaceState(window.history.state, '', cleaned);
+    if (hint && !isOAuthCallback(window.location.search)) autoSignIn.current = true;
+
+    const check = () =>
+      getCurrentUser()
+        .then(() => {
+          if (live) setPhase('signed-in');
+        })
+        .catch(() => {
+          if (!live) return;
+          if (autoSignIn.current) {
+            autoSignIn.current = false;
+            void handleSignIn();
+            return;
+          }
+          setPhase((current) => (current === 'signed-in' ? current : 'signed-out'));
+        });
+
+    const stop = Hub.listen('auth', ({ payload }) => {
+      if (!live) return;
+      // 戻りの結果が出たら、自動の送り出しはもう使わない
+      autoSignIn.current = false;
+      if (payload.event === 'signInWithRedirect') {
+        setError(undefined);
+        void check();
+      } else if (payload.event === 'signInWithRedirect_failure') {
+        setError(describe(payload.data?.error));
+        setPhase('signed-out');
+      }
+    });
+
+    void check();
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [handleSignIn]);
 
   // マネージドログインのログアウトへ送り、戻り先（このサイトのルート）に帰ってくる
   const handleSignOut = useCallback(async () => {
