@@ -63,7 +63,7 @@ export class CdkdDeployStack extends cdk.Stack {
       statements: deployGuardrailStatements({
         account: this.account,
         app: 'kakeibo',
-        resourceNamePrefix: 'sakekasu-kakeibo-',
+        resourceNamePrefixes: ['sakekasu-kakeibo-'],
         protectedRoleNames: [CDKD_DEPLOY_ROLE_NAME, GITHUB_DEPLOY_ROLE_NAME],
         roleBoundaryArn: roleBoundaryArn(this.account),
       }),
