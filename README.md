@@ -212,7 +212,7 @@ npm run dev
 # （Lambda のバンドルがルートの node_modules から esbuild と @kakeibo/core を引く）
 cd infra
 npm install
-AWS_PROFILE=sakekasu-builder npx cdkd diff -c env=dev
+AWS_PROFILE=<アプリ用のプロファイル> npx cdkd diff -c env=dev
 ```
 
 CSV の取り込み、自動分類、内訳の分割、上限の設定、月次レポートまでローカルモードで通しで動く。カテゴリの試行錯誤はこのモードで始められる。OCR と画像の保存だけ AWS が必要。
