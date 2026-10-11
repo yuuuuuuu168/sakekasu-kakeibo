@@ -1,9 +1,12 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { classifyItem, formatMoney, toMinor, toPaymentMethod, type Currency, type SourceKind } from '@kakeibo/core';
-import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { ocrJobKey, ownsReceiptKey, type OcrJobRequest } from '../shared/ocr-job';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
+const TABLE_NAME = requireEnv('TABLE_NAME');
 /**
  * Bedrock のモデル ID は環境変数から取り、既定値を持たない。
  * IAM はこのモデルの ARN だけを許可しているので、ここに書き残すと設定漏れが
@@ -17,6 +20,9 @@ const BASE64_LIMIT = 5 * 1024 * 1024;
 
 const bedrock = new BedrockRuntimeClient({});
 const s3 = new S3Client({});
+const documents = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+  marshallOptions: { removeUndefinedValues: true },
+});
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -30,31 +36,65 @@ type RawItem = {
   quantity?: unknown;
 };
 
-export async function handler(
-  event: APIGatewayProxyEventV2WithJWTAuthorizer,
-): Promise<APIGatewayProxyResultV2> {
-  const sub = event.requestContext.authorizer?.jwt?.claims?.sub;
-  if (typeof sub !== 'string' || sub === '') return json(401, { message: 'サインインが必要です' });
+/**
+ * api の Lambda から非同期で呼ばれ、読み取った結果をジョブの行に書き込む（shared/ocr-job.ts）。
+ * 画面へは直接返さない。画面は GET /receipts/analyze/{jobId} で結果を聞きに来る。
+ *
+ * 失敗は握ってジョブに書き、関数としては正常に終える。投げると Lambda の非同期呼び出しが
+ * 同じ画像で読み直し、モデルの課金が重なるため（api-stack でも再試行を 0 にしてある）。
+ */
+export async function handler(event: Partial<OcrJobRequest>): Promise<void> {
+  const { jobId, sub, key } = event;
+  if (typeof jobId !== 'string' || typeof sub !== 'string' || sub === '' || typeof key !== 'string') {
+    // api が組み立てた本文以外では呼ばれない。書き込む先も分からないので、ログだけ残す
+    console.error('[ocr] failed', { reason: 'ジョブの本文が足りない', jobId });
+    return;
+  }
 
-  const body = parseBody(event.body, event.isBase64Encoded);
-  const key = typeof body.key === 'string' ? body.key : '';
-  if (!key) return json(400, { message: '画像のキーが要ります' });
-
-  // 自分が上げた画像だけを読ませる。キーの組み立ては API 側と揃えてある
-  if (!key.startsWith(`receipts/${sub}/`)) {
+  // api でも確かめているが、他人の画像を読む経路は二重に塞いでおく
+  if (!ownsReceiptKey(sub, key)) {
     console.warn('[ocr] key does not belong to caller', { sub, key });
-    return json(403, { message: 'その画像は読めません' });
+    await finish(sub, jobId, { status: 'failed', message: 'その画像は読めません' });
+    return;
   }
 
   try {
     const image = await loadImage(key);
     const draft = await analyze(image);
-    return json(200, draft);
+    await finish(sub, jobId, { status: 'done', draft });
   } catch (cause) {
     console.error('[ocr] failed', cause);
     const message = cause instanceof Error ? cause.message : 'レシートの読み取りに失敗しました';
-    return json(502, { message });
+    await finish(sub, jobId, { status: 'failed', message });
   }
+}
+
+/** ジョブの行に結果を書く。行は api が作ったものだけを更新し、無ければ作らない */
+async function finish(
+  sub: string,
+  jobId: string,
+  result: { status: 'done'; draft: ReturnType<typeof normalizeDraft> } | { status: 'failed'; message: string },
+): Promise<void> {
+  const values: Record<string, unknown> = { ':status': result.status, ':finishedAt': new Date().toISOString() };
+  let expression = 'SET #status = :status, finishedAt = :finishedAt';
+  if (result.status === 'done') {
+    expression += ', draft = :draft';
+    values[':draft'] = result.draft;
+  } else {
+    expression += ', message = :message';
+    values[':message'] = result.message;
+  }
+
+  await documents.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: ocrJobKey(sub, jobId),
+      UpdateExpression: expression,
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: values,
+    }),
+  );
 }
 
 async function loadImage(key: string): Promise<{ base64: string; mediaType: string }> {
@@ -296,23 +336,4 @@ function toNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
-}
-
-function parseBody(body: string | undefined, isBase64Encoded: boolean | undefined): Record<string, unknown> {
-  if (!body) return {};
-  const text = isBase64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function json(statusCode: number, payload: unknown): APIGatewayProxyResultV2 {
-  return {
-    statusCode,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(payload),
-  };
 }

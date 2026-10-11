@@ -32,8 +32,9 @@ GET や他の操作まで署名しないこと。受け取る `contentType` は 
 `infra/lib/api-stack.ts` の IAM は、推論プロファイルと振り先の foundation-model の
 2 つの ARN だけを許している。`*` に広げないこと、別のアクションを足さないこと。
 Lambda ごとの権限も同じで、API は table への読み書きとバケットへの `Put` だけ、
-OCR はバケットの読み取りと Bedrock だけ、カテゴリ判定は API キーのシークレットの
-読み取りだけに限ること。
+OCR はバケットの読み取りと Bedrock、それに読み取りジョブの行（パーティションキーが `OCR#` で始まる行）の
+`UpdateItem` だけ、カテゴリ判定は API キーのシークレットの読み取りだけに限ること。
+API が OCR の関数を非同期で呼ぶための `lambda:InvokeFunction` は、その関数 1 つに限ること。
 
 ## 5. カテゴリ判定の API キーをコードにもテンプレートにも置かないこと
 

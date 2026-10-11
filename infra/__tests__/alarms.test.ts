@@ -125,6 +125,18 @@ describe('共通基盤へ送るアラーム', () => {
     expect(alarm).toMatchObject({ Namespace: 'sakekasu-kakeibo', Threshold: 1 });
   });
 
+  // OCR の関数は失敗をジョブに書いて正常に終えるので、Errors にも 5xx にも出ない。ログから数える
+  it('読み取りの失敗をログから数え、ログの文言と合わせてある', () => {
+    api.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '"[ocr] failed"',
+      MetricTransformations: [
+        { MetricNamespace: 'sakekasu-kakeibo', MetricName: 'sakekasu-kakeibo-test-ocr-receipt-failures', MetricValue: '1' },
+      ],
+    });
+    const alarm = byName(api, 'sakekasu-kakeibo-test-ocr-receipt-failures');
+    expect(alarm).toMatchObject({ Namespace: 'sakekasu-kakeibo', Threshold: 1 });
+  });
+
   it('月次レポートを EventBridge が呼べなかったことを見る', () => {
     const alarm = byName(api, 'sakekasu-kakeibo-test-monthly-report-invocation-failures');
     expect(alarm).toMatchObject({ Namespace: 'AWS/Events', MetricName: 'FailedInvocations', Threshold: 1 });
@@ -137,7 +149,7 @@ describe('共通基盤へ送るアラーム', () => {
   });
 
   it('アラームの数（足したら docs/operations.md の一覧も直す）', () => {
-    expect(alarmsOf(api)).toHaveLength(11);
+    expect(alarmsOf(api)).toHaveLength(12);
     expect(alarmsOf(data)).toHaveLength(2);
   });
 });
