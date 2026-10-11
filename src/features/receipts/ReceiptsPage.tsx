@@ -24,6 +24,7 @@ import {
   latestUsdRate,
   learnItemRules,
   linkedTransaction,
+  markNotDuplicate,
   receiptCategorySummary,
   receiptCurrency,
   receiptYenTotal,
@@ -31,6 +32,7 @@ import {
   transactionFromReceipt,
   usableRate,
   type Currency,
+  type DuplicateReceiptPair,
   type MatchCandidate,
   type Receipt,
   type ReceiptItem,
@@ -138,7 +140,7 @@ function emptyDraft(): Draft {
  * 写真 → OCR → 品目ごとのカテゴリ → 金額と日付で明細に自動マッチ、までを 1 画面で済ませる。
  */
 export function ReceiptsPage() {
-  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, saveRules } = useStore();
+  const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, removeTransaction, saveRules } = useStore();
   const cameraRef = useRef<HTMLInputElement>(null);
   // 撮るのとは別の入力にする。capture を付けるとスマホはカメラしか開かず、撮り溜めた写真を選べない
   const libraryRef = useRef<HTMLInputElement>(null);
@@ -170,6 +172,27 @@ export function ReceiptsPage() {
     const receipt: Receipt = { ...draft, items: draft.items, status: 'pending' };
     return findCandidates(receipt, snapshot.transactions);
   }, [draft, snapshot.transactions]);
+
+  /**
+   * 同じレシートだと言われた組。残す方を選んでもらい、もう片方を消す。
+   * 消す方から作った明細（支払い方法を選んで登録したもの）も一緒に消さないと、支払いが二重に残る。
+   * 取り込んだ明細に当てただけのレシートなら、明細は本物なのでそのまま残す
+   */
+  async function keepOneReceipt(keep: Receipt, drop: Receipt) {
+    const created = drop.status === 'cash' ? snapshot.transactions.find((txn) => txn.receiptId === drop.id) : undefined;
+    const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
+    if (!window.confirm(`${drop.date} の ${drop.storeName || '店名なし'} を消して、もう片方を残しますか${notice}`)) return;
+    await removeReceipt(drop.id);
+    if (created) await removeTransaction(created.id);
+    setMessage(`同じレシートとして片方を消しました。${keep.storeName || '店名なし'} のレシートが残っています。`);
+  }
+
+  /** 別の買い物だと言われた組。両側に印を付けて、次からは候補に出さない */
+  async function dismissDuplicateReceipts(pair: DuplicateReceiptPair) {
+    const [a, b] = markNotDuplicate(pair.a, pair.b);
+    await saveReceipt(a);
+    await saveReceipt(b);
+  }
 
   /**
    * 写真を読んで下書きにする。複数枚は、1 枚に収まらない長いレシートを分けて撮ったもの。
@@ -703,43 +726,7 @@ export function ReceiptsPage() {
       )}
 
       {duplicates.length > 0 && (
-        <Card title={`同じレシートかもしれない組 ${duplicates.length} 件`}>
-          <p className="text-xs text-muted">
-            合計が一致して日付が近いレシートです。2 回撮ったものなら片方を消してください。別々の買い物ならそのままで構いません
-          </p>
-          <ul className="mt-2 divide-y divide-grid">
-            {duplicates.map((pair) => (
-              <li key={duplicateKey(pair)} className="py-2">
-                <div className="flex items-center gap-1.5">
-                  <Copy size={14} className="text-muted" aria-hidden />
-                  <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
-                </div>
-                <ul className="mt-1.5 space-y-1">
-                  {[pair.a, pair.b].map((item) => (
-                    <li key={item.id} className="flex items-center gap-2 rounded-lg bg-plane px-2 py-1.5">
-                      <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
-                      {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                      {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
-                      {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                      <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm('このレシートを消しますか')) void removeReceipt(item.id);
-                        }}
-                        className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
-                        aria-label={`${item.date} の ${item.storeName || '店名なし'} のレシートを消す`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <DuplicateReceiptsCard pairs={duplicates} onKeep={keepOneReceipt} onDismiss={dismissDuplicateReceipts} />
       )}
 
       <Card title={`保存済み ${snapshot.receipts.length} 枚`}>
@@ -783,6 +770,95 @@ export function ReceiptsPage() {
           </ul>
         )}
       </Card>
+    </div>
+  );
+}
+
+/** 見比べるのに出す品目の行数。長いレシートで組が縦に伸びすぎないよう、残りは開いたときだけ */
+const DUPLICATE_ITEM_LINES = 5;
+
+/**
+ * 同じレシートかもしれない組。合計は一致しているので、見比べる材料は品目のほうにある。
+ * 人に答えてもらう形にして、同じなら残す方を選んで片方を消し、別の買い物なら両方残して二度と聞かない。
+ */
+function DuplicateReceiptsCard({
+  pairs,
+  onKeep,
+  onDismiss,
+}: {
+  pairs: DuplicateReceiptPair[];
+  onKeep: (keep: Receipt, drop: Receipt) => Promise<void>;
+  onDismiss: (pair: DuplicateReceiptPair) => Promise<void>;
+}) {
+  return (
+    <Card title={`同じレシートかもしれない組 ${pairs.length} 件`}>
+      <p className="text-xs text-muted">
+        合計が一致して日付が近いレシートです。品目を見比べて、2 回撮ったものなら残す方を選んでください。別々の買い物なら「別の買い物」を押すと、この組は二度と出ません
+      </p>
+      <ul className="mt-2 divide-y divide-grid">
+        {pairs.map((pair) => (
+          <li key={duplicateKey(pair)} className="py-3">
+            <div className="flex items-center gap-1.5">
+              <Copy size={14} className="text-muted" aria-hidden />
+              <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
+            </div>
+            <ul className="mt-2 grid gap-2 md:grid-cols-2">
+              {[
+                [pair.a, pair.b],
+                [pair.b, pair.a],
+              ].map(([item, other]) => (
+                <li key={item.id} className="rounded-lg bg-plane px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
+                    {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
+                    {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
+                    {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
+                    <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
+                  </div>
+                  <DuplicateReceiptItems receipt={item} />
+                  <div className="mt-2 flex justify-end">
+                    <Button size="sm" onClick={() => void onKeep(item, other)}>
+                      同じレシート：こちらを残す
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" variant="primary" onClick={() => void onDismiss(pair)}>
+                別の買い物（両方残す）
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** 組の片側の品目。同じ会計かどうかはここを見比べて決めてもらう */
+function DuplicateReceiptItems({ receipt }: { receipt: Receipt }) {
+  const [expanded, setExpanded] = useState(false);
+  if (receipt.items.length === 0) return <p className="mt-1.5 border-t border-grid pt-1.5 text-xs text-muted">品目なし</p>;
+  const items = expanded ? receipt.items : receipt.items.slice(0, DUPLICATE_ITEM_LINES);
+  const hidden = receipt.items.length - items.length;
+  return (
+    <div className="mt-1.5 border-t border-grid pt-1.5 text-xs">
+      <ul className="space-y-0.5" aria-label={`${receipt.date} の ${receipt.storeName || '店名なし'} の品目`}>
+        {items.map((item, index) => (
+          <li key={index} className="flex items-baseline gap-2">
+            <span className="truncate text-ink-2">{item.name || '（品名なし）'}</span>
+            <span className="flex-1 border-b border-dotted border-grid" />
+            <span className="tnum text-ink-2">{formatMoney(item.amount, receiptCurrency(receipt))}</span>
+          </li>
+        ))}
+      </ul>
+      {receipt.items.length > DUPLICATE_ITEM_LINES && (
+        <button type="button" onClick={() => setExpanded(!expanded)} className="text-accent">
+          {expanded ? '閉じる' : `ほか ${hidden} 品を見る`}
+        </button>
+      )}
     </div>
   );
 }

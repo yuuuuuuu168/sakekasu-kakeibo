@@ -136,6 +136,8 @@ export type Receipt = {
   /** status が cash のときの支払い方法。無ければ現金（支払い方法を選べなかった頃の保存分） */
   paidWith?: SourceKind;
   createdAt?: string;
+  /** 「同じレシートではない（別の買い物）」と人が言った相手のレシート ID。印は両側に持たせる */
+  notDuplicateOf?: string[];
 };
 
 export type Budget = {
