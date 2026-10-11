@@ -77,6 +77,13 @@ export function RecurringPayments() {
         </div>
       }
     >
+      {/* 追加ボタンはカードの上にあるので、入力欄もその直下に開く。下に出すと登録が多いときにスクロールしないと見えない */}
+      {editing === 'new' && (
+        <div className={rows.length > 0 ? 'mb-3 border-b border-grid pb-3' : undefined}>
+          <RecurringForm categories={categories} onCancel={() => setEditing(undefined)} onSave={save} />
+        </div>
+      )}
+
       {rows.length === 0 && editing === undefined ? (
         <EmptyState title="まだ登録がありません">
           サブスクや分割払いを入れておくと、着地見込みに先に入り、あと何回かが分かります。
@@ -125,12 +132,6 @@ export function RecurringPayments() {
             </li>
           ))}
         </ul>
-      )}
-
-      {editing === 'new' && (
-        <div className="mt-3 border-t border-grid pt-3">
-          <RecurringForm categories={categories} onCancel={() => setEditing(undefined)} onSave={save} />
-        </div>
       )}
     </Card>
   );
