@@ -9,6 +9,12 @@
  */
 export const PORTAL_URL = 'https://sakekasu-builder.com/';
 
+/**
+ * ポータルのアプリ一覧（4 アプリの入口）。ヘッダの「アプリ一覧」から同じタブで移る。
+ * 共通ログインのセッションがあれば、入力なしで一覧が出る。
+ */
+export const APPS_URL = 'https://sakekasu-builder.com/apps';
+
 /** 手元の開発サーバー（npm run dev）として扱うホスト名 */
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
