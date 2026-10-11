@@ -38,6 +38,13 @@ function emit(event: string, data?: { error?: unknown }) {
 const mockConfig = vi.hoisted(() => ({ config: { mode: 'remote' as 'remote' | 'local', apiUrl: 'https://example.test' } }));
 vi.mock('../../../config', () => mockConfig);
 
+/* jsdom の location は差し替えにくいので、戻り先の判定だけ差し替えて本番と手元を作る（判定そのものは signOutRedirect.test.ts） */
+const PORTAL = 'https://sakekasu-builder.com/';
+const mockRedirect = vi.hoisted(() => ({ preferred: undefined as string | undefined }));
+vi.mock('../signOutRedirect', () => ({
+  signOutRedirect: () => ({ allowed: [], preferred: mockRedirect.preferred }),
+}));
+
 const { AuthGate } = await import('../AuthGate');
 
 function renderGate() {
@@ -57,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listeners.length = 0;
   mockConfig.config.mode = 'remote';
+  mockRedirect.preferred = undefined;
   getCurrentUser.mockRejectedValue(new Error('未サインイン'));
   signInWithRedirect.mockResolvedValue(undefined);
   signOut.mockResolvedValue(undefined);
@@ -134,6 +142,24 @@ describe('AuthGate', () => {
     expect(await screen.findByRole('button', { name: 'ログイン画面へ' })).toBeInTheDocument();
   });
 
+  /* 本番はポータルのトップへ帰す。手元（localhost）は戻り先を指定せず、Amplify に自分のルートを選ばせる */
+  it('本番ではサインアウトの戻り先にポータルのトップを指定する', async () => {
+    mockRedirect.preferred = PORTAL;
+    getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'サインアウト' }));
+    await waitFor(() =>
+      expect(signOut).toHaveBeenCalledWith({ global: false, oauth: { redirectUrl: PORTAL } }),
+    );
+  });
+
+  it('手元では戻り先を指定せずに signOut を呼ぶ', async () => {
+    getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: 'サインアウト' }));
+    await waitFor(() => expect(signOut).toHaveBeenCalledWith(undefined));
+  });
+
   /* ログイン中のユーザー名・メールは出さない（要望） */
   it('ユーザー名を画面に出さない', async () => {
     getCurrentUser.mockResolvedValue({ username: 'someone@example.com', userId: 'sub' });
@@ -156,6 +182,16 @@ describe('AuthGate', () => {
     expect(screen.getByText('ダッシュボード')).toBeInTheDocument();
     expect(getCurrentUser).not.toHaveBeenCalled();
     expect(listeners).toHaveLength(0);
+  });
+
+  it('ローカルモードではサインアウトしても signOut を呼ばない', async () => {
+    mockConfig.config.mode = 'local';
+    mockRedirect.preferred = PORTAL;
+    renderGate();
+    fireEvent.click(screen.getByRole('button', { name: 'サインアウト' }));
+    await act(async () => {});
+    expect(signOut).not.toHaveBeenCalled();
+    expect(screen.getByText('ダッシュボード')).toBeInTheDocument();
   });
 
   /*
