@@ -60,7 +60,11 @@ beforeEach(() => {
   getCurrentUser.mockRejectedValue(new Error('未サインイン'));
   signInWithRedirect.mockResolvedValue(undefined);
   signOut.mockResolvedValue(undefined);
+  window.history.replaceState(null, '', '/');
 });
+
+/** 今の URL（パス・クエリ・ハッシュ） */
+const currentUrl = () => `${window.location.pathname}${window.location.search}${window.location.hash}`;
 
 describe('AuthGate', () => {
   it('サインイン済みならそのまま中身を出す', async () => {
@@ -152,5 +156,79 @@ describe('AuthGate', () => {
     expect(screen.getByText('ダッシュボード')).toBeInTheDocument();
     expect(getCurrentUser).not.toHaveBeenCalled();
     expect(listeners).toHaveLength(0);
+  });
+
+  /*
+   * ポータルから ?sso=1 で来たときだけ、ボタンを押させずに送り出す。合図はすぐ URL から消し、
+   * 戻りの最中やサインイン済みのときは送り出さない（送り出しと失敗の輪に入らないため）
+   */
+  describe('ポータルからの合図（?sso=1）', () => {
+    it('未サインインなら 1 回だけ自動で送り出し、URL から合図を消す', async () => {
+      window.history.replaceState(null, '', '/?sso=1&from=portal#/receipts');
+      renderGate();
+      expect(currentUrl()).toBe('/?from=portal#/receipts');
+      await waitFor(() => expect(signInWithRedirect).toHaveBeenCalledTimes(1));
+      expect(await screen.findByRole('button', { name: 'ログイン画面へ移動中…' })).toBeDisabled();
+      expect(signInWithRedirect).toHaveBeenCalledTimes(1);
+    });
+
+    it('合図が無ければ自動では送り出さない', async () => {
+      renderGate();
+      await screen.findByRole('button', { name: 'ログイン画面へ' });
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+    });
+
+    it('サインイン済みなら送り出さず、URL から合図は消す', async () => {
+      getCurrentUser.mockResolvedValue({ username: 'me', userId: 'sub' });
+      window.history.replaceState(null, '', '/?sso=1');
+      renderGate();
+      expect(await screen.findByText('ダッシュボード')).toBeInTheDocument();
+      expect(currentUrl()).toBe('/');
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+    });
+
+    it('戻りの最中（?code）なら自動では送り出さない', async () => {
+      window.history.replaceState(null, '', '/?sso=1&code=abc&state=s');
+      renderGate();
+      await screen.findByRole('button', { name: 'ログイン画面へ' });
+      expect(currentUrl()).toBe('/?code=abc&state=s');
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+    });
+
+    it('戻りの失敗（?error）なら自動では送り出さない', async () => {
+      window.history.replaceState(null, '', '/?sso=1&error=access_denied');
+      renderGate();
+      await screen.findByRole('button', { name: 'ログイン画面へ' });
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+    });
+
+    it('戻りの失敗が先に届いたら自動では送り出さず理由を出す', async () => {
+      let reject: (cause: unknown) => void = () => {};
+      getCurrentUser.mockReturnValue(new Promise((_, r) => (reject = r)));
+      window.history.replaceState(null, '', '/?sso=1');
+      renderGate();
+      emit('signInWithRedirect_failure', { error: new Error('invalid_grant') });
+      await act(async () => reject(new Error('未サインイン')));
+      expect(await screen.findByText(/invalid_grant/)).toBeInTheDocument();
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+    });
+
+    it('自動の送り出しで既にサインイン済みと言われたら中身を出す', async () => {
+      const error = Object.assign(new Error('already'), { name: 'UserAlreadyAuthenticatedException' });
+      signInWithRedirect.mockRejectedValue(error);
+      window.history.replaceState(null, '', '/?sso=1');
+      renderGate();
+      expect(await screen.findByText('ダッシュボード')).toBeInTheDocument();
+    });
+
+    it('ローカルモードでは合図があっても何も呼ばず、URL も触らない', async () => {
+      mockConfig.config.mode = 'local';
+      window.history.replaceState(null, '', '/?sso=1');
+      renderGate();
+      expect(screen.getByText('ダッシュボード')).toBeInTheDocument();
+      expect(getCurrentUser).not.toHaveBeenCalled();
+      expect(signInWithRedirect).not.toHaveBeenCalled();
+      expect(currentUrl()).toBe('/?sso=1');
+    });
   });
 });
