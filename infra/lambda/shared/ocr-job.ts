@@ -25,7 +25,7 @@ export const OCR_JOB_TTL_SECONDS = 24 * 60 * 60;
  * ここを過ぎても pending のままなら、読み取りの Lambda が落ちたものとみなす。
  * Lambda のタイムアウト（api-stack の OCR_TIMEOUT_SECONDS）より少し長く取る。
  */
-export const OCR_JOB_STALE_MS = 150_000;
+export const OCR_JOB_STALE_MS = 270_000;
 
 export type OcrJobStatus = 'pending' | 'done' | 'failed';
 

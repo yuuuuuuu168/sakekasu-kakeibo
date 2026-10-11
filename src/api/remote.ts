@@ -68,7 +68,7 @@ export const OCR_POLL_INTERVAL_MS = 2_000;
  * ここまで待って終わらなければ諦める。サーバ側でも、読み取りの Lambda のタイムアウトを過ぎた
  * ジョブは failed で返す（infra/lambda/shared/ocr-job.ts の OCR_JOB_STALE_MS）。これはその保険。
  */
-export const OCR_MAX_WAIT_MS = 180_000;
+export const OCR_MAX_WAIT_MS = 300_000;
 
 type OcrJobResponse =
   | { status: 'pending' }

@@ -1,4 +1,3 @@
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -11,21 +10,13 @@ import {
   type SourceKind,
 } from '@kakeibo/core';
 import { ocrJobKey, parseKeys, type OcrJobRequest } from '../shared/ocr-job';
+import { readReceipt, type OcrImage } from './llm';
 
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
 const TABLE_NAME = requireEnv('TABLE_NAME');
-/**
- * Bedrock のモデル ID は環境変数から取り、既定値を持たない。
- * IAM はこのモデルの ARN だけを許可しているので、ここに書き残すと設定漏れが
- * AccessDeniedException として出てくる。設定漏れは設定漏れとして出す。
- * （sakekasu-builder の ocr-analyzer と同じ考え方）
- */
-const MODEL_ID = requireEnv('BEDROCK_MODEL_ID');
-
-/** Bedrock が受け取れる画像の上限。base64 にした後の長さで判定される */
+/** モデルが受け取れる画像の上限（Claude API も Bedrock も 1 枚 5MB）。base64 にした後の長さで判定される */
 const BASE64_LIMIT = 5 * 1024 * 1024;
 
-const bedrock = new BedrockRuntimeClient({});
 const s3 = new S3Client({});
 const documents = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
@@ -105,7 +96,7 @@ async function finish(
   );
 }
 
-async function loadImage(key: string): Promise<{ base64: string; mediaType: string }> {
+async function loadImage(key: string): Promise<OcrImage> {
   const object = await s3.send(new GetObjectCommand({ Bucket: RECEIPT_BUCKET, Key: key }));
   if (!object.Body) throw new Error('画像が見つかりません');
 
@@ -180,35 +171,11 @@ function buildPrompt(photos: number): string {
 - 品目名は印字の通り。略字はそのまま書く`;
 }
 
-async function analyze(
-  images: { base64: string; mediaType: string }[],
-): Promise<ReturnType<typeof normalizeDraft>> {
-  const response = await bedrock.send(
-    new InvokeModelCommand({
-      modelId: MODEL_ID,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 4096,
-        temperature: 0,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              ...images.map((image) => ({
-                type: 'image',
-                source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
-              })),
-              { type: 'text', text: buildPrompt(images.length) },
-            ],
-          },
-        ],
-      }),
-    }),
-  );
-
-  const payload = JSON.parse(new TextDecoder().decode(response.body)) as { content?: { text?: string }[] };
-  const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
+/**
+ * 写真を読ませて下書きにする。呼び先（Claude API か Bedrock か）と読み直しは llm.ts が決める。
+ */
+async function analyze(images: OcrImage[]): Promise<ReturnType<typeof normalizeDraft>> {
+  const { text } = await readReceipt(images, buildPrompt(images.length));
   return normalizeDraft(text);
 }
 

@@ -32,8 +32,15 @@ GET や他の操作まで署名しないこと。受け取る `contentType` は 
 `infra/lib/api-stack.ts` の IAM は、推論プロファイルと振り先の foundation-model の
 2 つの ARN だけを許している。`*` に広げないこと、別のアクションを足さないこと。
 Lambda ごとの権限も同じで、API は table への読み書きとバケットへの `Put` だけ、
-OCR はバケットの読み取りと Bedrock、それに読み取りジョブの行（パーティションキーが `OCR#` で始まる行）の
-`UpdateItem` だけ、カテゴリ判定は API キーのシークレットの読み取りだけに限ること。
+OCR はバケットの読み取りと Bedrock、読み取りジョブの行（パーティションキーが `OCR#` で始まる行）の
+`UpdateItem`、それに Claude API に入るための `sts:GetWebIdentityToken` だけ、
+カテゴリ判定は API キーのシークレットの読み取りだけに限ること。
+
+`sts:GetWebIdentityToken` は条件で、宛先（`sts:IdentityTokenAudience`）を `https://api.anthropic.com`、
+寿命（`sts:DurationSeconds`）を 300 秒以下、署名（`sts:SigningAlgorithm`）を RS256 に絞っている。
+条件を外さないこと。外すと、このロールで別の外部サービスに入るためのトークンも作れてしまう。
+OCR のロールの名前（`sakekasu-kakeibo-{env}-ocr-receipt`）は Claude Console のフェデレーションルールが
+照合しているので、ルールの照合を `role/*` のような前方一致に広げないこと。
 API が OCR の関数を非同期で呼ぶための `lambda:InvokeFunction` は、その関数 1 つに限ること。
 
 ## 5. カテゴリ判定の API キーをコードにもテンプレートにも置かないこと
@@ -50,9 +57,14 @@ API の Lambda は、保存した明細とレシートの中身（金額・日�
 CloudWatch で追うためで、利用者が出してよいと決めた。Cognito の `sub` と、
 リクエストヘッダ（トークン）は出さないこと。
 
-## 6. 外部のモデルへ渡すのは品目名と店舗名だけに限ること
+## 6. 外部のモデルへ渡すのはレシートの写真と、品目名・店舗名だけに限ること
 
-`infra/lambda/classify/` が TypeSafe に送るのは、レシートの品目名と明細の店舗名、
+レシートの OCR（`infra/lambda/ocr-receipt/`）は、写真を Anthropic の Claude API（`api.anthropic.com`）に送る
+（利用者が 2026-10 に認めた）。送るのは写真と読み方の指示文だけで、Cognito の `sub`、明細、
+ほかのレシートの中身を足さないこと。Claude API で失敗したときは Bedrock で読み直す。
+Claude API には API キーではなく Workload Identity Federation で入り、鍵をどこにも置かないこと。
+
+カテゴリ判定（`infra/lambda/classify/`）が TypeSafe に送るのは、レシートの品目名と明細の店舗名、
 そしてカテゴリの一覧（ID と名前）だけ。レシート画像、金額、日付、明細の件数や合計、
 Cognito の `sub` を送らないこと。1 回の呼び出しで見る対象の上限（`MAX_SUBJECTS`）を
 外さないこと。判定が落ちても処理が続くこと（キーワード表とルールに落ちる）。
