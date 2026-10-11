@@ -4,6 +4,7 @@ import { Hub } from 'aws-amplify/utils';
 import { LogIn } from 'lucide-react';
 import { Button, Card } from '../../components/ui/primitives';
 import { config } from '../../config';
+import { signOutRedirect } from './signOutRedirect';
 import { isOAuthCallback, readSsoHint } from './ssoHint';
 
 type Phase = 'checking' | 'signed-out' | 'redirecting' | 'signed-in';
@@ -100,10 +101,11 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
     };
   }, [handleSignIn]);
 
-  // マネージドログインのログアウトへ送り、戻り先（このサイトのルート）に帰ってくる
+  // マネージドログインのログアウトへ送る。戻り先は本番ならポータルのトップ、手元ならこのサイトのルート
   const handleSignOut = useCallback(async () => {
     if (config.mode !== 'remote') return;
-    await signOut();
+    const { preferred } = signOutRedirect(window.location);
+    await signOut(preferred ? { global: false, oauth: { redirectUrl: preferred } } : undefined);
     setPhase('signed-out');
   }, []);
 
