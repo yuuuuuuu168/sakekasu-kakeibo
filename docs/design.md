@@ -17,7 +17,7 @@ Lambda (api)  ──▶ DynamoDB (シングルテーブル)
 
 EventBridge (毎月1日 09:00 JST) ──▶ Lambda (monthly-report) ──▶ DynamoDB
 
-S3 (静的サイト) ◀── CloudFront ◀── kakeibo.sakekasu-builder.com
+S3 (静的サイト) ◀── CloudFront ◀── ブラウザ
 ```
 
 sakekasu-builder は AppSync + GraphQL だが、こちらは API Gateway + Lambda 1 本にした。

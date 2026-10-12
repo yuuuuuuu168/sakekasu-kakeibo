@@ -366,8 +366,7 @@ CloudFront の無効化は `index.html` だけでよい。ほかの資産はフ�
 - データは Cognito の `sub` で分けていて（DynamoDB の `pk` が `USER#<sub>`、レシート画像が
   `receipts/<sub>/...`）、`sub` はプールごとに違う。旧 sub の下の項目は新 sub の下へ写した
   （レシート画像は 0 件だった）
-- 旧プールを作っていた `-auth` スタックは、`bin/app.ts` から外した。残りの後片付け
-  （cdkd の状態、旧プールそのもの、旧 sub の項目）は下の「後片付け」で手で行う
+- 旧プールを作っていた `-auth` スタックは `bin/app.ts` から外し、旧プールも消してある
 
 写すのに使ったスクリプト（`infra/scripts/copy-user-data/`）は役目を終えたので消した。
 もう一度プールを替えることがあれば、コミット `ad0ba54` から取り出せる（既定は dry-run、
@@ -381,123 +380,6 @@ aws cognito-idp list-users --user-pool-id ap-northeast-1_yw1VDKtxW --region ap-n
   --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
   --output table
 ```
-
-切り戻し（旧プールへ戻す）は、旧プールを消した時点でできなくなる。
-
-### 後片付け
-
-`-auth` スタックを外す PR を main へマージし、**deploy ワークフローが成功したのを確かめてから**、
-Mac で次を順に打つ。マージ前やデプロイが落ちた状態で打たないこと（コードにスタックが残っている間に
-状態だけ消すと、次の `cdkd deploy --all` が旧プールを新しく作り直す）。
-
-スタックをアプリから外しただけでは、cdkd は何も消さない。`cdkd deploy --all` は合成した
-スタックだけを扱い、アプリに無いスタックの状態（S3 の `cdkd/sakekasu-kakeibo-dev-auth/ap-northeast-1/state.json`）
-には触らない。そのため状態の削除とプールの削除は人が打つ。
-
-旧プールには削除保護を掛けていない（CDK の既定のまま）し、ドメインも付けていないが、
-消す前に念のため確かめる手順を入れてある。どれも書き込みの権限が要るので、読み取り専用の
-`verify` プロファイルでは通らない。Claude のセッションからも打たない。
-
-```sh
-export AWS_PROFILE=sakekasu-builder   # 書き込みの権限があるプロファイル
-export AWS_REGION=ap-northeast-1
-old_pool=ap-northeast-1_O1PQB99IK
-table=sakekasu-kakeibo-dev
-```
-
-1. 旧 sub を旧プールから調べる。プールを消すと引けなくなるので、最初に行う。
-   ユーザーは 1 人だけのはずなので、表に 1 行だけ出ることを確かめてから変数に入れる
-
-   ```sh
-   aws cognito-idp list-users --user-pool-id "$old_pool" \
-     --query 'Users[].{username:Username,email:Attributes[?Name==`email`]|[0].Value,sub:Attributes[?Name==`sub`]|[0].Value}' \
-     --output table
-   old_sub=$(aws cognito-idp list-users --user-pool-id "$old_pool" \
-     --query 'Users[0].Attributes[?Name==`sub`]|[0].Value' --output text)
-   echo "$old_sub"
-   ```
-
-2. 旧 sub の下の項目を一覧で確かめる。写した明細などが並ぶ。月次レポートの Lambda は
-   テーブルにいる `pk` を全部回すので、1 日を跨ぐと `REPORT#<月>` が増えていることがある。
-   新 sub（上の共通プールの `list-users` で出る sub）と取り違えていないことも確かめる
-
-   ```sh
-   aws dynamodb query --table-name "$table" \
-     --key-condition-expression 'pk = :pk' \
-     --expression-attribute-values "{\":pk\":{\"S\":\"USER#$old_sub\"}}" \
-     --projection-expression 'pk, sk' --output table
-   ```
-
-3. 一覧に出た項目を全部消す。2 と同じ問い合わせの結果を 1 件ずつ消す
-
-   ```sh
-   aws dynamodb query --table-name "$table" \
-     --key-condition-expression 'pk = :pk' \
-     --expression-attribute-values "{\":pk\":{\"S\":\"USER#$old_sub\"}}" \
-     --projection-expression 'pk, sk' --output json \
-     | jq -c '.Items[]' \
-     | while read -r key; do
-         echo "消す: $key"
-         aws dynamodb delete-item --table-name "$table" --key "$key"
-       done
-   ```
-
-   2 をもう一度打って、空になったことを確かめる。レシート画像は写した時点で 0 件だったが、
-   `aws s3 ls "s3://sakekasu-kakeibo-dev-receipts-$(aws sts get-caller-identity --query Account --output text)/receipts/$old_sub/"`
-   で何も出ないことも見ておく（出たら `aws s3 rm --recursive` で同じ場所を消す）
-
-4. cdkd の状態から `-auth` スタックを消す。アプリから外したスタックなので、`cdkd destroy`
-   （合成したアプリを読む）ではなく、状態だけで動く `cdkd state destroy` を使う。
-   確認を訊かれるので、対象が `sakekasu-kakeibo-dev-auth` だけであることを見て答える
-
-   ```sh
-   cd infra
-   npx cdkd state resources sakekasu-kakeibo-dev-auth --stack-region ap-northeast-1
-   npx cdkd state destroy sakekasu-kakeibo-dev-auth --stack-region ap-northeast-1
-   npx cdkd state list   # sakekasu-kakeibo-dev-auth が消えていること
-   cd ..
-   ```
-
-   このとき cdkd（0.291.16）は、状態に記録された `DeletionPolicy` に従う。
-
-   - UserPoolClient（`DeletionPolicy` なし）は**消す**
-   - UserPool（`RemovalPolicy.RETAIN` なので `DeletionPolicy: Retain`）は**消さずに残し**、
-     「retained — DeletionPolicy: Retain」と出す
-   - 全部が消えるか残されるかで終われば、スタックの状態ファイルを消す。1 つでも失敗すると状態は残る
-     ので、原因を直して同じコマンドを打ち直す
-
-   `--remove-protection` は付けなくてよい。Retain のプールは削除の対象にならないので効かない。
-   状態だけを消してクライアントも残したいときは `cdkd state orphan` だが、どのみち次の手順で
-   プールごと消すので、ここでは `state destroy` にしている
-
-5. 旧プールそのものを消す。削除保護とドメインを先に確かめる
-
-   ```sh
-   aws cognito-idp describe-user-pool --user-pool-id "$old_pool" \
-     --query 'UserPool.{Name:Name,DeletionProtection:DeletionProtection,Domain:Domain,CustomDomain:CustomDomain,EstimatedNumberOfUsers:EstimatedNumberOfUsers}' \
-     --output table
-   ```
-
-   `Name` が `sakekasu-kakeibo-dev` であることを確かめる（共通プールの `ap-northeast-1_yw1VDKtxW` と
-   取り違えない）。`Domain` か `CustomDomain` が出たら、先にドメインを外す
-
-   ```sh
-   aws cognito-idp delete-user-pool-domain --user-pool-id "$old_pool" --domain <出たドメイン>
-   ```
-
-   `DeletionProtection` が `ACTIVE` なら外す。`update-user-pool` は渡さなかった設定を既定に戻すが、
-   消すプールなので構わない
-
-   ```sh
-   aws cognito-idp update-user-pool --user-pool-id "$old_pool" --deletion-protection INACTIVE
-   ```
-
-   そのうえで消す。プールに残っているアプリクライアントとユーザーも一緒に消える
-
-   ```sh
-   aws cognito-idp delete-user-pool --user-pool-id "$old_pool"
-   aws cognito-idp describe-user-pool --user-pool-id "$old_pool"   # ResourceNotFoundException になること
-   ```
 
 ## GitHub Actions からデプロイする
 
@@ -521,10 +403,9 @@ table=sakekasu-kakeibo-dev
 - **ロール**：cdkd は CDK bootstrap の `cdk-hnb659fds-*` ロールを使えない（CloudFormation に
   権限を委ねる前提の作りのため）。そこで `sakekasu-kakeibo-cdkd-deploy` スタックが
   `sakekasu-kakeibo-github-actions-cdkd` ロールを作り、Actions はこれを引き受けて cdkd を動かす。
-  権限は AdministratorAccess。main の Actions は以前から CloudFormation 経由で
-  `cdk-hnb659fds-cfn-exec-role`（bootstrap の既定で AdministratorAccess）を使えていたので、
-  main から届く権限の上限は変わらない。引き受けられるのは deploy ロールと同じく main だけ
-- **ガードレール**：上の管理者権限に、Deny だけの inline ポリシー `deploy-guardrail` を重ねている。
+  権限の中身は `infra/lib/cdkd-deploy-stack.ts` にある。main から届く権限の上限は、CloudFormation 経由で
+  デプロイしていたころと変わらない。引き受けられるのは deploy ロールと同じく main だけ
+- **ガードレール**：上の権限に、Deny だけの inline ポリシー `deploy-guardrail` を重ねている。
   同じアカウントにいる他のアプリ（App タグが kakeibo 以外のリソース、`sakekasu-kakeibo-` 以外の
   IAM ロール、他のアプリの cdkd の状態）と、IAM ユーザー・Organizations などには触れない。
   cdkd が誤った差分を出したときに、壊れるのを kakeibo の中に留めるためのもの。中身は
@@ -927,7 +808,7 @@ unset pw
   スタック間の参照で渡すことになるため。作るのは `infra/lib/alarms.ts` の `SharedAlarms` で、
   名前の接頭辞とリージョンが外れていると合成が止まる
 - 権限は足していない。トピックへの publish は共通基盤のトピックポリシーで許してあり、
-  cdkd 用ロール（AdministratorAccess）はアラーム、メトリクスフィルタ、Application Signals の SLO を作れる。
+  cdkd 用ロールはアラーム、メトリクスフィルタ、Application Signals の SLO を作れる。
   ガードレールも App タグが `kakeibo` のものは通すので、SLO にもタグを付けている（builder が SLO をタグから
   外したのは、builder の cdkd 用ロールが許可リストで `application-signals:GetServiceLevelObjective` を持たないため）。
   SLO に要るサービスリンクロール `AWSServiceRoleForCloudWatchApplicationSignals` は、builder が同じアカウントに
