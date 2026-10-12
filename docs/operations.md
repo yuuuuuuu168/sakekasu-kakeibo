@@ -662,7 +662,7 @@ GitHub 側に任せる。
 [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) を使い、
 PR の差分をレビューして指摘を PR のコメントに残す。CI は赤にしない。
 
-**課金は Claude の Max 契約枠から引く。** Bedrock も従量課金の API キーも通さない。そのために
+**課金は Claude の契約枠から引く。** Bedrock も従量課金の API キーも通さない。そのために
 OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「長命の鍵を置かない」とは折り合いが
 つかないが、これは AWS の権限に触れる鍵ではなく Claude の契約に紐づくトークンで、従量課金も
 発生しない、という判断で置いている。
@@ -682,7 +682,7 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 
 - 指摘が出ても CI は赤にしない。コメントを残すだけ
 - 走らせるのは `src` / `packages` / `infra` と設定ファイル、それにワークフロー自身。
-  `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
+  `docs` や `.kiro` だけの PR では走らない（契約の枠を無駄に使わない）
 - 走るのは PR を開いたとき・開き直したとき・Draft を外したときだけ。push のたびには見直さない。
   修正後にもう一度見せたいときは、PR を Draft に戻して Ready for review にし直す
 - 同じ PR でレビューが重なったら、前のレビューは打ち切る（`concurrency`）

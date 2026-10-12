@@ -20,8 +20,7 @@ export interface GithubOidcStackProps extends cdk.StackProps {
  * 1. OIDC プロバイダーを作らず、既にあるものを参照する。
  *    ここで作ろうとすると EntityAlreadyExists でデプロイが落ちる。
  *    信頼条件の中身は github-principal.ts にある
- * 2. diff 用のロールを作っていない。PR に `cdk diff` を出すワークフローを
- *    まだ持っていないため。作るときに足す
+ * 2. diff 用のロールを作っていない
  *
  * このスタックは Actions のデプロイ対象（`--all`）に含めない。
  * 自分自身のロールを自動更新して締め出す事故を避けるため、コンテキストフラグ付きの

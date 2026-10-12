@@ -14,9 +14,9 @@ import { parseAnthropicFederation } from '../lib/anthropic-federation';
 const app = new cdk.App();
 
 // 全リソースに App タグを付ける。アプリごとのコストを Cost Explorer で分けるため。
-// cdkd 用ロールのガードレール（deploy-guardrail.ts）の「他のアプリのタグが付いたリソースには
-// 触れない」の判定にもこのタグを使う。4 アプリと共通基盤が同じアカウントに
-// 同居していて、名前の接頭辞では分けきれないためタグで見分ける。
+// デプロイ用ロールのガードレール（deploy-guardrail.ts）と境界（role-boundary.ts）も、
+// 「他のアプリのタグが付いたリソースには触れない」の判定にこのタグを使う。4 アプリと
+// 共通基盤が同じアカウントに同居していて、名前の接頭辞では分けきれないためタグで見分ける。
 //
 // IAM ロールには付けない。CloudFormation から cdkd へ移したロールは物理名が CFN の命名のままで、
 // cdkd はロールを更新するたびに名前が変わったとみなして作り直す（2026-10-04 にタグを足しただけで
