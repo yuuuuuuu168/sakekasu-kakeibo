@@ -42,7 +42,7 @@ export async function handler(event: Event = {}): Promise<{ month: string; users
     try {
       await generate(pk, month);
     } catch (cause) {
-      // 1 人分の失敗で全体を落とさない。利用者は 1 人だが、将来増えたときのため
+      // テーブルにいる pk を全部回すので、1 つの失敗でほかの pk のレポートまで止めない
       console.error('[monthly-report] failed', { pk, month, cause });
     }
   }

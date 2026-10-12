@@ -38,7 +38,7 @@ export const GITHUB_DEPLOY_ROLE_NAME = 'sakekasu-kakeibo-github-actions-deploy';
  * github-oidc と違って、ここを壊しても deploy ロールは無傷で残り、次の push で直せる。
  *
  * 管理者権限の上から、他のアプリのリソースに触れないためのガードレール（Deny）を重ねる。
- * 中身と、何を防げて何を防げないかは deploy-guardrail.ts にある。
+ * 中身は deploy-guardrail.ts にある。
  *
  * アプリのロールに付ける Permissions Boundary もここで作る。cdkd に作らせると、境界を
  * 書き換えて外せてしまうため。理由は role-boundary.ts にある。
