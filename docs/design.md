@@ -133,8 +133,7 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 形の定義は `infra/lambda/shared/ocr-job.ts` にある。
 
 読み取りのモデルは Claude API（`claude-sonnet-5-5`）を既定にし、Bedrock（Sonnet 4.6）を控えに持つ
-（`infra/lambda/ocr-receipt/llm.ts`）。Claude API は Max プランに付く月々のクレジットで払えるので、
-単純に課金される Bedrock より安く、新しいモデルも早く使える。どちらにも同じ Messages API の形で頼む。
+（`infra/lambda/ocr-receipt/llm.ts`）。Claude API は新しいモデルを早く使える。どちらにも同じ Messages API の形で頼む。
 
 - Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が STS の
   `GetWebIdentityToken` で AWS 署名の JWT をもらい、SDK が Anthropic の短命のトークンと交換する
