@@ -26,11 +26,10 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）。
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けてある。
 
-### 1. ドメインと証明書（いまは付けていない）
+### 1. ドメインと証明書
 
-`kakeibo.sakekasu-builder.com` で配信する予定だが、**DNS の整理が済むまでは付けていない。**
-`infra/cdk.json` から `domainName` と `hostedZoneId` を外してあり、CloudFront の既定ドメイン
-（`https://xxxxxxxx.cloudfront.net`）で配信する。
+いまは独自ドメインを付けていない。`infra/cdk.json` に `domainName` と `hostedZoneId` が無いときは、
+CloudFront の既定ドメイン（`https://xxxxxxxx.cloudfront.net`）で配信する。
 
 #### なぜ付けられないか
 
@@ -587,8 +586,7 @@ cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 
 
 分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。`npm ci` と
 `npm test` も認証情報を入れる前に済ませている。npm のライフサイクルスクリプトと Vite の
-プラグインはどちらも依存のコードで、認証後に走らせると、依存が 1 つ乗っ取られただけで
-`AWS_SESSION_TOKEN` を読んで `cdk-hnb659fds-*` ロールへ入れてしまう。`--ignore-scripts` も
+プラグインはどちらも依存のコードなので、そこに AWS の認証情報を渡さない。`--ignore-scripts` も
 付けて二重に塞いでいる。この考え方は sakekasu-builder の `deploy.yml` から持ってきた。
 
 ### 一度だけ手で入れるもの

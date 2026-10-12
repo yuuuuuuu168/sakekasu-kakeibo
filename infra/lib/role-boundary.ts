@@ -7,14 +7,10 @@ import { SHARED_BUCKET_WRITE_ACTIONS } from './deploy-guardrail';
  * アプリのロール（Lambda の実行ロールなど）に付ける Permissions Boundary。
  * 作りは sakekasu-builder と sakekasu-integrated_environment の role-boundary.ts に倣った。
  *
- * cdkd 用ロールは接頭辞 `sakekasu-kakeibo-` のロールを作り替えられる。名前で閉じても、
- *
- *   1. `iam:PutRolePolicy` で Lambda の実行ロールに管理者相当を書き込む
- *   2. その関数のコードを差し替えて呼ぶ
- *
- * の 2 手で、cdkd 用ロールのガードレール（deploy-guardrail.ts）の外の操作に届く。
- * 境界を付けると、ロールの実効権限は「ロール自身のポリシー ∩ 境界」になるので、
- * 1 で何を書き込まれても境界の外には出られない。
+ * cdkd 用ロールは接頭辞 `sakekasu-kakeibo-` のロールを作り替えられる。境界を付けると、
+ * ロールの実効権限は「ロール自身のポリシー ∩ 境界」になるので、ロールのポリシーに何を書いても
+ * 境界の外には出られない。cdkd 用ロールが作るロールを通して、権限がガードレール
+ * （deploy-guardrail.ts）の外に広がらないようにするため。
  *
  * 中身は「全部許して、昇格と他のアプリに届くものだけ抜く」形。境界は許可を与えないので、
  * 天井を `*` にしてもアプリの権限は増えない。アプリのロールはどれも IAM を使わず、STS は
