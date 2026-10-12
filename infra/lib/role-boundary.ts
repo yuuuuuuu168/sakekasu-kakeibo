@@ -74,7 +74,7 @@ export function createRoleBoundary(scope: Construct, id: string): iam.ManagedPol
         ],
         resources: ['*'],
       }),
-      // cdkd 用ロールのガードレールと同じ条件。aws:ResourceTag を評価しない API には効かない
+      // cdkd 用ロールのガードレールと同じ条件
       new iam.PolicyStatement({
         sid: 'DenyOtherAppsResources',
         effect: iam.Effect.DENY,

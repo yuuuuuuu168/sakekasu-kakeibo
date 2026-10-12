@@ -15,8 +15,8 @@ import { DEFAULT_ANTHROPIC_MODEL_OCR, IDENTITY_TOKEN_AUDIENCE, IDENTITY_TOKEN_SE
 /**
  * レシートを読むモデルの呼び出し。呼び先は 2 つで、どちらも同じ Messages API の形で頼む。
  *
- * - anthropic: Claude API（api.anthropic.com）。Max プランに付く月々のクレジットで払う。既定
- * - bedrock: Amazon Bedrock の Claude。クレジット切れや障害のときの控え。単純に課金される
+ * - anthropic: Claude API（api.anthropic.com）。既定
+ * - bedrock: Amazon Bedrock の Claude。クレジット切れや障害のときの控え
  *
  * Claude API の認証は Workload Identity Federation で、API キーを持たない。この関数のロールで
  * STS の GetWebIdentityToken を呼んで AWS が署名した JWT をもらい、SDK が Anthropic の短命の
