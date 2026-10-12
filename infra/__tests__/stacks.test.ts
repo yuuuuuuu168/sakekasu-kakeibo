@@ -12,6 +12,7 @@ import {
 import { OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
+import { applyRoleBoundary } from '../lib/role-boundary';
 import { SiteStack } from '../lib/site-stack';
 import type { SharedAuth } from '../lib/shared-auth';
 import type { AnthropicFederation } from '../lib/anthropic-federation';
@@ -352,6 +353,24 @@ describe('ApiStack', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
     template.resourceCountIs('AWS::Logs::LogGroup', 4);
+  });
+});
+
+describe('Permissions Boundary', () => {
+  /*
+   * bin/app.ts はアプリのスタックすべてに境界を付ける。cdkd 用ロールは境界の無いロールを
+   * 作れないので、付け漏れはデプロイの AccessDenied になる
+   */
+  it('境界を付けたスタックでは、すべてのロールが境界を持つ', () => {
+    const { data, api, site } = stacks();
+    for (const stack of [data, api, site]) applyRoleBoundary(stack);
+    for (const stack of [data, api, site]) {
+      const roles = Object.values(Template.fromStack(stack).findResources('AWS::IAM::Role'));
+      for (const role of roles) {
+        expect(JSON.stringify(role.Properties.PermissionsBoundary)).toContain(':policy/sakekasu-kakeibo-role-boundary');
+      }
+    }
+    expect(Object.keys(Template.fromStack(api).findResources('AWS::IAM::Role')).length).toBeGreaterThan(0);
   });
 });
 

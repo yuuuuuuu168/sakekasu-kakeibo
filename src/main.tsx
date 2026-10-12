@@ -5,6 +5,7 @@ import { Amplify } from 'aws-amplify';
 import 'aws-amplify/auth/enable-oauth-listener';
 import { App } from './App';
 import { config } from './config';
+import { signOutRedirect } from './features/auth/signOutRedirect';
 import './index.css';
 
 if (config.mode === 'remote') {
@@ -13,6 +14,7 @@ if (config.mode === 'remote') {
    * http://localhost:5173/）。画面の遷移はハッシュなので、戻り先は常にルートでよい。
    * スコープは共通ログインが許している 3 つだけ。aws.cognito.signin.user.admin は無いので、
    * fetchUserAttributes や MFA・パスワードの変更など、それが要る API は使えない。
+   * サインアウトの戻り先は、本番ではポータルのトップも並べる（選ぶのは AuthGate。signOutRedirect.ts）。
    */
   const origin = `${window.location.origin}/`;
   Amplify.configure({
@@ -25,7 +27,7 @@ if (config.mode === 'remote') {
             domain: config.authDomain,
             scopes: ['openid', 'email', 'profile'],
             redirectSignIn: [origin],
-            redirectSignOut: [origin],
+            redirectSignOut: signOutRedirect(window.location).allowed,
             responseType: 'code',
           },
         },

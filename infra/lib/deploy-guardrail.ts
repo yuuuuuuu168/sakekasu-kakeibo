@@ -1,24 +1,27 @@
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 /**
- * cdkd 用ロールに付けるガードレール（Deny だけの inline ポリシー）。
+ * cdkd 用ロールに付けるガードレール（Deny だけ）。
  *
- * 4 アプリ（reinvent、builder、kakeibo、learning）と共通基盤は同じアカウントに同居していて、
- * cdkd 用ロールは AdministratorAccess を持つ。cdkd が誤った差分を出したとき（2026-10-04 には
- * タグを足しただけでロールの作り直しが起き、古いロールのポリシーが剥がされた）に、
- * 壊れるのをこのアプリの中に留めるのが目的。
+ * sakekasu-template から配っている（managed）。このファイルを直すときはテンプレート側を直して、
+ * 5 リポジトリに `/template-sync` で配る。アプリごとの違いは呼び出し側の引数で表す。
+ * sakekasu-reinvent は infra が JavaScript なので取り込まず、同じ中身を
+ * `app/infra/lib/deploy-guardrail.mjs` に手で写している。直したら、そちらも合わせる。
+ * 考え方は docs/aws-infra-rules.md の「5. デプロイ用ロールのガードレール」にある。
  *
- * 悪意のある main の変更は止められない。deploy ロールは CDK bootstrap の cfn-exec ロール
- * （AdministratorAccess）を引き受けられ、このポリシー自体も deploy ワークフローが入れ直す。
- * 防ぎたいのは事故のほう。
+ * 4 アプリ（reinvent、builder、kakeibo、learning）と共通基盤は同じアカウントに同居している。
+ * cdkd が誤った差分を出したとき（2026-10-04 にはタグを足しただけでロールの作り直しが起き、
+ * 古いロールのポリシーが剥がされた）に、壊れるのをこのアプリの中に留めるのが目的。
  *
  * - 他のアプリの App タグが付いたリソースには触れない（読み取りも含めて拒否する）
  * - 他のアプリの App タグを付けない（このアプリの値以外のタグを付けて作る・付け替える）
- * - IAM ロールは App タグを付けていない（理由は bin/app.ts）ので、名前の接頭辞で絞る
+ * - IAM ロールは App タグを付けていないので、名前の接頭辞で絞る。AgentCore Runtime も、
+ *   タグを付けていないアプリでは名前で絞る（agentRuntimeNamePrefix）
  * - GitHub Actions のロール自身は書き換えない（接頭辞の範囲に入ってしまうため、別に止める）
  * - IAM ユーザー・アクセスキー・MFA・ID プロバイダー、Organizations、アカウント設定、
  *   CloudTrail（証跡と CloudTrail Lake）の停止や削除には触れない。どのアプリのデプロイにも要らない
  * - cdkd の状態バケットそのものと、他のアプリの状態を消したり書き換えたりしない。共用の資産置き場は消さない
+ * - 境界（roleBoundaryArn）を渡したアプリでは、接頭辞の範囲のロールを境界なしで作ったり書き換えたりしない
  *
  * App タグを条件にした Deny は、aws:ResourceTag を評価しない API（S3 のオブジェクト操作など）
  * には効かない。状態バケットのオブジェクトは名前で別に止めている。
@@ -28,15 +31,29 @@ export interface DeployGuardrailProps {
   account: string;
   /** このアプリの App タグの値 */
   app: string;
-  /** このアプリが作る IAM ロールと管理ポリシーの名前の接頭辞（スタック名の接頭辞） */
-  resourceNamePrefix: string;
+  /**
+   * このアプリが作る IAM ロールと管理ポリシーの名前の接頭辞（スタック名の接頭辞）。
+   * 環境ごとに接頭辞が分かれるアプリ（builder の `sakekasu-dev-` など）は複数渡す
+   */
+  resourceNamePrefixes: string[];
   /** 書き換えさせない GitHub Actions のロールの名前 */
   protectedRoleNames: string[];
+  /**
+   * このアプリの AgentCore Runtime の名前の接頭辞。Runtime に App タグを付けていないアプリで渡す。
+   * 渡すと、この接頭辞の外の Runtime の変更・削除を拒否する
+   */
+  agentRuntimeNamePrefix?: string;
+  /**
+   * アプリのロールに付ける Permissions Boundary の ARN（role-boundary.ts）。渡すと、
+   * 接頭辞の範囲のロールを境界なしで作ったり書き換えたりするのを拒否する。
+   * 境界の条件を cdkd 用ロールの許可の側で持っているアプリ（builder、integrated）は渡さない
+   */
+  roleBoundaryArn?: string;
 }
 
 /**
  * 状態バケット（`cdkd/<スタック名>/<リージョン>/state.json`）にある他のアプリのスタック名。
- * アプリやスタックを足したらここにも足す。このアプリの分は呼び出し側の接頭辞で除く。
+ * アプリやスタックを足したらここにも足す。このアプリの分は呼び出し側の App タグの値で除く。
  * 末尾に `-` を付けないのは、接尾辞の無いスタック名（`ReinventPlanner` のような）も拾うため
  */
 export const CDKD_STACK_NAME_PATTERNS: Record<string, string[]> = {
@@ -51,7 +68,7 @@ export const CDKD_STACK_NAME_PATTERNS: Record<string, string[]> = {
  * 全アプリで共用するバケット（cdkd の状態と資産置き場）の削除と、削除・持ち出し・読めなくするのと
  * 同じ結果になる設定変更。どのアプリの cdkd もこれらを使わない
  */
-const SHARED_BUCKET_WRITE_ACTIONS = [
+export const SHARED_BUCKET_WRITE_ACTIONS = [
   's3:DeleteBucket',
   's3:PutBucketPolicy',
   's3:DeleteBucketPolicy',
@@ -91,13 +108,35 @@ const ROLE_WRITE_ACTIONS = [
 ];
 
 export function deployGuardrailStatements(props: DeployGuardrailProps): iam.PolicyStatement[] {
-  const { account, app, resourceNamePrefix, protectedRoleNames } = props;
+  const { account, app, resourceNamePrefixes, protectedRoleNames, agentRuntimeNamePrefix, roleBoundaryArn } = props;
+  if (resourceNamePrefixes.length === 0) {
+    throw new Error('resourceNamePrefixes が空。空だと DenyRolesOutsideApp が全ロールを拒否する');
+  }
   const stateBucket = `arn:aws:s3:::cdkd-state-${account}`;
   const otherStacks = Object.entries(CDKD_STACK_NAME_PATTERNS)
     .filter(([name]) => name !== app)
     .flatMap(([, patterns]) => patterns);
 
+  // AgentCore Runtime の ARN は runtime/<名前>-<ランダム>。エンドポイントはその下（runtime/<id>/runtime-endpoint/...）
+  const agentRuntimeStatements = agentRuntimeNamePrefix
+    ? [
+        new iam.PolicyStatement({
+          sid: 'DenyAgentRuntimesOutsideApp',
+          effect: iam.Effect.DENY,
+          actions: [
+            'bedrock-agentcore:UpdateAgentRuntime',
+            'bedrock-agentcore:DeleteAgentRuntime',
+            'bedrock-agentcore:CreateAgentRuntimeEndpoint',
+            'bedrock-agentcore:UpdateAgentRuntimeEndpoint',
+            'bedrock-agentcore:DeleteAgentRuntimeEndpoint',
+          ],
+          notResources: [`arn:aws:bedrock-agentcore:*:${account}:runtime/${agentRuntimeNamePrefix}*`],
+        }),
+      ]
+    : [];
+
   return [
+    ...agentRuntimeStatements,
     new iam.PolicyStatement({
       sid: 'DenyOtherAppsResources',
       effect: iam.Effect.DENY,
@@ -122,10 +161,10 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
       sid: 'DenyRolesOutsideApp',
       effect: iam.Effect.DENY,
       actions: ROLE_WRITE_ACTIONS,
-      notResources: [
-        `arn:aws:iam::${account}:role/${resourceNamePrefix}*`,
-        `arn:aws:iam::${account}:policy/${resourceNamePrefix}*`,
-      ],
+      notResources: resourceNamePrefixes.flatMap((prefix) => [
+        `arn:aws:iam::${account}:role/${prefix}*`,
+        `arn:aws:iam::${account}:policy/${prefix}*`,
+      ]),
     }),
     new iam.PolicyStatement({
       sid: 'DenyTamperingWithGithubActionsRoles',
@@ -184,13 +223,66 @@ export function deployGuardrailStatements(props: DeployGuardrailProps): iam.Poli
     // アプリごとの接頭辞が無いので、名前でアプリを分けられない。cdkd は資産を消さない
     // （有無を確かめて無ければ置くだけ）ので、削除と、削除と同じ結果になるバケットの設定変更
     // （ライフサイクルでの期限切れ、暗号化キーの差し替え、レプリケーションなど）を、状態バケットと同じだけ止める。
-    // 上書きは止められない。新しいリージョンの cdkd bootstrap はここに当たるので、人が打つ
+    // 新しいリージョンの cdkd bootstrap はここに当たるので、人が打つ
     new iam.PolicyStatement({
       sid: 'DenyDestroyingSharedAssets',
       effect: iam.Effect.DENY,
       actions: ['s3:DeleteObject', 's3:DeleteObjectVersion', ...SHARED_BUCKET_WRITE_ACTIONS],
       // ARN の * は / もまたぐので、バケットとその中のオブジェクトの両方に当たる
       resources: [`arn:aws:s3:::cdkd-assets-${account}-*`, `arn:aws:s3:::cdk-hnb659fds-assets-${account}-*`],
+    }),
+    ...(roleBoundaryArn ? roleBoundaryGuardStatements(account, resourceNamePrefixes, roleBoundaryArn) : []),
+  ];
+}
+
+/**
+ * アプリのロールを Permissions Boundary の内側に閉じ込める。
+ *
+ * 境界が付いていれば、ロールの実効権限は「ロール自身のポリシー ∩ 境界」で頭打ちになる。
+ * cdkd 用ロールが作り替えるロールを通して、権限がガードレールの外に広がらないようにする。
+ *
+ * iam:PermissionsBoundary はロールの現在の境界（CreateRole では付けようとしている境界）を指す。
+ * 否定の条件はキーが無いときも当たるので、境界の無いロールへの書き込みも拒否される。
+ * このキーを渡すのは CreateRole、PutRolePolicy、AttachRolePolicy、PutRolePermissionsBoundary
+ * などに限られ、TagRole などに付けると常に不一致になるので、対応しているものだけを並べる。
+ * 権限を減らす操作（DeleteRolePolicy、DetachRolePolicy、DeleteRole）は止めない。
+ * cdkd がロールを消すときに境界の無いロールでも通す必要があるため。
+ *
+ * cdkd はロールの更新で境界を先に付けてからポリシーを書くので、境界を足す最初のデプロイも通る。
+ */
+function roleBoundaryGuardStatements(
+  account: string,
+  resourceNamePrefixes: string[],
+  roleBoundaryArn: string,
+): iam.PolicyStatement[] {
+  const appRoles = resourceNamePrefixes.map((prefix) => `arn:aws:iam::${account}:role/${prefix}*`);
+  return [
+    new iam.PolicyStatement({
+      sid: 'DenyRoleWritesWithoutBoundary',
+      effect: iam.Effect.DENY,
+      actions: ['iam:CreateRole', 'iam:PutRolePolicy', 'iam:AttachRolePolicy', 'iam:PutRolePermissionsBoundary'],
+      resources: appRoles,
+      conditions: { ArnNotEquals: { 'iam:PermissionsBoundary': roleBoundaryArn } },
+    }),
+    // 信頼ポリシーは境界とは別に守る。cdkd が書き換えるのは CDK 側で assumedBy を変えたときだけで、
+    // そのときは AccessDenied で止まるので人が直す
+    new iam.PolicyStatement({
+      sid: 'DenyRemovingBoundaryAndTrust',
+      effect: iam.Effect.DENY,
+      actions: ['iam:DeleteRolePermissionsBoundary', 'iam:UpdateAssumeRolePolicy'],
+      resources: appRoles,
+    }),
+    // 境界そのものは CloudFormation のスタックで入れる。cdkd 用ロールからは書き換えさせない
+    new iam.PolicyStatement({
+      sid: 'DenyRewritingBoundary',
+      effect: iam.Effect.DENY,
+      actions: [
+        'iam:CreatePolicyVersion',
+        'iam:DeletePolicy',
+        'iam:DeletePolicyVersion',
+        'iam:SetDefaultPolicyVersion',
+      ],
+      resources: [roleBoundaryArn],
     }),
   ];
 }

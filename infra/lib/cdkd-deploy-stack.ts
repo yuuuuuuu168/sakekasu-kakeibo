@@ -3,6 +3,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct } from 'constructs';
 import { deployGuardrailStatements } from './deploy-guardrail';
 import { githubMainBranchPrincipal } from './github-principal';
+import { createRoleBoundary, roleBoundaryArn } from './role-boundary';
 
 export interface CdkdDeployStackProps extends cdk.StackProps {
   /** 信頼する GitHub リポジトリ（owner/repo 形式） */
@@ -37,7 +38,10 @@ export const GITHUB_DEPLOY_ROLE_NAME = 'sakekasu-kakeibo-github-actions-deploy';
  * github-oidc と違って、ここを壊しても deploy ロールは無傷で残り、次の push で直せる。
  *
  * 管理者権限の上から、他のアプリのリソースに触れないためのガードレール（Deny）を重ねる。
- * 中身と、何を防げて何を防げないかは deploy-guardrail.ts にある。
+ * 中身は deploy-guardrail.ts にある。
+ *
+ * アプリのロールに付ける Permissions Boundary もここで作る。cdkd に作らせると、境界を
+ * 書き換えて外せてしまうため。理由は role-boundary.ts にある。
  */
 export class CdkdDeployStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: CdkdDeployStackProps) {
@@ -51,14 +55,17 @@ export class CdkdDeployStack extends cdk.Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess')],
     });
 
+    createRoleBoundary(this, 'RoleBoundary');
+
     new iam.Policy(this, 'Guardrail', {
       policyName: 'deploy-guardrail',
       roles: [role],
       statements: deployGuardrailStatements({
         account: this.account,
         app: 'kakeibo',
-        resourceNamePrefix: 'sakekasu-kakeibo-',
+        resourceNamePrefixes: ['sakekasu-kakeibo-'],
         protectedRoleNames: [CDKD_DEPLOY_ROLE_NAME, GITHUB_DEPLOY_ROLE_NAME],
+        roleBoundaryArn: roleBoundaryArn(this.account),
       }),
     });
 

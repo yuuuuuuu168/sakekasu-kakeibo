@@ -26,29 +26,18 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）。
 リソース名の接頭辞 `sakekasu-kakeibo-{env}-` で分けてある。
 
-### 1. ドメインと証明書（いまは付けていない）
+### 1. ドメインと証明書
 
-`kakeibo.sakekasu-builder.com` で配信する予定だが、**DNS の整理が済むまでは付けていない。**
-`infra/cdk.json` から `domainName` と `hostedZoneId` を外してあり、CloudFront の既定ドメイン
-（`https://xxxxxxxx.cloudfront.net`）で配信する。
+いまは独自ドメインを付けていない。`infra/cdk.json` に `domainName` と `hostedZoneId` が無いときは、
+CloudFront の既定ドメイン（`https://xxxxxxxx.cloudfront.net`）で配信する。
 
 #### なぜ付けられないか
 
-`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウント（<アプリのアカウント ID>）に無い。
+`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウントに無い。
+`dig NS sakekasu-builder.com +short` が返す NS と、このアカウントのゾーンの NS が噛み合わない。
+本物のゾーンは別のアカウントにある。
 
-```
-$ dig NS sakekasu-builder.com +short      # 実際に委任されている NS
-ns-1240.awsdns-27.org. / ns-1718.awsdns-22.co.uk. / ns-804.awsdns-36.net. / ns-229.awsdns-28.com.
-
-$ aws route53 get-hosted-zone --id Z04931052NZ9UUTMOMG57   # このアカウントのゾーンの NS
-ns-1336.awsdns-39.org / ns-529.awsdns-02.net / ns-310.awsdns-38.com / ns-1620.awsdns-10.co.uk
-```
-
-噛み合っていない。このアカウントにあるゾーンは公開ゾーン（`PrivateZone: false`）だが、
-レジストラからの委任を受けていない。ドメインもこのアカウントの Route53 Domains には
-登録されていない。つまり本物のゾーンは別のアカウント（組織の管理アカウントが候補）にある。
-
-このゾーン ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
+このアカウントのゾーンの ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
 ゾーンに書かれ、ACM が永久に `PENDING_VALIDATION` のままになる。`cdk deploy` は待ち続け、
 証明書が最初のスタックなので残りの 4 スタックも作られない（実際に 45 分待って気づいた）。
 
@@ -144,12 +133,6 @@ aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
   --validation-method DNS --region us-east-1
 ```
 
-#### 使っていないゾーンについて
-
-このアカウントの `Z04931052NZ9UUTMOMG57` は委任されておらず、何も解決していない。
-証明書の検証で作られた `_xxxx.kakeibo...` の CNAME が残っているかもしれない。
-本物のゾーンの所在が分かったら、混乱の元なので消すかどうかを決める。
-
 ### 2. 依存を入れる
 
 **ルートと `infra` の両方で入れる。** Lambda のバンドルはリポジトリのルートで走り、
@@ -210,7 +193,9 @@ cdkd の状態も残るが、以後のデプロイでは触らない。証明書
 ユーザーの作り方は共通基盤の `docs/identity.md` の「ユーザーを作る」にある。
 セルフサインアップは無く、パスワードは 16 文字以上、MFA（認証アプリの TOTP）は必須。
 
-画面の「ログイン画面へ」を押すとマネージドログインへ移り、そこでパスワードと 6 桁を入れる。
+未サインインで開くと、ボタンを押さなくてもマネージドログインへ移り、そこでパスワードと 6 桁を入れる。
+自動で移るのはタブごとに 1 回だけで、戻ってきてもまだ未サインイン（取り消した、`?error=` 付きで戻った等）なら
+サインイン画面を出し、「パスキーでログイン」を押させる（印は sessionStorage。`src/features/auth/autoSignIn.ts`）。
 初回はパスワードの変更と認証アプリの登録もマネージドログインの画面が行う。この画面には
 ユーザー名やパスワードの入力欄は無い。ほかのアプリで先にログインしていれば、入力なしで戻ってくる。
 
@@ -544,6 +529,13 @@ table=sakekasu-kakeibo-dev
   IAM ロール、他のアプリの cdkd の状態）と、IAM ユーザー・Organizations などには触れない。
   cdkd が誤った差分を出したときに、壊れるのを kakeibo の中に留めるためのもの。中身は
   `infra/lib/deploy-guardrail.ts`。新しいリソースの作成で AccessDenied が出たら、まずここを疑う
+- **Permissions Boundary**：アプリのロール（Lambda の実行ロール）にはすべて、管理ポリシー
+  `sakekasu-kakeibo-role-boundary` を境界として付けている。cdkd 用ロールは境界の無いロールを
+  作れず、境界の取り外しや信頼ポリシーの書き換え、境界そのものの書き換えもできない。
+  境界は IAM・ロールの引き受け・Organizations と、他のアプリのリソース・cdkd の状態バケットを天井から外す。
+  Lambda から他のアプリのリソースを使う処理を足すと、デプロイは通っても実行時に AccessDenied になる。
+  CDK 側でロールの `assumedBy` を変えたときも、cdkd の UpdateAssumeRolePolicy が拒否されて止まる。
+  そのときは人が直す。中身は `infra/lib/role-boundary.ts`
 - **ロールのスタック**：これだけは CloudFormation で入れる。deploy ワークフローが毎回、
   deploy ロールで `cdk deploy sakekasu-kakeibo-cdkd-deploy -c cdkd-deploy=true` を打つ。
   cdkd に自分の権限の出どころを管理させると、壊したときに直す手段が無くなるため。
@@ -575,15 +567,16 @@ table=sakekasu-kakeibo-dev
   cdkd はそれを新規作成とみなし、テーブルやバケットは名前の衝突で落ち、Cognito の
   UserPool は 2 つ目を黙って作る
 
-cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 つあり、スクリプトで避けている。
-どちらも cdkd 側で直ったら回避を消す。
+cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 つあった。
 
 - CloudFormation を読むクライアントが、スタックのリージョンではなく実行時の `AWS_REGION` で
   作られる。us-east-1 の `-cert` スタックが見つからず、全リソースが「not found」になる。
-  スタックごとに `AWS_REGION` を合わせて打つ
+  スタックごとに `AWS_REGION` を合わせて打つ。0.296.28 でも直っていないので、回避は残している
 - Cognito の UserPoolClient の ID を CloudFormation の値（ClientId だけ）のまま渡すので、
   Cloud Control が求める `UserPoolId|ClientId` の形にならず取り込みに失敗する。
-  CloudFormation から両方を引いて `--resource` で明示する
+  0.294.7 で cdkd がテンプレートの値から組み立てるようになったので、`--resource` で明示する回避は外した
+
+どちらも詳しくは sakekasu-learning の cdkd メモ（#7、#8）にある。
 
 ### ジョブを 2 つに分けている理由
 
@@ -593,8 +586,7 @@ cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 
 
 分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。`npm ci` と
 `npm test` も認証情報を入れる前に済ませている。npm のライフサイクルスクリプトと Vite の
-プラグインはどちらも依存のコードで、認証後に走らせると、依存が 1 つ乗っ取られただけで
-`AWS_SESSION_TOKEN` を読んで `cdk-hnb659fds-*` ロールへ入れてしまう。`--ignore-scripts` も
+プラグインはどちらも依存のコードなので、そこに AWS の認証情報を渡さない。`--ignore-scripts` も
 付けて二重に塞いでいる。この考え方は sakekasu-builder の `deploy.yml` から持ってきた。
 
 ### 一度だけ手で入れるもの
@@ -660,58 +652,7 @@ GitHub 側に任せる。
 - **CodeQL**（コードスキャン、Default setup）: 自分で書いたコードの危険なパターン（XSS、注入など）
 - **Secret scanning と Push protection**: 鍵やトークンの書き込みを見つけ、push の時点で止める
 
-どれもリポジトリの Settings → Advanced Security で有効にしてある。以下は、非公開だった間に
-Security Agent を使っていたときの記録として残す。
-
-PR の差分を AWS Security Agent に読ませ、指摘を PR のコメントに残す。設計レビューと
-コードレビューは 2025 年 12 月のプレビューで入った機能で、ペネトレーションテストだけが
-2026 年 3 月に GA になっている。ここで使うのはコードレビューのほうなので、いまはプレビュー。
-
-**リポジトリに置くものは無い。** 設定は AWS のコンソールと GitHub App の側で完結する。
-ワークフローを 1 本足す方式（`anthropics/claude-code-security-review` など）も試したが、
-AWS で 1 本に寄せる判断をして入れていない。長命の API キーを Secrets に置かずに済むのも
-こちらの利点になる。
-
-### 先に確かめること
-
-sakekasu-builder が既に AWS Security Agent に繋がっている。**その連携がどの AWS アカウントから
-張られているかを先に見る。**
-
-「1 つの GitHub アカウント（組織）は 1 つの AWS アカウントにしか紐づけられない」制約があるため。
-GitHub App は 1 アカウントに 1 回しか入れられず、そのインストールが AWS アカウント 1 つに
-結びつく。builder も kakeibo も同じ `yuuuuuuu168` の下にあるので、
-
-- builder の連携が <アプリのアカウント ID> から張ってあるなら、そのまま kakeibo を足せる
-- 別の AWS アカウントから張ってあるなら、そちらに寄せるしかない。kakeibo 用に
-  別アカウントから繋ぐことはできない
-
-デプロイ先が同じアカウントであることと、Security Agent の連携をどのアカウントから張ったかは
-別の話なので、コンソールで実際に見る。
-
-### 入れ方
-
-1. **Agent Space を kakeibo 用に新しく作る。** builder と同じ Agent Space には入れない。
-   コードレビューの設定とセキュリティ要件は Agent Space 単位で、その中のコードレビューを
-   有効にした全リポジトリに効く。[docs/security-requirements.md](security-requirements.md)
-   の 8 件は kakeibo 固有（`sub` によるスコープ、レシート画像の S3、Bedrock の IAM）なので、
-   同居させると builder にも同じ要件が当たる
-2. **GitHub App のリポジトリ選択に `sakekasu-kakeibo` を足す。** builder だけを選んで
-   入れてあるなら kakeibo は見えない。自動では増えない。App 自体の入れ直しは要らない
-   （新しく繋ぐ場合は Integrations → Add integration → GitHub → Install and authorize）
-3. Agent Space の capabilities から「コードレビューを有効にする」を選び、
-   リポジトリを繋いで Code review のトグルを入れる
-4. セキュリティ要件を入れる。マネージドの要件（認証・認可、監視、暗号化、シークレット管理、
-   情報保護）を有効にしたうえで、`docs/security-requirements.md` の 8 件をカスタム要件として足す
-
-### 覚えておくこと
-
-- コードレビューはプレビュー。コンソール側の作りは変わりうるので、上の手順は当てにしすぎない
-- **CI の関門にはならない。** `test.yml` の `paths` にワークフロー自身を入れて「関門を外す変更を
-  無検査で通さない」形にしているが、コードレビューはリポジトリの外で動くので同じ手が使えない。
-  コンソールでトグルを切れば、リポジトリ側には何の跡も残らずに止まる
-- 観点を変えるときは、`docs/security-requirements.md` を直してからコンソールに反映する。
-  コンソールだけ直すと、次に誰かが読んだときに食い違う
-- 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
+どれもリポジトリの Settings → Advanced Security で有効にしてある。
 
 ## PR のコードレビュー（claude-code-action）
 
@@ -721,7 +662,7 @@ GitHub App は 1 アカウントに 1 回しか入れられず、そのインス
 [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action) を使い、
 PR の差分をレビューして指摘を PR のコメントに残す。CI は赤にしない。
 
-**課金は Claude の Max 契約枠から引く。** Bedrock も従量課金の API キーも通さない。そのために
+**課金は Claude の契約枠から引く。** Bedrock も従量課金の API キーも通さない。そのために
 OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「長命の鍵を置かない」とは折り合いが
 つかないが、これは AWS の権限に触れる鍵ではなく Claude の契約に紐づくトークンで、従量課金も
 発生しない、という判断で置いている。
@@ -732,7 +673,7 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 トークンが 1 度だけ表示される。それを repo の Settings → Secrets and variables → Actions に
 `CLAUDE_CODE_OAUTH_TOKEN` という名前で入れる。
 
-- トークンは atsuhisa の Max 契約に紐づく。CI のレビューは、対話で Claude Code を使うときと
+- トークンは個人の Claude の契約に紐づく。CI のレビューは、対話で Claude Code を使うときと
   同じ枠（5 時間・週次の上限）を食う。PR を出すのが本人と Claude だけなので量は少ない
 - ログアウトや期限切れで無効になることがある。そのときは `claude setup-token` で取り直して
   Secret を更新する
@@ -741,18 +682,14 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 
 - 指摘が出ても CI は赤にしない。コメントを残すだけ
 - 走らせるのは `src` / `packages` / `infra` と設定ファイル、それにワークフロー自身。
-  `docs` や `.kiro` だけの PR では走らない（Max の枠を無駄に使わない）
-- 同じ PR に続けて push したら、前のレビューは打ち切る（`concurrency`）
+  `docs` や `.kiro` だけの PR では走らない（契約の枠を無駄に使わない）
+- 走るのは PR を開いたとき・開き直したとき・Draft を外したときだけ。push のたびには見直さない。
+  修正後にもう一度見せたいときは、PR を Draft に戻して Ready for review にし直す
+- 同じ PR でレビューが重なったら、前のレビューは打ち切る（`concurrency`）
 - セキュリティもこちらで見る。依存パッケージ・危険なパターン・鍵の書き込みは GitHub 側の仕組みが見る
 - **`claude-review.yml` 自身を変える PR では、レビュー（Claude の実行）だけがスキップされる。**
   claude-code-action が、PR のワークフローを main の版と突き合わせ、違えば自分の実行を止める
-  （改ざん防止）。効くのはこの Action の中だけで、**ジョブ自体は動く**。同一リポジトリの
-  ブランチ PR では、checkout もトークンを見る step も、シークレット（`GITHUB_TOKEN`、
-  `id-token`、`CLAUDE_CODE_OAUTH_TOKEN`）付きで走る。つまりワークフローを書き換える PR が
-  安全になるわけではない。**信用できる PR にだけ使う**という前提は変わらない（このリポジトリは
-  private で fork も無く、PR を出すのは本人と Claude だけ）。fork からの PR にはシークレットが
-  渡らないので、鍵の有無を見る step でそのまま飛ぶ。track_progress の投稿を含む本来の動きは、
-  main にマージされて初めて次の PR から効く
+  （改ざん防止）。track_progress の投稿を含む本来の動きは、main にマージされて初めて次の PR から効く
 - `permissions` の `id-token: write` は、この検証とは別。claude-code-action が GitHub App
   トークンを OIDC で取得するのに要る
 
@@ -763,22 +700,6 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 ```sh
 git ls-remote https://github.com/anthropics/claude-code-action.git refs/tags/v1
 ```
-
-## npm audit で残している指摘
-
-ルート（画面）は 0 件。`infra/` には次の 8 件（high）が残るが、直さずに置いている（2026-10 時点）。
-
-- `braces`（GHSA-vfj7-8cjw-p6xm）と、それを引く `micromatch` / `fast-glob` / `@aws-cdk/cdk-assets-lib` /
-  `@aws-cdk/toolkit-lib` / `cdk-local` / `@go-to-k/cdkd`。`braces` は全バージョンが対象で修正版が無い。
-  `npm audit fix --force` は cdkd を 0.169.0 へ下げようとするので打たない。cdkd 配下を overrides で
-  動かすのもデプロイの挙動に響くので避けている
-- `aws-cdk-lib` に同梱（bundled）された `brace-expansion`。最新の aws-cdk-lib でも同じ版が入っていて、
-  同梱物には overrides が効かない
-
-どれも合成とデプロイのときに手元か Actions で動くだけで、利用者のブラウザにも Lambda にも載らない。
-渡るグロブはこちらのコードと cdk.json が決めたもので、外からの入力は入らないので、実害は無いと判断した。
-aws-cdk-lib や cdkd を上げたときは `(cd infra && npm audit)` を取り直し、消えていればこの節を削る。
-`npm audit fix` を `infra/` で打つと cdkd 配下（`cdk-local` など）まで上がるので、上げたいものだけを個別に入れる。
 
 ## よくある詰まり
 
@@ -1006,12 +927,18 @@ unset pw
   スタック間の参照で渡すことになるため。作るのは `infra/lib/alarms.ts` の `SharedAlarms` で、
   名前の接頭辞とリージョンが外れていると合成が止まる
 - 権限は足していない。トピックへの publish は共通基盤のトピックポリシーで許してあり、
-  cdkd 用ロール（AdministratorAccess）はアラームとメトリクスフィルタを作れる
+  cdkd 用ロール（AdministratorAccess）はアラーム、メトリクスフィルタ、Application Signals の SLO を作れる。
+  ガードレールも App タグが `kakeibo` のものは通すので、SLO にもタグを付けている（builder が SLO をタグから
+  外したのは、builder の cdkd 用ロールが許可リストで `application-signals:GetServiceLevelObjective` を持たないため）。
+  SLO に要るサービスリンクロール `AWSServiceRoleForCloudWatchApplicationSignals` は、builder が同じアカウントに
+  作ってある（2026-08-04）
 
 ### アラーム一覧
 
-`<env>` は `dev` / `prod`。どれも 5 分間の合計が 1 以上で鳴り、1 期間で判定する。
+`<env>` は `dev` / `prod`。SLO のもの以外は、5 分間の合計が 1 以上で鳴り、1 期間で判定する。
 データが無い期間は `NOT_BREACHING`（起きたときだけ値が出る指標なので、使っていない夜中に鳴らさない）。
+SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolling で動きが遅く、値が途切れた瞬間に
+「復旧」と判定されると、割ったままなのに OK が届くため。
 
 | アラーム名 | スタック | 見ているもの |
 | --- | --- | --- |
@@ -1025,6 +952,7 @@ unset pw
 | `sakekasu-kakeibo-<env>-ocr-receipt-fallbacks` | api | OCR のログの `[ocr] fallback`（Claude API で失敗し Bedrock で読み直した回数。ID 連携があるときだけ作る） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
+| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify}-slo-availability` | api | 下の SLO の達成率（`AWS/ApplicationSignals` の `AttainmentRate`、次元 `SloName`）が 1 時間平均で 90 を割った（3 個） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
 | `sakekasu-kakeibo-<env>-dynamodb-write-throttles` | data | テーブルの `WriteThrottleEvents` |
 
@@ -1047,6 +975,54 @@ unset pw
   残りの期間ずっと鳴り続けるため
 - DynamoDB はオンデマンドなので容量の設定は無いが、急な増加では弾かれる。`ThrottledRequests` は
   操作ごとの次元しか持たないので、テーブル単位の Read/WriteThrottleEvents を見ている
+
+### SLO（Lambda の成功率）
+
+CloudWatch Application Signals の SLO を、api / ocr-receipt / classify の Lambda に 1 つずつ置いている。
+作っているのは `infra/lib/slo.ts`。`<key>-errors` は 5 分で 1 回でも落ちれば鳴ってすぐ OK に戻るので、
+ぽつぽつ落ち続けているのか一度きりなのかが Slack の流れからは読みにくい。30 日の budget で見て、
+落ちた呼び出しが積み上がったときだけ 1 つの信号にする。
+
+| SLO 名 | SLI（request-based） | 目標 | 直近 30 日の実績（2026-10-11） |
+| --- | --- | --- | --- |
+| `sakekasu-kakeibo-<env>-api-availability` | `AWS/Lambda` の Errors ÷ Invocations（関数 `sakekasu-kakeibo-<env>-api`） | 30 日 rolling で 90% | 747 回 / エラー 0 |
+| `sakekasu-kakeibo-<env>-ocr-receipt-availability` | 同上（`-ocr-receipt`） | 同上 | 142 回 / エラー 0 |
+| `sakekasu-kakeibo-<env>-classify-availability` | 同上（`-classify`） | 同上 | 129 回 / エラー 0 |
+
+決めた理由。
+
+- **SLI を Lambda の標準メトリクスで組んでいる。** kakeibo の Lambda には Application Signals の計装（ADOT）を
+  入れていない。サービスとしては自動で認識されているが、`ApplicationSignals` 名前空間の Latency / Error / Fault は
+  出ていないので、サービスオペレーションの SLI（`keyAttributes` + `metricType`）では達成率が空になる。
+  代わりに `totalRequestCountMetric` に Invocations、`badCountMetric` に Errors（どちらも 1 分の Sum）を渡す
+- **Errors しか数えていない。** api / classify は処理の失敗を握って 500 / 502 を返し、OCR は失敗をジョブに書いて
+  正常に終えるので、それらはこの SLO に入らない（`api-5xx`、`ocr-receipt-failures` が見る）。
+  この SLO が見ているのは「関数が落ちずに返した割合」（タイムアウト・メモリ不足・初期化の失敗が入る）
+- **目標 90%。** 利用者が本人だけで呼び出しがまばら。厳しくしても数回の失敗で割り込み、鳴りっぱなしになるだけ
+  なので、builder と同じ値に置いた。api なら 30 日で 70 回ほどまでの失敗が budget に入る
+- **バーンレートの窓は 1 日だけ。** 1 時間窓だとほとんどがデータ無しになる。アラームもバーンレートではなく
+  達成率で見る。バーンレートはこの規模だと 1 回の失敗で跳ね、budget の考え方と噛み合わない
+- **月次レポートには置かない。** 月に 1 回しか呼ばれず、30 日の窓に 1 回しか入らない。成功率は 0% か 100% にしか
+  ならないので割合で見る意味が無い。失敗は `monthly-report-errors` / `-failures` が 1 回目から拾う
+- **所要時間の SLO は置かない。** request-based は「総数」と「良い（悪い）数」の 2 つのメトリクスを要するが、
+  Lambda の Duration は時間の統計しか出さず「しきい値を超えた回数」が標準メトリクスに無い。period-based なら
+  Duration の p99 を期間ごとに判定できるが、呼び出しがまばらで期間の大半がデータ無しになり、判定が成り立たない
+
+SLO の論理 ID（`slo.ts` の `idPrefix`）は変えない。変えると SLO が作り直され、30 日の達成率の履歴が消える。
+SLO 名とアラームの `SloName` は `sloNames()` の 1 か所で組み立てている。ずれるとアラームは
+`INSUFFICIENT_DATA` のまま居座り、何も鳴らない。
+
+達成率は読み取り専用のプロファイルで見られる。
+
+```sh
+aws application-signals get-service-level-objective --profile verify --region ap-northeast-1 \
+  --id sakekasu-kakeibo-dev-api-availability
+aws cloudwatch get-metric-statistics --profile verify --region ap-northeast-1 \
+  --namespace AWS/ApplicationSignals --metric-name AttainmentRate \
+  --dimensions Name=SloName,Value=sakekasu-kakeibo-dev-api-availability \
+  --start-time "$(date -u -d '-1 day' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)" \
+  --period 3600 --statistics Average
+```
 
 ### 届いているかを確かめる
 
@@ -1077,14 +1053,15 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Lambda | 無料枠の中 |
 | API Gateway（HTTP API） | 月 0.01 ドル未満 |
 | CloudFront | 無料枠の中 |
-| Claude API（Claude Sonnet 5.5） | Max プランに付く月々の API クレジットで払う。レシート 1 枚で入力 2,000〜20,000・出力 1,000〜4,000 トークン（写真の枚数と長さによる）、1 回 0.01〜0.1 ドルほど |
+| Claude API（Claude Sonnet 5.5） | Claude の API クレジットで払う。レシート 1 枚で入力 2,000〜20,000・出力 1,000〜4,000 トークン（写真の枚数と長さによる）、1 回 0.01〜0.1 ドルほど |
 | Bedrock（Claude Sonnet 4.6） | Claude API で失敗したときの控え。読み直した分だけ。1 枚で 2〜3 円ほど |
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
 | Route53（ゾーンを新設した場合のみ） | 月 0.5 ドル |
-| CloudWatch アラーム | 月 1.5 ドル。15 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| CloudWatch アラーム | 月 1.8 ドル。18 個 × 0.1 ドル（無料枠の 10 個はアカウント内のほかのアプリと分け合う） |
+| Application Signals の SLO | 月 0.5 ドル未満の見込み。SLO 1 つが SLI の期間（1 分）ごとに 2 シグナルを出すとして、3 つで月 26 万シグナルほど |
 
-既存のゾーンを使うなら、アラームの 1.5 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
+既存のゾーンを使うなら、アラームの 1.8 ドルが一番重く、Secrets Manager の 0.4 ドルが続く。
 OCR は Claude API のクレジットで払うので、AWS の請求に出るのは Bedrock で読み直した分だけになる。
 同時実行を 3 に、受け付けを毎秒 1 回（瞬間 5 回）に絞ってあるので暴走しても天井がある。
 カテゴリ判定は桁が 2 つ小さく、金額として数える意味がない。

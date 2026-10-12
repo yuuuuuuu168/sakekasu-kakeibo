@@ -51,6 +51,18 @@ Lambda だけで型が壊れていても手元では通ってしまい、CI（`t
 ターンの最終回答を検査し、英語主体なら日本語で書き直させる。コードブロック・インラインコード・
 URL は数えないので、英語のコマンドや英文の下書きはコードブロックに入れて見せる。
 
+## AWS のインフラを触るとき
+
+`infra/` の CDK、デプロイのワークフロー、IAM のどれかを触るときは、
+[docs/aws-infra-rules.md](docs/aws-infra-rules.md) に従う。5 つのアプリが同じ AWS アカウントに
+同居していて、名前とタグ、スタックのつなぎ方、デプロイの手順、デプロイ用ロールのガードレール、
+アプリのロールの Permissions Boundary、cdkd の落とし穴をそこにまとめてある。
+とくに次の 3 つは、破るとデプロイが止まるか、他のアプリやデータを壊す。
+
+- 手元から `cdkd deploy` / `cdk deploy` を打たない（例外は GitHub Actions のロールのスタック）
+- IAM ロールのプロパティを変えるときは、実物のロール名が cdkd の導く名前と一致するかを先に確かめる
+- 他のアプリのリソースを、アプリのロールから使わない
+
 ## AWS 確認作業の認証フロー
 
 デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）で、
@@ -86,7 +98,8 @@ variables に `SAKEKASU_AWS_LOGIN=1` を設定する。
 
 認証エラーに見える失敗が出たら、まずクラウド環境のネットワーク設定で `awsapps.com` と
 `*.amazonaws.com` への到達が許可されているかを疑う。`No access` が返るときは、承認した
-Identity Center のユーザーがグループ `sakekasu` に入っているかを疑う。
+Identity Center のユーザーに `AgentVerifyAccess` が割り当てられているか（割り当て用のグループに
+入っているか）を疑う。
 
 `aws-sso-login.sh` と `setup-aws-profile.sh` は `~/.aws/config` を上書きするため、
 クラウドセッション（`CLAUDE_CODE_REMOTE=true`）でのみ動作する。ローカルでは何もせず終了する。

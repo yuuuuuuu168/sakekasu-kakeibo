@@ -7,15 +7,18 @@
 # 指摘は PR のコメントに残す。CI は赤にしない。公開リポジトリなので指摘も公開される。
 # PR を出すのは本人と Claude だけで、指摘はマージ前に直す運用なので受け入れている。
 #
-# 課金は Claude の Max 契約枠から引く。secrets.CLAUDE_CODE_OAUTH_TOKEN を使うため、AWS の
+# 課金は Claude の契約枠から引く。secrets.CLAUDE_CODE_OAUTH_TOKEN を使うため、AWS の
 # Bedrock も従量課金の API キーも通らない。トークンは `claude setup-token` で作る（下の docs 参照）。
 #
 # paths に自身を入れているのは test.yml と同じ理由。この関門を外す変更そのものを無検査で
-# 通さないため。docs や .kiro だけの PR では走らせない（Max の枠を無駄に使わない）。
+# 通さないため。docs や .kiro だけの PR では走らせない（契約の枠を無駄に使わない）。
 name: claude-review
 
 on:
   pull_request:
+    # 開いたとき・開き直したとき・Draft を外したときだけ見る。push のたびには見直さない。
+    # 修正後にもう一度見せたいときは、PR を Draft に戻して Ready for review にし直す。
+    types: [opened, reopened, ready_for_review]
     paths:
       - 'src/**'
       - 'packages/**'
@@ -28,7 +31,7 @@ on:
       - 'vite.config.ts'
       - '.github/workflows/**'
 
-# 同じ PR に続けて push したら、前のレビューは打ち切る。Max の枠を二重に使わない。
+# 同じ PR に続けて push したら、前のレビューは打ち切る。契約の枠を二重に使わない。
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -40,6 +43,8 @@ permissions:
 
 jobs:
   review:
+    # Draft のうちは見ない。Ready for review にした時点で走る
+    if: ${{ !github.event.pull_request.draft }}
     name: 差分の汎用レビュー
     runs-on: ubuntu-latest
     steps:

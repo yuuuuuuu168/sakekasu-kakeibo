@@ -23,6 +23,7 @@ import {
   impliedRate,
   latestUsdRate,
   learnItemRules,
+  mergeItemRules,
   linkedTransaction,
   markNotDuplicate,
   receiptCategorySummary,
@@ -333,8 +334,7 @@ export function ReceiptsPage() {
   async function learnFromDraft(items: DraftItem[]): Promise<string> {
     const learned = learnItemRules(items);
     if (learned.length === 0) return '';
-    const ids = new Set(learned.map((rule) => rule.id));
-    await saveRules([...snapshot.rules.filter((rule) => !ids.has(rule.id)), ...learned]);
+    await saveRules(mergeItemRules(snapshot.rules, learned));
     return `直したカテゴリを ${learned.length} 品目ぶん覚えました。次から同じ品目に当てます。`;
   }
 

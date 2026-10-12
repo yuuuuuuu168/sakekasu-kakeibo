@@ -7,21 +7,26 @@ import { CertStack } from '../lib/cert-stack';
 import { DataStack } from '../lib/data-stack';
 import { DnsStack } from '../lib/dns-stack';
 import { SiteStack } from '../lib/site-stack';
+import { applyRoleBoundary } from '../lib/role-boundary';
 import { parseSharedAuth, userPoolRegion } from '../lib/shared-auth';
 import { parseAnthropicFederation } from '../lib/anthropic-federation';
 
 const app = new cdk.App();
 
 // 全リソースに App タグを付ける。アプリごとのコストを Cost Explorer で分けるため。
-// デプロイ用ロールに「他のアプリのタグが付いたリソースには触れない」ガードレールを足す
-// 予定で、その判定にもこのタグを使う。ガードレールはまだ無い（次の段で足す）ので、
-// それまではタグを付けただけでは何も守られない。4 アプリと共通基盤が同じアカウントに
-// 同居していて、名前の接頭辞では分けきれないためタグで見分ける。
+// デプロイ用ロールのガードレール（deploy-guardrail.ts）と境界（role-boundary.ts）も、
+// 「他のアプリのタグが付いたリソースには触れない」の判定にこのタグを使う。4 アプリと
+// 共通基盤が同じアカウントに同居していて、名前の接頭辞では分けきれないためタグで見分ける。
 //
 // IAM ロールには付けない。CloudFormation から cdkd へ移したロールは物理名が CFN の命名のままで、
 // cdkd はロールを更新するたびに名前が変わったとみなして作り直す（2026-10-04 にタグを足しただけで
 // 作り直しが起き、Lambda が消えたロールを指して止まった）。ロールはガードレールでも
 // 名前の接頭辞で範囲を絞る。
+//
+// Application Signals の SLO には付ける。sakekasu-builder は SLO を外しているが、それは builder の
+// cdkd 用ロールが許可リストで application-signals:GetServiceLevelObjective を持たず、cdkd が
+// Cloud Control でタグを更新する途中で断られたため。kakeibo の cdkd 用ロールは AdministratorAccess で、
+// ガードレールも App タグが kakeibo のものは通すので、同じ失敗は起きない（cdkd-deploy-stack.ts）。
 cdk.Tags.of(app).add('App', 'kakeibo', {
   excludeResourceTypes: ['AWS::IAM::Role'],
 });
@@ -65,6 +70,11 @@ if (app.node.tryGetContext('github-oidc')) {
   new CdkdDeployStack(app, 'sakekasu-kakeibo-cdkd-deploy', { repository: REPOSITORY, env });
 } else {
   buildApplicationStacks();
+  // アプリのロールはすべて Permissions Boundary の内側に置く（理由は lib/role-boundary.ts）。
+  // 境界は cdkd-deploy のスタックが作り、cdkd 用ロールは境界の無いロールを作れない
+  for (const stack of app.node.children) {
+    if (stack instanceof cdk.Stack) applyRoleBoundary(stack);
+  }
 }
 
 /** アプリ本体のスタック群 */

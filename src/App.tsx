@@ -10,6 +10,8 @@ import { TransactionsPage } from './features/transactions/TransactionsPage';
 import { ReceiptsPage } from './features/receipts/ReceiptsPage';
 import { ReportPage } from './features/report/ReportPage';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { SignOutButton } from './features/auth/SignOutButton';
+import { AppsLink } from './features/auth/AppsLink';
 
 export function App() {
   return (
@@ -36,6 +38,7 @@ function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
             <span className="rounded-md bg-warning/20 px-1.5 py-0.5 text-xs text-ink">ローカルモード</span>
           )}
           <div className="flex-1" />
+          <AppsLink />
           <a
             href={SETTINGS_PATH}
             aria-label="設定"
@@ -47,6 +50,7 @@ function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
           >
             <Settings size={16} />
           </a>
+          {config.mode === 'remote' && <SignOutButton onSignOut={onSignOut} />}
         </div>
         <nav className="mx-auto max-w-5xl overflow-x-auto px-2 pb-1">
           <ul className="flex gap-1">
@@ -73,13 +77,13 @@ function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
             データの読み込みに失敗しました。{error}
           </p>
         )}
-        {loading ? <p className="py-8 text-center text-sm text-ink-2">読み込み中…</p> : <Page onSignOut={onSignOut} />}
+        {loading ? <p className="py-8 text-center text-sm text-ink-2">読み込み中…</p> : <Page />}
       </main>
     </div>
   );
 }
 
-function Page({ onSignOut }: { onSignOut: () => Promise<void> }) {
+function Page() {
   const route = useRoute();
   switch (route.name) {
     case 'import':
@@ -91,7 +95,7 @@ function Page({ onSignOut }: { onSignOut: () => Promise<void> }) {
     case 'report':
       return <ReportPage month={route.month} />;
     case 'settings':
-      return <SettingsPage onSignOut={onSignOut} />;
+      return <SettingsPage />;
     default:
       return <ReceiptsPage />;
   }

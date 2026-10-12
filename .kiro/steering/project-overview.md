@@ -2,7 +2,7 @@
 inclusion: always
 ---
 
-# kakeibo.sakekasu-builder.com プロジェクト概要
+# sakekasu-kakeibo プロジェクト概要
 
 ## サービス概要
 
@@ -28,9 +28,6 @@ inclusion: always
 | 7 | カテゴリごとの月の上限と着地見込み | ✅ 実装済み |
 | 8 | 月末の叱りレポート（5 段階） | ✅ 実装済み |
 | 9 | 定期的な支払いの登録と、着地見込み・残り回数への反映 | ✅ 実装済み |
-| 10 | 画像として出力された PDF の取り込み | 未着手 |
-| 11 | 銀行・カード会社との自動連携 | やらない |
-| 12 | 収入・資産の管理、複数人での共有 | やらない |
 
 ## 技術スタック
 
@@ -38,8 +35,8 @@ inclusion: always
 - **ビルドツール**: Vite 7
 - **スタイリング**: Tailwind CSS v4（`@theme` ディレクティブ、`tailwind.config.js` 不使用）
 - **バックエンド**: AWS CDK（API Gateway HTTP API + Lambda + DynamoDB）
-- **認証**: 4 アプリ共通の Amazon Cognito ユーザープール（sakekasu-integrated_environment）。
-  マネージドログイン（`auth.sakekasu-builder.com`）へリダイレクトし、認可コード + PKCE で入る。
+- **認証**: 4 アプリ共通の Amazon Cognito ユーザープール（共通基盤の持ち物）。
+  マネージドログインへリダイレクトし、認可コード + PKCE で入る。
   値は `infra/cdk.json` の context `sharedAuth`。アプリ専用の旧プール（`-auth`）は外した
 - **配信**: S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中
 - **デプロイ**: アプリ本体のスタックは cdkd（CloudFormation を通さない CDK のデプロイツール）で出す。

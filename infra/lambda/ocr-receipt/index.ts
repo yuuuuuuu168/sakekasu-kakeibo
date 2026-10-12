@@ -60,6 +60,9 @@ export async function handler(event: Partial<OcrJobRequest>): Promise<void> {
   try {
     const images = await Promise.all(parsed.keys.map(loadImage));
     const draft = await analyze(images);
+    // 画面はこの後、覚えていない品目だけを判定（classify）に回す。[classify] 判定 の件数と
+    // 突き合わせると、覚えたカテゴリで決まった品目の数が分かる
+    console.info('[ocr] draft', JSON.stringify(summarizeDraft(draft)));
     await finish(sub, jobId, { status: 'done', draft });
   } catch (cause) {
     console.error('[ocr] failed', cause);
@@ -180,6 +183,18 @@ async function analyze(images: OcrImage[]): Promise<ReturnType<typeof normalizeD
 }
 
 type DraftItem = { name: string; amount: number; quantity?: number; categoryId: string };
+
+/**
+ * 読み取り結果の要約。ログに出す分だけを取り出す。
+ * 店名・品目名・金額・日付は出さない（読んだ中身はログに残さない）。
+ */
+export function summarizeDraft(draft: ReturnType<typeof normalizeDraft>): {
+  items: number;
+  warnings: number;
+  paymentMethod: SourceKind | null;
+} {
+  return { items: draft.items.length, warnings: draft.warnings.length, paymentMethod: draft.paymentMethod ?? null };
+}
 
 /**
  * モデルの出力を家計簿が扱える形に直す。
