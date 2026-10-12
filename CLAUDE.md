@@ -98,7 +98,8 @@ variables に `SAKEKASU_AWS_LOGIN=1` を設定する。
 
 認証エラーに見える失敗が出たら、まずクラウド環境のネットワーク設定で `awsapps.com` と
 `*.amazonaws.com` への到達が許可されているかを疑う。`No access` が返るときは、承認した
-Identity Center のユーザーがグループ `sakekasu` に入っているかを疑う。
+Identity Center のユーザーに `AgentVerifyAccess` が割り当てられているか（割り当て用のグループに
+入っているか）を疑う。
 
 `aws-sso-login.sh` と `setup-aws-profile.sh` は `~/.aws/config` を上書きするため、
 クラウドセッション（`CLAUDE_CODE_REMOTE=true`）でのみ動作する。ローカルでは何もせず終了する。
