@@ -34,21 +34,11 @@ cd infra && npm test  # CDK のアサーションと Lambda の単体テスト
 
 #### なぜ付けられないか
 
-`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウント（<アプリのアカウント ID>）に無い。
+`sakekasu-builder.com` の委任先ゾーンが、デプロイ先のアカウントに無い。
+`dig NS sakekasu-builder.com +short` が返す NS と、このアカウントのゾーンの NS が噛み合わない。
+本物のゾーンは別のアカウントにある。
 
-```
-$ dig NS sakekasu-builder.com +short      # 実際に委任されている NS
-ns-1240.awsdns-27.org. / ns-1718.awsdns-22.co.uk. / ns-804.awsdns-36.net. / ns-229.awsdns-28.com.
-
-$ aws route53 get-hosted-zone --id Z04931052NZ9UUTMOMG57   # このアカウントのゾーンの NS
-ns-1336.awsdns-39.org / ns-529.awsdns-02.net / ns-310.awsdns-38.com / ns-1620.awsdns-10.co.uk
-```
-
-噛み合っていない。このアカウントにあるゾーンは公開ゾーン（`PrivateZone: false`）だが、
-レジストラからの委任を受けていない。ドメインもこのアカウントの Route53 Domains には
-登録されていない。つまり本物のゾーンは別のアカウント（組織の管理アカウントが候補）にある。
-
-このゾーン ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
+このアカウントのゾーンの ID を context に入れて `cdk deploy` すると、証明書の検証レコードが誰も引かない
 ゾーンに書かれ、ACM が永久に `PENDING_VALIDATION` のままになる。`cdk deploy` は待ち続け、
 証明書が最初のスタックなので残りの 4 スタックも作られない（実際に 45 分待って気づいた）。
 
@@ -143,12 +133,6 @@ CDK が面倒を見る。
 aws acm request-certificate --domain-name kakeibo.sakekasu-builder.com \
   --validation-method DNS --region us-east-1
 ```
-
-#### 使っていないゾーンについて
-
-このアカウントの `Z04931052NZ9UUTMOMG57` は委任されておらず、何も解決していない。
-証明書の検証で作られた `_xxxx.kakeibo...` の CNAME が残っているかもしれない。
-本物のゾーンの所在が分かったら、混乱の元なので消すかどうかを決める。
 
 ### 2. 依存を入れる
 
@@ -670,58 +654,7 @@ GitHub 側に任せる。
 - **CodeQL**（コードスキャン、Default setup）: 自分で書いたコードの危険なパターン（XSS、注入など）
 - **Secret scanning と Push protection**: 鍵やトークンの書き込みを見つけ、push の時点で止める
 
-どれもリポジトリの Settings → Advanced Security で有効にしてある。以下は、非公開だった間に
-Security Agent を使っていたときの記録として残す。
-
-PR の差分を AWS Security Agent に読ませ、指摘を PR のコメントに残す。設計レビューと
-コードレビューは 2025 年 12 月のプレビューで入った機能で、ペネトレーションテストだけが
-2026 年 3 月に GA になっている。ここで使うのはコードレビューのほうなので、いまはプレビュー。
-
-**リポジトリに置くものは無い。** 設定は AWS のコンソールと GitHub App の側で完結する。
-ワークフローを 1 本足す方式（`anthropics/claude-code-security-review` など）も試したが、
-AWS で 1 本に寄せる判断をして入れていない。長命の API キーを Secrets に置かずに済むのも
-こちらの利点になる。
-
-### 先に確かめること
-
-sakekasu-builder が既に AWS Security Agent に繋がっている。**その連携がどの AWS アカウントから
-張られているかを先に見る。**
-
-「1 つの GitHub アカウント（組織）は 1 つの AWS アカウントにしか紐づけられない」制約があるため。
-GitHub App は 1 アカウントに 1 回しか入れられず、そのインストールが AWS アカウント 1 つに
-結びつく。builder も kakeibo も同じ `yuuuuuuu168` の下にあるので、
-
-- builder の連携が <アプリのアカウント ID> から張ってあるなら、そのまま kakeibo を足せる
-- 別の AWS アカウントから張ってあるなら、そちらに寄せるしかない。kakeibo 用に
-  別アカウントから繋ぐことはできない
-
-デプロイ先が同じアカウントであることと、Security Agent の連携をどのアカウントから張ったかは
-別の話なので、コンソールで実際に見る。
-
-### 入れ方
-
-1. **Agent Space を kakeibo 用に新しく作る。** builder と同じ Agent Space には入れない。
-   コードレビューの設定とセキュリティ要件は Agent Space 単位で、その中のコードレビューを
-   有効にした全リポジトリに効く。[docs/security-requirements.md](security-requirements.md)
-   の 8 件は kakeibo 固有（`sub` によるスコープ、レシート画像の S3、Bedrock の IAM）なので、
-   同居させると builder にも同じ要件が当たる
-2. **GitHub App のリポジトリ選択に `sakekasu-kakeibo` を足す。** builder だけを選んで
-   入れてあるなら kakeibo は見えない。自動では増えない。App 自体の入れ直しは要らない
-   （新しく繋ぐ場合は Integrations → Add integration → GitHub → Install and authorize）
-3. Agent Space の capabilities から「コードレビューを有効にする」を選び、
-   リポジトリを繋いで Code review のトグルを入れる
-4. セキュリティ要件を入れる。マネージドの要件（認証・認可、監視、暗号化、シークレット管理、
-   情報保護）を有効にしたうえで、`docs/security-requirements.md` の 8 件をカスタム要件として足す
-
-### 覚えておくこと
-
-- コードレビューはプレビュー。コンソール側の作りは変わりうるので、上の手順は当てにしすぎない
-- **CI の関門にはならない。** `test.yml` の `paths` にワークフロー自身を入れて「関門を外す変更を
-  無検査で通さない」形にしているが、コードレビューはリポジトリの外で動くので同じ手が使えない。
-  コンソールでトグルを切れば、リポジトリ側には何の跡も残らずに止まる
-- 観点を変えるときは、`docs/security-requirements.md` を直してからコンソールに反映する。
-  コンソールだけ直すと、次に誰かが読んだときに食い違う
-- 費用はプレビューの間は無料。GA 後の料金は出てから確かめる
+どれもリポジトリの Settings → Advanced Security で有効にしてある。
 
 ## PR のコードレビュー（claude-code-action）
 
@@ -742,7 +675,7 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 トークンが 1 度だけ表示される。それを repo の Settings → Secrets and variables → Actions に
 `CLAUDE_CODE_OAUTH_TOKEN` という名前で入れる。
 
-- トークンは atsuhisa の Max 契約に紐づく。CI のレビューは、対話で Claude Code を使うときと
+- トークンは個人の Claude の契約に紐づく。CI のレビューは、対話で Claude Code を使うときと
   同じ枠（5 時間・週次の上限）を食う。PR を出すのが本人と Claude だけなので量は少ない
 - ログアウトや期限切れで無効になることがある。そのときは `claude setup-token` で取り直して
   Secret を更新する
@@ -758,13 +691,7 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 - セキュリティもこちらで見る。依存パッケージ・危険なパターン・鍵の書き込みは GitHub 側の仕組みが見る
 - **`claude-review.yml` 自身を変える PR では、レビュー（Claude の実行）だけがスキップされる。**
   claude-code-action が、PR のワークフローを main の版と突き合わせ、違えば自分の実行を止める
-  （改ざん防止）。効くのはこの Action の中だけで、**ジョブ自体は動く**。同一リポジトリの
-  ブランチ PR では、checkout もトークンを見る step も、シークレット（`GITHUB_TOKEN`、
-  `id-token`、`CLAUDE_CODE_OAUTH_TOKEN`）付きで走る。つまりワークフローを書き換える PR が
-  安全になるわけではない。**信用できる PR にだけ使う**という前提は変わらない（このリポジトリは
-  private で fork も無く、PR を出すのは本人と Claude だけ）。fork からの PR にはシークレットが
-  渡らないので、鍵の有無を見る step でそのまま飛ぶ。track_progress の投稿を含む本来の動きは、
-  main にマージされて初めて次の PR から効く
+  （改ざん防止）。track_progress の投稿を含む本来の動きは、main にマージされて初めて次の PR から効く
 - `permissions` の `id-token: write` は、この検証とは別。claude-code-action が GitHub App
   トークンを OIDC で取得するのに要る
 
@@ -775,22 +702,6 @@ OAuth トークンを 1 本 repo に置く。デプロイで避けてきた「�
 ```sh
 git ls-remote https://github.com/anthropics/claude-code-action.git refs/tags/v1
 ```
-
-## npm audit で残している指摘
-
-ルート（画面）は 0 件。`infra/` には次の 8 件（high）が残るが、直さずに置いている（2026-10 時点）。
-
-- `braces`（GHSA-vfj7-8cjw-p6xm）と、それを引く `micromatch` / `fast-glob` / `@aws-cdk/cdk-assets-lib` /
-  `@aws-cdk/toolkit-lib` / `cdk-local` / `@go-to-k/cdkd`。`braces` は全バージョンが対象で修正版が無い。
-  `npm audit fix --force` は cdkd を 0.169.0 へ下げようとするので打たない。cdkd 配下を overrides で
-  動かすのもデプロイの挙動に響くので避けている
-- `aws-cdk-lib` に同梱（bundled）された `brace-expansion`。最新の aws-cdk-lib でも同じ版が入っていて、
-  同梱物には overrides が効かない
-
-どれも合成とデプロイのときに手元か Actions で動くだけで、利用者のブラウザにも Lambda にも載らない。
-渡るグロブはこちらのコードと cdk.json が決めたもので、外からの入力は入らないので、実害は無いと判断した。
-aws-cdk-lib や cdkd を上げたときは `(cd infra && npm audit)` を取り直し、消えていればこの節を削る。
-`npm audit fix` を `infra/` で打つと cdkd 配下（`cdk-local` など）まで上がるので、上げたいものだけを個別に入れる。
 
 ## よくある詰まり
 
@@ -1144,7 +1055,7 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
 | Lambda | 無料枠の中 |
 | API Gateway（HTTP API） | 月 0.01 ドル未満 |
 | CloudFront | 無料枠の中 |
-| Claude API（Claude Sonnet 5.5） | Max プランに付く月々の API クレジットで払う。レシート 1 枚で入力 2,000〜20,000・出力 1,000〜4,000 トークン（写真の枚数と長さによる）、1 回 0.01〜0.1 ドルほど |
+| Claude API（Claude Sonnet 5.5） | Claude の API クレジットで払う。レシート 1 枚で入力 2,000〜20,000・出力 1,000〜4,000 トークン（写真の枚数と長さによる）、1 回 0.01〜0.1 ドルほど |
 | Bedrock（Claude Sonnet 4.6） | Claude API で失敗したときの控え。読み直した分だけ。1 枚で 2〜3 円ほど |
 | Secrets Manager | 月 0.4 ドル。シークレット 1 個ぶん |
 | TypeSafe（Jev） | 入力 100 万トークンで 0.042 ドル、出力は無料。レシート 1 枚は 1,000 トークン未満 |
