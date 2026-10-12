@@ -1,4 +1,4 @@
-# sakekasu 家計簿 (kakeibo.sakekasu-builder.com)
+# sakekasu 家計簿
 
 クレジットカードと PayPay の明細を取り込んで、カテゴリごとの上限と突き合わせ、月末に叱ってくれる家計簿。手入力をなるべくしないことを最優先にしている。
 
@@ -6,7 +6,7 @@
 
 ## 機能
 
-ここに載っているものはすべて実装済み。これから作るものは [GitHub Issue](https://github.com/yuuuuuuu168/sakekasu-kakeibo/issues) で管理する。
+ここに載っているものはすべて実装済み。
 
 ### 取り込む
 
@@ -47,21 +47,12 @@
 
 | 機能 | 補足 |
 |------|------|
-| 共通ログイン | 4 アプリ共通の Cognito ユーザープールのマネージドログイン（`auth.sakekasu-builder.com`）へリダイレクトして入る（認可コード + PKCE）。セルフサインアップなし、MFA（認証アプリの TOTP）は必須 |
+| 共通ログイン | 4 アプリ共通の Cognito ユーザープールのマネージドログインへリダイレクトして入る（認可コード + PKCE）。セルフサインアップなし、MFA（認証アプリの TOTP）は必須 |
 | データ保護 | DynamoDB の PITR、S3 の公開禁止と暗号化、4 つの主要リソースは `RemovalPolicy.RETAIN` |
 | レシート画像の自動削除 | 90 日。OCR で品目を取り出した後の画像は残す意味が薄い |
 | 配信 | S3 + CloudFront（OAC）。セキュリティヘッダも CDK の中に置いた |
 | ローカルモード | AWS が無くても `npm run dev` で通しで動く。データは localStorage |
 | PR ごとのテスト・lint・型検査 | GitHub Actions がフロントとインフラの 2 系統を並べて走らせる |
-
-### これから
-
-| 機能 | 状態 |
-|------|------|
-| 画像として出力された PDF の取り込み | 未着手。いまはその場で断って CSV を促す。レシート OCR とは出力の形が違うので、経路を分けて作ることになる |
-| 銀行・カード会社との自動連携 | やらない。明細の手動アップロードで始める |
-| 収入と資産の管理 | やらない。支出だけを見る |
-| 複数人での共有 | やらない。世帯の概念を入れない |
 
 ## こだわりポイント
 
@@ -109,17 +100,9 @@ OCR のモデル ID とその IAM は、sakekasu-builder が同じアカウン�
 
 ### OCR は Claude API を ID 連携で呼び、Bedrock を控えに持つ
 
-OCR の既定の呼び先は Claude API（`claude-sonnet-5-5`）。Max プランに付く月々の API クレジットで払えるので、単純に課金される Bedrock より安く、新しいモデルも早く使える（Bedrock では最新モデルのクォータが 0 だった）。Bedrock の Sonnet 4.6 は消さずに控えとして残し、残高不足・認証の失敗・障害のときは同じ頼みを Bedrock で読み直す。
+OCR の既定の呼び先は Claude API（`claude-sonnet-5-5`）。新しいモデルを早く使えるため。Bedrock の Sonnet 4.6 は消さずに控えとして残し、Claude API で失敗したときは同じ頼みを Bedrock で読み直す。
 
 Claude API には API キーではなく Workload Identity Federation で入る。OCR の Lambda が自分のロールで STS の `GetWebIdentityToken` を呼び、AWS が署名した JWT を Anthropic の短命のトークンと交換する。鍵を Secrets Manager にも環境変数にも置かないので、漏れる鍵が無い。
-
-| 変えたもの | 中身 |
-| --- | --- |
-| `infra/lambda/ocr-receipt/llm.ts` | 呼び先の選択、ID 連携、Bedrock への読み直し、消費（トークン数）のログ |
-| `infra/lib/api-stack.ts` | OCR のロール名を固定（ルールが ARN を照合する）、`sts:GetWebIdentityToken`（宛先・寿命・署名を条件で絞る）、環境変数、読み直しのアラーム |
-| `infra/cdk.json` | context `anthropicFederation`（ルール・組織・サービスアカウント・ワークスペースの ID。秘密ではない） |
-| 環境変数 | `LLM_PROVIDER`、`ANTHROPIC_MODEL_OCR`、`ANTHROPIC_FEDERATION_RULE_ID`、`ANTHROPIC_ORGANIZATION_ID`、`ANTHROPIC_SERVICE_ACCOUNT_ID`、`ANTHROPIC_WORKSPACE_ID`（Bedrock は従来の `BEDROCK_MODEL_ID`） |
-| IAM の差分 | OCR のロールに `sts:GetWebIdentityToken` を足しただけ。`bedrock:InvokeModel` は控えのために残す。Secrets Manager は使わない |
 
 設定の手順と、読み直したときの原因の見分け方は [docs/operations.md](docs/operations.md) の「Claude API の ID 連携（OCR）」にある。
 
@@ -200,7 +183,7 @@ CSV の取り込み、自動分類、内訳の分割、上限の設定、月次�
 
 デプロイは main へのマージ経由。`.github/workflows/deploy.yml` が [cdkd](https://github.com/go-to-k/cdkd) で `cdkd deploy --all` を打ち、続けてフロントをビルドして S3 へ同期し、`index.html` を無効化する。cdkd は CloudFormation を通さずに AWS の API を直接叩くので、CloudFormation の変更セットと待ちが無くなる。認証は GitHub OIDC で、リポジトリにアクセスキーは置かない。
 
-アカウント ID は公開リポジトリに書かない。ロールの ARN はリポジトリの secret `AWS_ACCOUNT_ID`（Settings → Secrets and variables → Actions）から組み立て、CDK はデプロイ時の認証情報から `CDK_DEFAULT_ACCOUNT` を受け取る。証明書は `infra/cdk.json` に ID（`certificateId`）だけを置く。AWS 確認用の `scripts/aws-verify.conf` の `SSO_ACCOUNT_ID` は、クラウド環境の Environment variables で渡す。`infra/__tests__/no-account-ids.test.ts` が、ダミー以外の 12 桁の数字が入ると落ちる。
+アカウント ID は公開リポジトリに書かず、デプロイ時の認証情報や secret から受け取る。`infra/__tests__/no-account-ids.test.ts` が、ダミー以外の 12 桁の数字が入ると落ちる。
 
 ジョブを 2 つに分けているのは、フロントのビルドに AWS の認証情報を持ち込まないため。依存の取得とテストも認証情報を入れる前に済ませている。詳しい理由は [docs/operations.md](docs/operations.md) にある。
 
@@ -212,13 +195,11 @@ npx cdk bootstrap  # このアカウントで CDK 初回のときだけ
 npx cdk deploy sakekasu-kakeibo-github-oidc -c github-oidc=true
 ```
 
-Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。cdkd が使うロール（`sakekasu-kakeibo-cdkd-deploy`）と、CloudFormation から cdkd への移行は、deploy ワークフローが自分で済ませる。
+Actions に自分のロールを触らせると、更新ミスで自分を締め出す恐れがあるので、このスタックだけは `--all` から外してフラグ付きの手動デプロイにしてある。cdkd が使うロールと、CloudFormation から cdkd への移行は、deploy ワークフローが自分で済ませる。
 
-スタックは 4 つ。`-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。ログインのユーザープールは共通基盤（sakekasu-integrated_environment）の持ち物で、このリポジトリでは作らない。
+スタックは 4 つ。`-data` `-api` `-site` が ap-northeast-1 で、証明書の `-cert` だけが CloudFront の制約で us-east-1 に立つ。ログインのユーザープールは共通基盤の持ち物で、このリポジトリでは作らない。
 
-ドメインはまだ付けていない。CloudFront の既定ドメインで配信している。`sakekasu-builder.com` の委任先ゾーンがデプロイ先のアカウントに無く、そのままでは証明書の DNS 検証が通らないため。経緯と、付けるときの手順（サブドメインの委任）は [docs/operations.md](docs/operations.md) にある。
-
-2 回目以降は `.github/workflows/deploy.yml` を手で起動する。使う前にリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に、GitHub OIDC で引き受けられるロールの ARN を入れておく。sakekasu-builder にも同じ仕組みのスタックがあるが、あちらのロールは信頼ポリシーが `yuuuuuuu168/sakekasu-builder` に絞られているので、このリポジトリからは引き受けられない。
+2 回目以降は `.github/workflows/deploy.yml` を手で起動する。使う前にリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に、GitHub OIDC で引き受けられるロールの ARN を入れておく。
 
 ## テスト
 
