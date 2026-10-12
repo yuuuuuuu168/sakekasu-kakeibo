@@ -1,4 +1,4 @@
-# フロントとインフラのテストを PR とマージ時に走らせる。
+# フロントとインフラのテストを PR で走らせる。
 #
 # ジョブを 2 つに分けているのは、片方が落ちてももう片方の結果が残るようにするため。
 # インフラ側は CDK の synth（esbuild のバンドル込み）を通すので 20 秒ほどかかる。
@@ -19,19 +19,13 @@ on:
       - 'tsconfig*.json'
       - 'vite.config.ts'
       - '.github/workflows/**'
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'theme/**'
-      - 'packages/**'
-      - 'infra/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'eslint.config.js'
-      - 'tsconfig*.json'
-      - 'vite.config.ts'
-      - '.github/workflows/**'
+
+# PR に続けて push したら、前の実行は打ち切る。結果を見るのは最新のコミットだけなので。
+# main へのマージ後には走らせない。PR の時点で main と混ぜた結果を検査していて、
+# deploy 系のワークフローもデプロイの前に同じ npm test を通すため、二重になる。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
