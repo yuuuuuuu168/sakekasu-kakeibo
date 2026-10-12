@@ -3,7 +3,7 @@
 sakekasu-kakeibo は、クレジットカードと PayPay の明細を取り込んで、カテゴリごとの上限と突き合わせ、
 月末に叱ってくれる家計簿。手入力をなるべくしないことが最優先の設計方針。
 
-配信先は `https://kakeibo.sakekasu-builder.com`。利用者は本人ひとり。
+配信は CloudFront。利用者は本人ひとり。
 
 ## 解きたい問題
 
