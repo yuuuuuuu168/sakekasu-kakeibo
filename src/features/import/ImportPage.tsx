@@ -227,9 +227,9 @@ export function ImportPage() {
           }
         >
           <div className="grid gap-3 sm:grid-cols-4">
-            <ColumnSelect label="日付の列" value={mapping.date} width={width} loaded={loaded} onChange={(date) => setMapping({ ...mapping, date })} />
-            <ColumnSelect label="店名の列" value={mapping.merchant} width={width} loaded={loaded} onChange={(merchant) => setMapping({ ...mapping, merchant })} />
-            <ColumnSelect label="金額の列" value={mapping.amount} width={width} loaded={loaded} onChange={(amount) => setMapping({ ...mapping, amount })} />
+            <ColumnSelect label="日付の列" value={mapping.date} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(date) => setMapping({ ...mapping, date })} />
+            <ColumnSelect label="店名の列" value={mapping.merchant} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(merchant) => setMapping({ ...mapping, merchant })} />
+            <ColumnSelect label="金額の列" value={mapping.amount} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(amount) => setMapping({ ...mapping, amount })} />
             <Field label="金額の符号">
               <Select
                 value={mapping.sign}
@@ -273,15 +273,18 @@ function ColumnSelect({
   value,
   width,
   loaded,
+  headerRowIndex,
   onChange,
 }: {
   label: string;
   value: number;
   width: number;
   loaded: Loaded;
+  /** 見出しの行。前置きの行がある CSV では 0 行目ではない。見出しが無い（-1）なら先頭の行を見本に出す */
+  headerRowIndex: number;
   onChange: (value: number) => void;
 }) {
-  const header = loaded.rows[Math.max(0, 0)];
+  const header = loaded.rows[Math.max(0, headerRowIndex)];
   return (
     <Field label={label}>
       <Select value={value} onChange={(event) => onChange(Number(event.target.value))} className="w-full">
