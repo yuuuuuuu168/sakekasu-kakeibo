@@ -21,6 +21,7 @@ import {
   type OcrJobRequest,
   type OcrJobStatus,
 } from '../shared/ocr-job';
+import { userPk } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -214,7 +215,7 @@ async function route(sub: string, method: string, segments: string[], body: Json
   if (method === 'GET' && resource === 'reports' && param) {
     assertMonth(param);
     const found = await documents.send(
-      new GetCommand({ TableName: TABLE_NAME, Key: { pk: `USER#${sub}`, sk: SK.report(param) } }),
+      new GetCommand({ TableName: TABLE_NAME, Key: { pk: userPk(sub), sk: SK.report(param) } }),
     );
     if (!found.Item) return json(404, { message: 'この月のレポートはまだありません' });
     return json(200, found.Item.report);
@@ -232,7 +233,7 @@ async function loadSnapshot(sub: string) {
       new QueryCommand({
         TableName: TABLE_NAME,
         KeyConditionExpression: 'pk = :pk',
-        ExpressionAttributeValues: { ':pk': `USER#${sub}` },
+        ExpressionAttributeValues: { ':pk': userPk(sub) },
         ...(startKey ? { ExclusiveStartKey: startKey } : {}),
       }),
     );
@@ -290,7 +291,7 @@ async function putTransactions(sub: string, body: Json): Promise<APIGatewayProxy
     let request: Record<string, unknown[]> | undefined = {
       [TABLE_NAME]: chunk.map((txn) => ({
         // キーは展開の後ろに置く。本文に pk / sk があっても、sub から組み立てた値が勝つ
-        PutRequest: { Item: { ...txn, pk: `USER#${sub}`, sk: SK.transaction(txn.id) } },
+        PutRequest: { Item: { ...txn, pk: userPk(sub), sk: SK.transaction(txn.id) } },
       })),
     };
 
@@ -361,13 +362,13 @@ async function put(sub: string, sk: string, attributes: Json): Promise<void> {
   await documents.send(
     new PutCommand({
       TableName: TABLE_NAME,
-      Item: { ...attributes, pk: `USER#${sub}`, sk, updatedAt: new Date().toISOString() },
+      Item: { ...attributes, pk: userPk(sub), sk, updatedAt: new Date().toISOString() },
     }),
   );
 }
 
 async function remove(sub: string, sk: string): Promise<APIGatewayProxyResultV2> {
-  await documents.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: `USER#${sub}`, sk } }));
+  await documents.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: userPk(sub), sk } }));
   return json(204, undefined);
 }
 
