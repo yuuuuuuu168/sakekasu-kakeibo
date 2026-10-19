@@ -437,8 +437,10 @@ aws cognito-idp list-users --user-pool-id ap-northeast-1_yw1VDKtxW --region ap-n
 残っていれば cdkd へ移す。人が打つものは無い。
 
 - 先に全スタックを `cdkd import --dry-run` で調べ、全リソースを取り込めると分かったときだけ移す。
-  1 つでも取り込めないものがあれば、どのスタックにも手を付けず、その回は `cdk deploy`
-  （CloudFormation）で出す。ワークフローに警告が出る
+  1 つでも取り込めないものがあれば、どのスタックにも手を付けずにワークフローを落とす。
+  以前は `cdk deploy --all`（CloudFormation）に戻していたが、`--all` には cdkd へ移し終えたスタックも
+  入り、同じ名前のリソースを二重に作りにいくので外した。落ちたら dry-run のログで取り込めない
+  リソースを調べる
 - 移すときは `cdkd import --migrate-from-cloudformation` を使う。全リソースに
   `DeletionPolicy: Retain` を付けてから CloudFormation のスタックを消すので、AWS 上の
   リソースは消えない。消えるのはスタックの記録だけ
@@ -461,7 +463,7 @@ cdkd 0.291.16 の `cdkd import` には、この移行に当たる不具合が 2 
 
 ### ジョブを 2 つに分けている理由
 
-`infra` ジョブが `cdkd deploy --all`（cdkd へ移せなかった回だけ `cdk deploy --all`）を打ち、スタックの出力（API の URL、共通ログインの値、
+`infra` ジョブが `cdkd deploy --all` を打ち、スタックの出力（API の URL、共通ログインの値、
 配信先のバケットとディストリビューション）をジョブの出力に載せる。`site` ジョブがそれを受けて
 フロントをビルドし、S3 へ同期して `index.html` を無効化する。
 

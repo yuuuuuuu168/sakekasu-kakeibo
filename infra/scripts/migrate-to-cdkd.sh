@@ -2,10 +2,12 @@
 # CloudFormation で入れてあるアプリ本体のスタックを cdkd の管理へ移す。
 #
 # deploy ワークフローが cdkd deploy の手前で毎回呼ぶ。移し終えた後は何もせずに抜ける
-# （冪等）。結果は GITHUB_OUTPUT の engine= に書く。
+# （冪等）。0 で抜けたら cdkd deploy してよい。移せないスタックがあれば落として、デプロイを止める。
 #
-#   engine=cdkd  全スタックが cdkd の状態を持っている。cdkd deploy してよい
-#   engine=cfn   移行の前検査で引っかかったので、何も変えていない。今回は cdk deploy で出す
+# 以前は移せなかった回だけ `cdk deploy --all`（CloudFormation）に戻していた。ところが `--all` には
+# cdkd へ移し終えたスタックも入るので、一部だけ移った状態でそこを通ると、同じ名前のリソースを
+# CloudFormation でもう一度作りにいく（docs/aws-infra-rules.md の「cdkd に移したスタックに
+# cdk deploy をしない」）。移行は済んでいて普段は通らない分岐なので、戻さずに止めて人が見る。
 #
 # 守っている不変条件は 1 つ。「CloudFormation のスタックが残っていて、cdkd の状態が無い」
 # スタックを cdkd deploy に渡さない。渡すと cdkd はそれを新規作成とみなし、同じ名前の
@@ -14,7 +16,7 @@
 #
 # 移行の手順。
 #   1. 全スタックを `cdkd import --dry-run` で調べ、全リソースが取り込めると確かめる。
-#      1 つでも取り込めないものがあれば、どのスタックにも手を付けずに engine=cfn で抜ける
+#      1 つでも取り込めないものがあれば、どのスタックにも手を付けずに落ちる
 #   2. 使う側から順に `cdkd import --migrate-from-cloudformation` で移す。
 #      CloudFormation は、他のスタックが Fn::ImportValue で読んでいる export を持つ
 #      スタックを消せない。site → api → cert → data → dns の順なら、
@@ -27,7 +29,6 @@
 set -euo pipefail
 
 : "${TARGET_ENV:?TARGET_ENV を指定してください}"
-: "${GITHUB_OUTPUT:=/dev/stdout}"
 
 prefix="sakekasu-kakeibo-${TARGET_ENV}"
 account="$(aws sts get-caller-identity --query Account --output text)"
@@ -92,7 +93,6 @@ done
 
 if [ "${#pending[@]}" -eq 0 ]; then
   echo "移行が要るスタックはありません"
-  echo 'engine=cdkd' >>"$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -120,9 +120,8 @@ for entry in "${pending[@]}"; do
 done
 
 if [ "$ok" != true ]; then
-  echo "::warning::cdkd への移行を見送り、今回は CloudFormation（cdk deploy）でデプロイします。スタックには手を付けていません"
-  echo 'engine=cfn' >>"$GITHUB_OUTPUT"
-  exit 0
+  echo "::error::cdkd へ移せないスタックがあるので、デプロイを止めます。スタックには手を付けていません。docs/operations.md の「CloudFormation から cdkd への移行」を見てください"
+  exit 1
 fi
 
 # 2. 移行
@@ -141,5 +140,3 @@ for entry in "${stacks[@]}"; do
     exit 1
   fi
 done
-
-echo 'engine=cdkd' >>"$GITHUB_OUTPUT"
