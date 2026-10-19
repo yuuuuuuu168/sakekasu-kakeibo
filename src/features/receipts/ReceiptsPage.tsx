@@ -31,6 +31,7 @@ import {
   receiptYenTotal,
   toMinor,
   transactionFromReceipt,
+  transactionToRemoveWith,
   usableRate,
   type Currency,
   type DuplicateReceiptPair,
@@ -38,6 +39,7 @@ import {
   type Receipt,
   type ReceiptItem,
   type SourceKind,
+  type Transaction,
 } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
@@ -180,12 +182,24 @@ export function ReceiptsPage() {
    * 取り込んだ明細に当てただけのレシートなら、明細は本物なのでそのまま残す
    */
   async function keepOneReceipt(keep: Receipt, drop: Receipt) {
-    const created = drop.status === 'cash' ? snapshot.transactions.find((txn) => txn.receiptId === drop.id) : undefined;
+    const created = transactionToRemoveWith(drop, snapshot.transactions);
     const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
     if (!window.confirm(`${drop.date} の ${drop.storeName || '店名なし'} を消して、もう片方を残しますか${notice}`)) return;
-    await removeReceipt(drop.id);
-    if (created) await removeTransaction(created.id);
+    await deleteReceipt(drop, created);
     setMessage(`同じレシートとして片方を消しました。${keep.storeName || '店名なし'} のレシートが残っています。`);
+  }
+
+  /** 保存済み一覧のゴミ箱。重複の組を片付けるときと同じく、レシートから作った明細も一緒に消す */
+  async function confirmDeleteReceipt(receipt: Receipt) {
+    const created = transactionToRemoveWith(receipt, snapshot.transactions);
+    const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
+    if (!window.confirm(`このレシートを消しますか${notice}`)) return;
+    await deleteReceipt(receipt, created);
+  }
+
+  async function deleteReceipt(receipt: Receipt, created: Transaction | undefined) {
+    await removeReceipt(receipt.id);
+    if (created) await removeTransaction(created.id);
   }
 
   /** 別の買い物だと言われた組。両側に印を付けて、次からは候補に出さない */
@@ -757,9 +771,7 @@ export function ReceiptsPage() {
                   <span className="tnum text-sm font-medium text-ink">{formatMoney(receipt.total, receiptCurrency(receipt))}</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (window.confirm('このレシートを消しますか')) void removeReceipt(receipt.id);
-                    }}
+                    onClick={() => void confirmDeleteReceipt(receipt)}
                     className="rounded-md p-1.5 text-ink-2 hover:bg-plane"
                     aria-label="消す"
                   >

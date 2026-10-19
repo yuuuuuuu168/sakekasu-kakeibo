@@ -43,6 +43,15 @@ export function linkedTransaction(receipt: Receipt, transactions: Transaction[])
 }
 
 /**
+ * レシートを消すときに一緒に消す明細。支払い方法を選んでレシートから作った明細（status が cash）は
+ * レシートと一体なので、残すと支払いが二重に数えられる。
+ * 取り込んだ明細に当てただけのレシート（matched）なら、明細は本物なのでそのまま残す。
+ */
+export function transactionToRemoveWith(receipt: Receipt, transactions: Transaction[]): Transaction | undefined {
+  return receipt.status === 'cash' ? linkedTransaction(receipt, transactions) : undefined;
+}
+
+/**
  * 保存済み一覧に出すカテゴリの要約。同じカテゴリの品目が続いても 1 回だけ出し、2 つまでに絞る。
  * 「カフェ・カフェ」のように重ねると、そのぶん店名の幅が削られる。
  */
