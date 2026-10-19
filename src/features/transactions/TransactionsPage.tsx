@@ -266,6 +266,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
         <SplitDialog
           transaction={editing}
           categories={snapshot.categories}
+          rules={snapshot.rules}
           onClose={() => setEditing(undefined)}
           onSave={saveTransaction}
         />
