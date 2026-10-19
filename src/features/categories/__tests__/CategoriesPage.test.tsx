@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { TRANSFER_ID, UNCATEGORIZED_ID, type Category } from '@kakeibo/core';
 import type { Snapshot } from '../../../api/types';
+import { currentMonth, shiftMonth } from '../../../lib/month';
 
 const store = vi.hoisted(() => ({
   snapshot: {
@@ -35,7 +36,7 @@ const NESTED: Category[] = [
 
 beforeEach(() => {
   store.saveCategories.mockClear();
-  store.snapshot = { ...store.snapshot, categories: NESTED };
+  store.snapshot = { ...store.snapshot, categories: NESTED, budgets: [] };
 });
 
 describe('CategoriesPage', () => {
@@ -122,5 +123,62 @@ describe('CategoriesPage', () => {
     const options = [...(screen.getByLabelText('外食 の親カテゴリ') as HTMLSelectElement).options].map((option) => option.value);
     expect(options).toContain('food');
     expect(options).not.toContain('rice');
+  });
+
+  it('カテゴリ名は打つたびではなく、離れたときに 1 回だけ保存する', async () => {
+    await act(async () => {
+      render(<CategoriesPage />);
+    });
+
+    const input = screen.getAllByLabelText('カテゴリ名').find((item) => (item as HTMLInputElement).value === '外食')!;
+    fireEvent.change(input, { target: { value: '外' } });
+    fireEvent.change(input, { target: { value: '外食・飲み' } });
+    expect(store.saveCategories).not.toHaveBeenCalled();
+    expect((input as HTMLInputElement).value).toBe('外食・飲み');
+
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+
+    expect(store.saveCategories).toHaveBeenCalledTimes(1);
+    const saved = store.saveCategories.mock.calls[0][0];
+    expect(saved.find((category) => category.id === 'eatout')?.label).toBe('外食・飲み');
+  });
+
+  it('カテゴリ名を空にして離れたら保存せずに元へ戻す', async () => {
+    await act(async () => {
+      render(<CategoriesPage />);
+    });
+
+    const input = screen.getAllByLabelText('カテゴリ名').find((item) => (item as HTMLInputElement).value === '外食')!;
+    fireEvent.change(input, { target: { value: '  ' } });
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+
+    expect(store.saveCategories).not.toHaveBeenCalled();
+    expect((input as HTMLInputElement).value).toBe('外食');
+  });
+
+  it('月を変えると、上限の欄もその月の値に変わる', async () => {
+    const month = currentMonth();
+    const previous = shiftMonth(month, -1);
+    store.snapshot = {
+      ...store.snapshot,
+      budgets: [
+        { month, limits: { food: 30000 } },
+        { month: previous, limits: { food: 25000 } },
+      ],
+    };
+
+    await act(async () => {
+      render(<CategoriesPage />);
+    });
+    expect((screen.getByLabelText('食費 の上限') as HTMLInputElement).value).toBe('30000');
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('前の月'));
+    });
+    expect((screen.getByLabelText('食費 の上限') as HTMLInputElement).value).toBe('25000');
   });
 });
