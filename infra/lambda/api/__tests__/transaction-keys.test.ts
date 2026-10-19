@@ -109,4 +109,13 @@ describe('明細の保存先のキー', () => {
     expect(item.pk).toBe('USER#user-1');
     expect(item.sk).toBe('TXN#t1');
   });
+
+  it('パスの id はエンコードを戻してからキーにする', async () => {
+    const response = await handler(event('PUT', '/transactions/credit%2F2026%231', HOSTILE));
+    expect(response).toMatchObject({ statusCode: 204 });
+
+    const item = sent.filter((command) => command.kind === 'put')[0].input.Item as Record<string, unknown>;
+    expect(item.sk).toBe('TXN#credit/2026#1');
+    expect(item.id).toBe('credit/2026#1');
+  });
 });

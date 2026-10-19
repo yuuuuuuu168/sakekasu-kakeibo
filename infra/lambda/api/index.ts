@@ -12,7 +12,7 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
+import { MAX_TRANSACTIONS_PER_REQUEST, RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
 import {
   OCR_JOB_STALE_MS,
   OCR_JOB_TTL_SECONDS,
@@ -39,9 +39,6 @@ function requireEnv(name: string): string {
   return value;
 }
 
-/** 1 回の取り込みで受け取る明細の上限。取り込み画面は 1 ファイル分しか送らない */
-const MAX_TRANSACTIONS_PER_REQUEST = 2000;
-
 type Json = Record<string, unknown>;
 
 const SK = {
@@ -62,7 +59,7 @@ export async function handler(
   if (typeof sub !== 'string' || sub === '') return json(401, { message: 'サインインが必要です' });
 
   const method = event.requestContext.http.method;
-  const segments = (event.rawPath ?? '').split('/').filter(Boolean);
+  const segments = (event.rawPath ?? '').split('/').filter(Boolean).map(decodeSegment);
   const body = parseBody(event.body, event.isBase64Encoded);
   const started = Date.now();
 
@@ -163,6 +160,18 @@ function countCategories(rows: unknown[]): Json {
 }
 
 class BadRequest extends Error {}
+
+/**
+ * rawPath はエンコードされたまま届く。画面は id を encodeURIComponent してパスに入れるので、
+ * ここで戻してからキーにする。壊れたエンコードはそのまま使う（id として見つからないだけ）
+ */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
 
 async function route(sub: string, method: string, segments: string[], body: Json): Promise<APIGatewayProxyResultV2> {
   const [resource, param, child] = segments;
