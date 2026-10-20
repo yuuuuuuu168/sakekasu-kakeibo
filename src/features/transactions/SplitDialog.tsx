@@ -9,6 +9,7 @@ import {
   splitEvenly,
   sumSplits,
   type Category,
+  type CategoryRule,
   type Split,
   type Transaction,
 } from '@kakeibo/core';
@@ -28,11 +29,14 @@ import { Button, Input, Select } from '../../components/ui/primitives';
 export function SplitDialog({
   transaction,
   categories,
+  rules = [],
   onClose,
   onSave,
 }: {
   transaction: Transaction;
   categories: Category[];
+  /** 覚えた品目のカテゴリ。レシートの画面と同じく、当たった品名は判定に聞かずにこれを使う */
+  rules?: CategoryRule[];
   onClose: () => void;
   onSave: (transaction: Transaction) => Promise<void>;
 }) {
@@ -136,7 +140,7 @@ export function SplitDialog({
             onClick={async () => {
               setBusy(true);
               try {
-                await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories)));
+                await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories, rules)));
                 onClose();
               } finally {
                 setBusy(false);
@@ -166,7 +170,12 @@ function withName(split: Split, name: string | undefined): Split {
  * 人がこの画面で選んだカテゴリと、レシートから付いたカテゴリは触らない。
  * 判定に送るのは品名と店名だけで、レシートの品目と同じ扱いになる。
  */
-async function categorizeByName(rows: Split[], storeName: string, categories: Category[]): Promise<Split[]> {
+async function categorizeByName(
+  rows: Split[],
+  storeName: string,
+  categories: Category[],
+  rules: CategoryRule[],
+): Promise<Split[]> {
   const named = rows.map((row) => withName(row, row.name));
   const targets = named.filter((row) => row.name && (row.categoryId === UNCATEGORIZED_ID || provisional(row)));
   if (targets.length === 0) return named;
@@ -178,6 +187,7 @@ async function categorizeByName(rows: Split[], storeName: string, categories: Ca
     }),
     storeName,
     categories,
+    rules,
   );
   return named.map((row) => {
     const index = targets.indexOf(row);

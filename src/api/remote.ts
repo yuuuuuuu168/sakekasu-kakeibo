@@ -1,14 +1,15 @@
 import { fetchAuthSession } from 'aws-amplify/auth';
-import type {
-  Budget,
-  Category,
-  CategoryRule,
-  ClassifyTarget,
-  MonthlyReport,
-  Receipt,
-  RecurringPayment,
-  Transaction,
-  Verdict,
+import {
+  MAX_TRANSACTIONS_PER_REQUEST,
+  type Budget,
+  type Category,
+  type CategoryRule,
+  type ClassifyTarget,
+  type MonthlyReport,
+  type Receipt,
+  type RecurringPayment,
+  type Transaction,
+  type Verdict,
 } from '@kakeibo/core';
 import { config } from '../config';
 import type { KakeiboApi, ReceiptDraft, SavedMapping, Snapshot, UploadTarget } from './types';
@@ -39,12 +40,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await response.json()) as T;
 }
 
+/**
+ * API は 1 回に MAX_TRANSACTIONS_PER_REQUEST 件までしか受け取らないので、分けて順に送る。
+ * 途中で落ちたら、それより前の分は保存済みのまま例外になる（画面は読み直せば揃う）
+ */
+async function putTransactions(transactions: Transaction[]): Promise<void> {
+  for (let index = 0; index < transactions.length; index += MAX_TRANSACTIONS_PER_REQUEST) {
+    await request<void>('PUT', '/transactions', {
+      transactions: transactions.slice(index, index + MAX_TRANSACTIONS_PER_REQUEST),
+    });
+  }
+}
+
 export const remoteApi: KakeiboApi = {
   mode: 'remote',
 
   loadSnapshot: () => request<Snapshot>('GET', '/snapshot'),
-  putTransactions: (transactions: Transaction[]) => request<void>('PUT', '/transactions', { transactions }),
-  updateTransaction: (transaction: Transaction) => request<void>('PUT', `/transactions/${transaction.id}`, transaction),
+  putTransactions,
+  updateTransaction: (transaction: Transaction) =>
+    request<void>('PUT', `/transactions/${encodeURIComponent(transaction.id)}`, transaction),
   deleteTransaction: (id: string) => request<void>('DELETE', `/transactions/${encodeURIComponent(id)}`),
   putCategories: (categories: Category[]) => request<void>('PUT', '/categories', { categories }),
   putRules: (rules: CategoryRule[]) => request<void>('PUT', '/rules', { rules }),

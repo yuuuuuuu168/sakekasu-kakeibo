@@ -100,4 +100,17 @@ describe('同じレシートかもしれない組', () => {
     expect(saved.transactions.map((item) => item.id)).toEqual(['t-r1']);
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('このレシートから作った明細も一緒に消えます'));
   });
+
+  it('保存済み一覧のゴミ箱でも、そのレシートから作った明細を一緒に消す', async () => {
+    window.localStorage.setItem(KEY, JSON.stringify({ receipts: [receipt('r1')], transactions: [created('r1')] }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+    expect(await screen.findByText('保存済み 1 枚')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '消す' }));
+
+    await waitFor(() => expect(stored().receipts).toHaveLength(0));
+    expect(stored().transactions).toHaveLength(0);
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('このレシートから作った明細も一緒に消えます'));
+  });
 });

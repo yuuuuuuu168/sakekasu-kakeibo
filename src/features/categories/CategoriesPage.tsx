@@ -178,11 +178,10 @@ export function CategoriesPage() {
 
             return (
               <li key={category.id} className={`flex flex-wrap items-center gap-2 py-2 ${child ? 'pl-4 sm:pl-6' : ''}`}>
-                <Input
-                  value={category.label}
-                  onChange={(event) => void rename(category.id, event.target.value)}
+                <CategoryNameInput
+                  category={category}
+                  onRename={rename}
                   className={child ? 'w-36 sm:w-44' : 'w-40 sm:w-48'}
-                  aria-label="カテゴリ名"
                   disabled={category.id === UNCATEGORIZED_ID}
                 />
                 <span className="tnum w-24 text-right text-xs text-ink-2">実績 {formatYen(actual)}</span>
@@ -194,6 +193,9 @@ export function CategoriesPage() {
                   <span className="w-28 text-right text-xs text-muted">上限なし</span>
                 ) : (
                   <Input
+                    // 非制御の入力なので、月を変えたときや前月の上限をコピーしたときに表示が古いまま
+                    // 残らないよう、月と保存済みの値が変わったら作り直す
+                    key={`${month}:${budget?.limits?.[category.id] ?? ''}`}
                     type="number"
                     inputMode="numeric"
                     placeholder="上限なし"
@@ -281,6 +283,49 @@ export function CategoriesPage() {
  * そのカテゴリを誰の下に置くか。ここが「小カテゴリの仕組み」の入口で、
  * 大カテゴリとして立てるか、どれかの中に入れるかを 1 つの選択で決める。
  */
+/**
+ * カテゴリ名の入力欄。打っている途中は手元の下書きに持ち、離れたとき（Enter でも）に 1 回だけ保存する。
+ * 1 文字ごとに保存すると、保存が返るまで入力が巻き戻り、返る順が前後すると古い名前で上書きされる。
+ */
+function CategoryNameInput({
+  category,
+  onRename,
+  className,
+  disabled,
+}: {
+  category: Category;
+  onRename: (categoryId: string, label: string) => Promise<void>;
+  className: string;
+  disabled: boolean;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  async function commit() {
+    if (draft === null) return;
+    const label = draft.trim();
+    try {
+      // 空にしたまま離れたら元の名前に戻す
+      if (label && label !== category.label) await onRename(category.id, label);
+    } finally {
+      setDraft(null);
+    }
+  }
+
+  return (
+    <Input
+      value={draft ?? category.label}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+      }}
+      className={className}
+      aria-label="カテゴリ名"
+      disabled={disabled}
+    />
+  );
+}
+
 function ParentControl({
   category,
   parents,

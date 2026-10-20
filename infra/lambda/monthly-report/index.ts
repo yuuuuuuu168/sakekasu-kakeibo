@@ -11,6 +11,7 @@ import {
   type RecurringPayment,
   type Transaction,
 } from '@kakeibo/core';
+import { USER_PARTITION_PREFIX, isUserPartition } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
 
@@ -58,6 +59,9 @@ function currentMonth(): string {
 /**
  * テーブルにいる利用者を列挙する。pk だけを射影した Scan。
  * 利用者 1 人・明細が年に千件ほどの規模なので、GSI を足すより安い。
+ *
+ * 同じテーブルに OCR のジョブの行（`OCR#{sub}`）も置いているので、利用者のパーティション
+ * （`USER#{sub}`）だけを拾う。絞らないと、ジョブのパーティションにも空のレポートを書き込む。
  */
 async function listUsers(): Promise<string[]> {
   const found = new Set<string>();
@@ -68,11 +72,13 @@ async function listUsers(): Promise<string[]> {
       new ScanCommand({
         TableName: TABLE_NAME,
         ProjectionExpression: 'pk',
+        FilterExpression: 'begins_with(pk, :user)',
+        ExpressionAttributeValues: { ':user': USER_PARTITION_PREFIX },
         ...(startKey ? { ExclusiveStartKey: startKey } : {}),
       }),
     );
     for (const item of page.Items ?? []) {
-      if (typeof item.pk === 'string') found.add(item.pk);
+      if (isUserPartition(item.pk)) found.add(item.pk);
     }
     startKey = page.LastEvaluatedKey;
   } while (startKey);
