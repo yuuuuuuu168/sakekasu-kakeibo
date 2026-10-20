@@ -961,8 +961,12 @@ ID 連携のルールはロールの ARN を照合するので、OCR のルー�
 `infra/scripts/model-bench.sh` にある（OCR 6 組・判定 6 組、各組の予算の合計は 48 ドル）。
 
 ```sh
-AWS_PROFILE=sakekasu-builder bash infra/scripts/model-bench.sh dev 60 100
+bash infra/scripts/model-bench.sh dev 60 100
 ```
+
+プロファイルは `AWS_PROFILE`（既定 `sakekasu-builder`）。SSO の認証が切れていれば、スクリプトが
+`aws sso login --profile sakekasu-builder` を打ってブラウザでの承認を待つ。関数がまだ無い（デプロイ前）ときは
+何も積まずに止まる。
 
 1 組だけ走らせるときは次のとおり。
 

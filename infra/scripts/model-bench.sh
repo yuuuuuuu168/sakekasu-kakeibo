@@ -2,7 +2,10 @@
 # モデルの評価（infra/lambda/model-bench）を、比べたい組の一式ぶん非同期で積む。
 # 手順と結果の読み方は docs/operations.md の「モデルを比べる」にある。
 #
-#   AWS_PROFILE=sakekasu-builder bash infra/scripts/model-bench.sh [env] [OCR の枚数] [判定の枚数]
+#   bash infra/scripts/model-bench.sh [env] [OCR の枚数] [判定の枚数]
+#
+# プロファイルは AWS_PROFILE（既定 sakekasu-builder）。SSO の認証が切れていれば、
+# 先に aws sso login を打ってブラウザでの承認を待つ。関数がまだ無ければ（デプロイ前）、何も積まずに止まる。
 #
 # 関数の同時実行は 1 なので、積んだ順に 1 本ずつ流れる。各組の maxUsd の合計は 48 ドルで、
 # Claude Console のワークスペースの利用上限（50 ドル）の内側に収めてある。上限に当たった組は
@@ -15,6 +18,19 @@ env_name="${1:-dev}"
 ocr_limit="${2:-60}"
 classify_limit="${3:-100}"
 function_name="sakekasu-kakeibo-${env_name}-model-bench"
+export AWS_PROFILE="${AWS_PROFILE:-sakekasu-builder}"
+export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
+
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  echo "AWS の認証が切れている（プロファイル ${AWS_PROFILE}）。ログインする。"
+  aws sso login --profile "$AWS_PROFILE"
+fi
+echo "認証: $(aws sts get-caller-identity --query Arn --output text)"
+
+if ! aws lambda get-function --function-name "$function_name" --query Configuration.FunctionName --output text >/dev/null 2>&1; then
+  echo "関数 ${function_name} が見つからない。PR をマージしてデプロイが終わってから打つ。" >&2
+  exit 1
+fi
 
 # 仕事 モデル effort 予算（ドル）
 plan=(
