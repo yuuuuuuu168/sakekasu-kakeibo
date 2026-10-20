@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { SEED_CATEGORIES, TRANSFER_ID, allRules, type CategoryRule, type Receipt, type Transaction } from '@kakeibo/core';
 import type { Snapshot } from '../../../api/types';
+import { ActionErrorProvider } from '../../../components/ActionErrorProvider';
+import { useActionError } from '../../../lib/action';
+
+/** App の上部の帯の代わり。useAction が拾った失敗を出す */
+function ActionErrorBanner() {
+  const error = useActionError();
+  return error ? <p role="alert">{error.message}</p> : null;
+}
 
 const store = vi.hoisted(() => ({
   snapshot: { categories: [], rules: [], budgets: [], transactions: [], receipts: [], mappings: [], recurring: [] } as Snapshot,
@@ -122,6 +130,25 @@ describe('TransactionsPage の重複の絞り込み', () => {
     });
 
     expect(store.removeTransaction).toHaveBeenCalledWith('card1');
+    confirm.mockRestore();
+  });
+
+  it('消すのに失敗したら、黙らずに理由を出す', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    store.removeTransaction.mockRejectedValueOnce(new Error('API がエラーを返しました (500)'));
+    render(
+      <ActionErrorProvider>
+        <ActionErrorBanner />
+        <TransactionsPage month="2026-09" filter="duplicates" />
+      </ActionErrorProvider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '2026-09-03 の セブン－イレブン品川（楽天カード）を消す' }));
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('API がエラーを返しました (500)');
     confirm.mockRestore();
   });
 

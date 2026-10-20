@@ -12,13 +12,19 @@ import { ReportPage } from './features/report/ReportPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { SignOutButton } from './features/auth/SignOutButton';
 import { AppsLink } from './features/auth/AppsLink';
+import { ActionErrorProvider } from './components/ActionErrorProvider';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { Notice } from './components/ui/Notice';
+import { useActionError } from './lib/action';
 
 export function App() {
   return (
     <AuthGate>
       {(signOutFn) => (
         <StoreProvider>
-          <Shell onSignOut={signOutFn} />
+          <ActionErrorProvider>
+            <Shell onSignOut={signOutFn} />
+          </ActionErrorProvider>
         </StoreProvider>
       )}
     </AuthGate>
@@ -28,6 +34,7 @@ export function App() {
 function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const route = useRoute();
   const { loading, error } = useStore();
+  const actionError = useActionError();
 
   return (
     <div className="min-h-full">
@@ -69,15 +76,29 @@ function Shell({ onSignOut }: { onSignOut: () => Promise<void> }) {
             ))}
           </ul>
         </nav>
+        {/* 保存の失敗は、どこまで下に送っていても見えるよう、上に貼り付いた帯の中に出す */}
+        {actionError && (
+          <div className="mx-auto max-w-5xl px-4 pb-2">
+            <Notice tone="error" onDismiss={actionError.dismiss}>
+              保存できませんでした。{actionError.message}
+            </Notice>
+          </div>
+        )}
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-4">
         {error && (
-          <p className="mb-3 rounded-lg bg-critical/12 px-3 py-2 text-sm text-critical">
+          <Notice tone="error" className="mb-3">
             データの読み込みに失敗しました。{error}
-          </p>
+          </Notice>
         )}
-        {loading ? <p className="py-8 text-center text-sm text-ink-2">読み込み中…</p> : <Page />}
+        {loading ? (
+          <p className="py-8 text-center text-sm text-ink-2">読み込み中…</p>
+        ) : (
+          <ErrorBoundary key={route.name}>
+            <Page />
+          </ErrorBoundary>
+        )}
       </main>
     </div>
   );

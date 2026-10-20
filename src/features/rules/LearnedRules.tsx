@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import { activeCategories, categoryLabel, type CategoryRule } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { useStore } from '../../api/store';
+import { useAction } from '../../lib/action';
 import { Card, EmptyState, Input, Select } from '../../components/ui/primitives';
 
 type Kind = 'item' | 'merchant';
@@ -31,6 +32,7 @@ const KINDS: { kind: Kind; title: string; empty: string }[] = [
  */
 export function LearnedRules() {
   const { snapshot, saveRules } = useStore();
+  const run = useAction();
   const [query, setQuery] = useState('');
   const categories = activeCategories(snapshot.categories);
   const active = new Set(categories.map((category) => category.id));
@@ -97,7 +99,10 @@ export function LearnedRules() {
                     </span>
                     <Select
                       value={rule.categoryId}
-                      onChange={(event) => void replace(rule, { ...rule, categoryId: event.target.value })}
+                      onChange={(event) => {
+                        const categoryId = event.target.value;
+                        void run(() => replace(rule, { ...rule, categoryId }));
+                      }}
                       className="w-32 min-w-0 shrink-0"
                       aria-label={`${rule.pattern} のカテゴリ`}
                     >
@@ -108,7 +113,7 @@ export function LearnedRules() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm(`「${rule.pattern}」を忘れますか`)) void replace(rule, undefined);
+                        if (window.confirm(`「${rule.pattern}」を忘れますか`)) void run(() => replace(rule, undefined));
                       }}
                       className="shrink-0 rounded-md p-1.5 text-ink-2 hover:bg-plane"
                       aria-label={`${rule.pattern} を忘れる`}

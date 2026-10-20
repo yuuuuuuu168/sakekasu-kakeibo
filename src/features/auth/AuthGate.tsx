@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { getCurrentUser, signInWithRedirect, signOut } from 'aws-amplify/auth';
 import { Hub } from 'aws-amplify/utils';
 import { config } from '../../config';
+import { errorMessage } from '../../lib/errors';
 import { PORTAL_URL, signOutRedirect } from './signOutRedirect';
 import { clearAutoSignIn, hasAutoSignedIn, isOAuthCallback, isOAuthError, markAutoSignIn, stripSsoHint } from './autoSignIn';
 
@@ -61,7 +62,7 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
         setPhase('signed-in');
         return;
       }
-      setError({ detail: describe(cause) });
+      setError({ detail: errorMessage(cause) });
       setPhase('signed-out');
     }
   }, []);
@@ -103,7 +104,7 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
         setError(undefined);
         void check();
       } else if (payload.event === 'signInWithRedirect_failure') {
-        setError({ detail: describe(payload.data?.error) });
+        setError({ detail: errorMessage(payload.data?.error) });
         setPhase('signed-out');
       }
     });
@@ -163,10 +164,4 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
       </a>
     </main>
   );
-}
-
-function describe(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  if (cause === undefined || cause === null) return '';
-  return String(cause);
 }

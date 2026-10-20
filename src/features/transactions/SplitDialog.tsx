@@ -17,6 +17,7 @@ import { CategoryOptions } from '../../components/CategoryOptions';
 import { judgeReceiptItems } from '../../api/classify';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button, Input, Select } from '../../components/ui/primitives';
+import { useAction } from '../../lib/action';
 
 /**
  * 1 回の支払いを複数のカテゴリに割る画面。
@@ -41,6 +42,7 @@ export function SplitDialog({
   onSave: (transaction: Transaction) => Promise<void>;
 }) {
   const options = activeCategories(categories);
+  const run = useAction();
   const [rows, setRows] = useState<Split[]>(
     transaction.splits.length > 0
       ? transaction.splits
@@ -137,15 +139,18 @@ export function SplitDialog({
           <Button
             variant="primary"
             disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories, rules)));
-                onClose();
-              } finally {
-                setBusy(false);
-              }
-            }}
+            onClick={() =>
+              // 保存に失敗したら閉じない。理由は画面上部の帯に出る
+              void run(async () => {
+                setBusy(true);
+                try {
+                  await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories, rules)));
+                  onClose();
+                } finally {
+                  setBusy(false);
+                }
+              })
+            }
           >
             保存する
           </Button>
