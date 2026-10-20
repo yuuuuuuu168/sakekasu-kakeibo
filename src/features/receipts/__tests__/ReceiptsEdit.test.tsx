@@ -106,4 +106,14 @@ describe('保存済みのレシートを開いて直す', () => {
     expect(store.saveTransaction).not.toHaveBeenCalled();
     expect(store.saveTransactions).toHaveBeenCalledWith([expect.objectContaining({ source: 'suica', receiptId: 'r-1' })]);
   });
+
+  it('保存に失敗したら、失敗として理由を出し、開いた欄は閉じない', async () => {
+    store.saveReceipt.mockRejectedValueOnce(new Error('API がエラーを返しました (500)'));
+    render(<ReceiptsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /タリーズコーヒー 横浜コネクトスクエア店 のレシートを開く/ }));
+    fireEvent.click(screen.getByRole('button', { name: '直した内容で保存' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('API がエラーを返しました (500)');
+    expect(screen.getByText('レシートを直す')).toBeInTheDocument();
+  });
 });

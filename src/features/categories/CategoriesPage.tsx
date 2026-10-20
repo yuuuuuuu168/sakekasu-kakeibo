@@ -18,6 +18,8 @@ import {
 import { useStore } from '../../api/store';
 import { Button, Card, Field, Input, Select } from '../../components/ui/primitives';
 import { MonthPicker } from '../../components/ui/MonthPicker';
+import { Notice } from '../../components/ui/Notice';
+import { useAction } from '../../lib/action';
 import { currentMonth, formatMonth, shiftMonth, todayIso } from '../../lib/month';
 
 /**
@@ -26,6 +28,7 @@ import { currentMonth, formatMonth, shiftMonth, todayIso } from '../../lib/month
  */
 export function CategoriesPage() {
   const { snapshot, saveCategories, saveBudget, saveTransactions } = useStore();
+  const run = useAction();
   const [month, setMonth] = useState(currentMonth());
   const [newLabel, setNewLabel] = useState('');
   const [newParentId, setNewParentId] = useState('');
@@ -157,14 +160,14 @@ export function CategoriesPage() {
       {/* 見出し「カテゴリと上限」は設定画面の開閉する節の側にある */}
       <div className="flex flex-wrap items-center justify-end gap-2">
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => void copyPreviousLimits()}>
+          <Button size="sm" onClick={() => void run(copyPreviousLimits)}>
             前月の上限をコピー
           </Button>
           <MonthPicker month={month} onChange={setMonth} />
         </div>
       </div>
 
-      {message && <p className="rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
+      {message && <Notice>{message}</Notice>}
 
       <Card
         title={`${formatMonth(month)} の上限`}
@@ -180,7 +183,7 @@ export function CategoriesPage() {
               <li key={category.id} className={`flex flex-wrap items-center gap-2 py-2 ${child ? 'pl-4 sm:pl-6' : ''}`}>
                 <CategoryNameInput
                   category={category}
-                  onRename={rename}
+                  onRename={(id, label) => run(() => rename(id, label))}
                   className={child ? 'w-36 sm:w-44' : 'w-40 sm:w-48'}
                   disabled={category.id === UNCATEGORIZED_ID}
                 />
@@ -200,7 +203,10 @@ export function CategoriesPage() {
                     inputMode="numeric"
                     placeholder="上限なし"
                     defaultValue={budget?.limits?.[category.id] ?? ''}
-                    onBlur={(event) => void setLimit(category.id, Math.round(Number(event.target.value) || 0))}
+                    onBlur={(event) => {
+                      const limit = Math.round(Number(event.target.value) || 0);
+                      void run(() => setLimit(category.id, limit));
+                    }}
                     // sm: を付けないと Input 側の w-full に負けて、上限だけが行いっぱいに伸びる
                     className="tnum w-28 text-right sm:w-28"
                     aria-label={`${category.label} の上限`}
@@ -209,9 +215,9 @@ export function CategoriesPage() {
                 {category.id !== UNCATEGORIZED_ID && (
                   <>
                     {category.id !== DISCOUNT_ID && (
-                      <ParentControl category={category} parents={parentOptions} disabled={busy} onChange={reparent} />
+                      <ParentControl category={category} parents={parentOptions} disabled={busy} onChange={(id, parentId) => run(() => reparent(id, parentId))} />
                     )}
-                    <MergeControl category={category} categories={categories} disabled={busy} onMerge={merge} />
+                    <MergeControl category={category} categories={categories} disabled={busy} onMerge={(fromId, toId) => run(() => merge(fromId, toId))} />
                   </>
                 )}
               </li>
@@ -226,7 +232,7 @@ export function CategoriesPage() {
               onChange={(event) => setNewLabel(event.target.value)}
               placeholder="コンビニ、ふるさと納税 など"
               onKeyDown={(event) => {
-                if (event.key === 'Enter') void add();
+                if (event.key === 'Enter') void run(add);
               }}
             />
           </Field>
@@ -240,7 +246,7 @@ export function CategoriesPage() {
               ))}
             </Select>
           </Field>
-          <Button variant="primary" onClick={() => void add()} disabled={!newLabel.trim()}>
+          <Button variant="primary" onClick={() => void run(add)} disabled={!newLabel.trim()}>
             <Plus size={14} />
             追加
           </Button>
@@ -265,7 +271,9 @@ export function CategoriesPage() {
                   <Button
                     size="sm"
                     onClick={() =>
-                      void saveCategories(snapshot.categories.map((item) => (item.id === category.id ? { ...item, archived: false } : item)))
+                      void run(() =>
+                        saveCategories(snapshot.categories.map((item) => (item.id === category.id ? { ...item, archived: false } : item))),
+                      )
                     }
                   >
                     戻す

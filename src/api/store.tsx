@@ -10,6 +10,7 @@ import {
   type RecurringPayment,
   type Transaction,
 } from '@kakeibo/core';
+import { errorMessage } from '../lib/errors';
 import { api } from './index';
 import type { SavedMapping, Snapshot } from './types';
 
@@ -57,7 +58,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSnapshot({ ...EMPTY, ...loaded, categories: loaded.categories?.length ? withLaterSeeds(loaded.categories) : SEED_CATEGORIES });
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       setLoading(false);
     }

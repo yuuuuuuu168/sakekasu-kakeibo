@@ -134,4 +134,19 @@ describe('SplitDialog の品名', () => {
 
     expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ name: 'Selected Posh', categoryId: 'hobby-books' });
   });
+
+  it('保存に失敗したらダイアログを閉じない', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onSave = vi.fn(async (_transaction: Transaction) => Promise.reject(new Error('API がエラーを返しました (500)')));
+    const onClose = vi.fn();
+    render(<SplitDialog transaction={TXN} categories={SEED_CATEGORIES} onClose={onClose} onSave={onSave} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '保存する' })).toBeEnabled();
+  });
 });
