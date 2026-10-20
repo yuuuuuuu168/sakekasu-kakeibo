@@ -281,6 +281,10 @@ export class ApiStack extends cdk.Stack {
 
     typesafeApiKey.grantRead(classifyFunction);
 
+    if (props.anthropicFederation) {
+      this.addModelBench(prefix, props, props.anthropicFederation, typesafeApiKey);
+    }
+
     const reportFunctionName = `${prefix}-monthly-report`;
     const reportLogGroup = lambdaLogGroup(this, 'MonthlyReportLogs', reportFunctionName);
     const reportFunction = new NodejsFunction(this, 'MonthlyReportFunction', {
@@ -427,6 +431,80 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AuthUserPoolId', { value: props.sharedAuth.userPoolId });
     new cdk.CfnOutput(this, 'AuthClientId', { value: props.sharedAuth.clientId });
     new cdk.CfnOutput(this, 'AuthDomain', { value: props.sharedAuth.domain });
+  }
+
+  /**
+   * モデルの評価（OCR とカテゴリ判定を、モデルを替えて保存済みのレシートでやり直す）。
+   * 画面からも API からも呼ばない。人が `aws lambda invoke --invocation-type Event` で起こす
+   * （docs/operations.md の「モデルを比べる」）。呼ばれなければ費用は掛からない。
+   *
+   * ロールは OCR と分ける。正解に使う保存済みのレシートを読むため、テーブルの読み取りが要り、
+   * OCR のロール（ジョブの行の更新だけ）に足すと本番の読み取りの権限まで広がる。
+   * 名前を固定するのは OCR と同じ理由で、Claude Console の ID 連携のルールがこのロールの ARN を照合する。
+   * ルールはこのロール用に 1 つ足し、その ID を cdk.json の anthropicFederation.benchRuleId に書く
+   * （ワークスペースは OCR と同じにして、利用上限を同じ枠で効かせる）。
+   *
+   * 同時実行は 1 にする。非同期で何本積んでも 1 本ずつ流れ（あふれた分は Lambda が最大 6 時間待たせる）、
+   * 続けて積んだ評価がクレジットを並行して食い合わない。失敗しても再試行しない（課金を重ねない）。
+   */
+  private addModelBench(
+    prefix: string,
+    props: ApiStackProps,
+    federation: AnthropicFederation,
+    typesafeApiKey: secretsmanager.ISecret,
+  ): void {
+    const functionName = `${prefix}-model-bench`;
+    const role = new iam.Role(this, 'ModelBenchFunctionRole', {
+      roleName: functionName,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
+    });
+
+    const fn = new NodejsFunction(this, 'ModelBenchFunction', {
+      functionName,
+      role,
+      entry: path.join(repoRoot, 'infra/lambda/model-bench/index.ts'),
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(15),
+      reservedConcurrentExecutions: 1,
+      retryAttempts: 0,
+      maxEventAge: cdk.Duration.hours(6),
+      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
+      bundling: BUNDLING,
+      logGroup: lambdaLogGroup(this, 'ModelBenchLogs', functionName),
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        RECEIPT_BUCKET: props.receiptBucket.bucketName,
+        // Jev を基準として並べるとき、classify の関数と同じ鍵とモデルを使う
+        TYPESAFE_SECRET_ID: typesafeApiKey.secretArn,
+        TYPESAFE_MODEL_ID,
+        ANTHROPIC_FEDERATION_RULE_ID: federation.benchRuleId ?? federation.ruleId,
+        ANTHROPIC_ORGANIZATION_ID: federation.organizationId,
+        ANTHROPIC_SERVICE_ACCOUNT_ID: federation.serviceAccountId,
+        ...(federation.workspaceId ? { ANTHROPIC_WORKSPACE_ID: federation.workspaceId } : {}),
+      },
+    });
+
+    // 読むだけ。書き込みの権限は持たせない（評価が家計簿のデータを変えることは無い）
+    props.table.grantReadData(fn);
+    props.receiptBucket.grantRead(fn);
+    typesafeApiKey.grantRead(fn);
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['sts:GetWebIdentityToken'],
+        resources: ['*'],
+        conditions: {
+          'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': [IDENTITY_TOKEN_AUDIENCE] },
+          NumericLessThanEquals: { 'sts:DurationSeconds': IDENTITY_TOKEN_SECONDS },
+          StringEquals: { 'sts:SigningAlgorithm': 'RS256' },
+        },
+      }),
+    );
+
+    new cdk.CfnOutput(this, 'ModelBenchFunctionName', { value: fn.functionName });
   }
 
   /**

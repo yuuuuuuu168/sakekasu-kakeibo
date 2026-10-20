@@ -69,7 +69,7 @@ src/
   components/ui/   # 共通コンポーネント
 infra/
   lib/             # CDK スタック（auth / data / api / site / cert）
-  lambda/          # Lambda 関数（api, ocr-receipt, classify, monthly-report）
+  lambda/          # Lambda 関数（api, ocr-receipt, classify, monthly-report, model-bench）
 docs/              # 要件・設計・運用
 ```
 

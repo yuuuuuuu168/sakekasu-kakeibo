@@ -925,6 +925,100 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
   --payload '{"month":"2026-08"}' --cli-binary-format raw-in-base64-out /dev/stdout
 ```
 
+## モデルを比べる
+
+レシートの OCR とカテゴリ判定を、モデルを替えて保存済みのレシートでやり直し、速さ・費用・正解との一致を
+測る関数がある（`sakekasu-kakeibo-<env>-model-bench`、中身は `infra/lambda/model-bench/`）。
+画面からも API からも呼ばれず、人が起こしたときだけ動く。正解は保存済みのレシート（人が確かめて直した後の形）。
+
+- 指示文と後始末（`ocr-receipt/draft.ts`）、判定の材料と採否（`packages/core` の classify）は本番と同じものを使う。
+  違うのはモデルと effort だけ。本番の OCR と違い、Bedrock への読み直しはしない
+- OCR に使えるのは写真が残っているレシートだけ（写真は 90 日で消える）。判定は品目名とカテゴリだけを使うので、
+  古いレシートでも測れる
+- 家計簿のデータは読むだけで書き換えない。ロールはテーブルとバケットの読み取り、TypeSafe の鍵、
+  `sts:GetWebIdentityToken` だけを持つ
+- 送るものは本番と同じ。OCR は写真と指示文、判定は品目名・店舗名・カテゴリ名だけ
+- ログに出すのは点数・時間・トークン数・費用だけで、品目名・金額・店名・日付は出さない
+
+### 一度だけ: Claude Console にルールを足す
+
+ID 連携のルールはロールの ARN を照合するので、OCR のルールのままではこの関数は Claude API に入れない
+（トークンの交換が 401 になる）。Claude Console の Settings → Workload identity で、OCR のルール
+（`sakekasu-kakeibo-workload`）と同じ発行者に、次のルールを足す。
+
+- ルール名 `sakekasu-kakeibo-bench`、IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-model-bench`
+- audience `https://api.anthropic.com`、ワークスペース `sakekasu-kakeibo`、スコープ `workspace:developer`、寿命 600 秒
+- サービスアカウントは OCR と同じ `sakekasu-kakeibo-ocr`
+
+ワークスペースを OCR と同じにしておくと、ワークスペースの利用上限（spend limit）が評価の分にも効く。
+足したルールの ID（`fdrl_...`）を `infra/cdk.json` の `anthropicFederation.benchRuleId` に書く（秘密ではない）。
+書いていなければ、関数は OCR のルールで交換しようとして 401 で落ちる（`[bench] result` の `error` に出る）。
+
+### 走らせる
+
+1 回の呼び出しで測るのは 1 つの組（仕事 × モデル × effort）。非同期で積む。同時実行は 1 なので、
+いくつ積んでも 1 本ずつ流れる（あふれた分は Lambda が最大 6 時間待たせる）。比べたい組の一式は
+`infra/scripts/model-bench.sh` にある（OCR 6 組・判定 6 組、各組の予算の合計は 48 ドル）。
+
+```sh
+AWS_PROFILE=sakekasu-builder bash infra/scripts/model-bench.sh dev 60 100
+```
+
+1 組だけ走らせるときは次のとおり。
+
+```sh
+aws lambda invoke --function-name sakekasu-kakeibo-dev-model-bench --invocation-type Event \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"task":"ocr","model":"claude-opus-5-5","effort":"medium","limit":30,"maxUsd":5}' /dev/null
+```
+
+| 鍵 | 既定 | 意味 |
+| --- | --- | --- |
+| `task` | （必須） | `ocr` か `classify` |
+| `model` | （必須） | Claude のモデル ID。`classify` では `jev`（本番の判定）と `keywords`（キーワード表）も選べる |
+| `effort` | `low` | Claude の effort（`low` / `medium` / `high` / `xhigh` / `max`）。本番の OCR は `low` |
+| `limit` / `offset` | 20 / 0 | 新しい順に並べたレシートの何枚目から何枚を使うか。同じ値なら、組を替えても同じレシートになる |
+| `maxUsd` | 5（天井 50） | この組の予算。使った額がこれに届いたら、新しいレシートを始めない（並列ぶん少し超えうる） |
+| `parallel` | 3（天井 8） | 同時に読むレシートの数 |
+| `price` | 表の値 | 100 万トークンあたりのドル（`{"input":10,"output":50}`）。`pricing.ts` の表に無いモデルは、これが無いと走らせない |
+
+止まる条件は 4 つで、`[bench] summary` の `stopped` に出る。`budget`（予算に届いた）、`spend_limit`
+（クレジットの残高切れかワークスペースの利用上限）、`errors`（続けて 3 回落ちた）、`time`（Lambda の 15 分の手前）。
+新しいモデルが出たら、`pricing.ts` に料金を足すか、`price` を付けて呼べば並べられる。
+
+### 結果を読む
+
+CloudWatch Logs Insights で `/aws/lambda/sakekasu-kakeibo-dev-model-bench` に次を流す。確認用のプロファイル
+（`verify`）で読める。
+
+```
+fields @timestamp, @message
+| filter @message like /\[bench\] summary/
+| sort @timestamp asc
+```
+
+| 項目 | 意味 |
+| --- | --- |
+| `usd` / `usdPerReceipt` | 使った額（`pricing.ts` の表からの見積もり。請求は Claude Console の Usage が正しい） |
+| `msMean` / `msP50` / `msP90` | レシート 1 枚の所要時間（判定は 2 段の合計） |
+| `tokens.thinking` | 出力のうち思考に使ったトークン。effort を上げると増える |
+| `servedModels` | 実際に答えたモデル。頼んだモデルと違えば比べられない |
+| `ocr.total` / `ocr.date` / `ocr.store` | 合計・日付・店名が正解と一致したレシートの割合 |
+| `ocr.amountF1Mean` | 品目を金額だけで突き合わせた F1。行を拾えたか（読み落とし・二重取り）を見る |
+| `ocr.itemF1Mean` | 品目名と金額の両方で突き合わせた F1 |
+| `ocr.perfect` | 合計・日付・全品目の金額がそろって合ったレシートの割合 |
+| `classify.exactRate` / `rootRate` | カテゴリが小カテゴリまで / 大カテゴリまで一致した品目の割合 |
+| `classify.ruledExactRate` | 人が直して覚えさせた品目（品目のルールに当たるもの）での一致率。一番確かな正解 |
+| `classify.acceptedRate` / `acceptedPrecision` | そのまま入れた品目の割合と、そのうち当たった割合（確信度の線の効き方） |
+
+読むときの注意。
+
+- 正解は人が最後に残した形なので、品目名を手で書き換えたもの（略字を開いた、など）は、印字どおりに
+  読めていても `itemF1` では外れに数える。名前の差を除きたいときは `amountF1` を見る
+- 判定の正解には、Jev の答えを人がそのまま通したものが混ざる。`jev` の一致率は高めに出る。
+  公平に比べたいときは `ruledExactRate`（Jev が一度外して人が直した品目）を見る
+- Claude の確信度は自己申告で、Jev のように校正されていない。`acceptedRate` を Jev と同じ線で比べると甘く出ることがある
+
 ## 費用の見込み
 
 | 内訳 | 見込み |

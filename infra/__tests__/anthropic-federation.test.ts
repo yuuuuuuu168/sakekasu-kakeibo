@@ -22,12 +22,17 @@ describe('parseAnthropicFederation', () => {
     expect(parseAnthropicFederation(rest)).toEqual(rest);
   });
 
+  it('評価の関数のルール（benchRuleId）は書いたときだけ通す', () => {
+    expect(parseAnthropicFederation({ ...VALID, benchRuleId: 'fdrl_bench01' })).toEqual({ ...VALID, benchRuleId: 'fdrl_bench01' });
+  });
+
   // 打ち間違いのまま出すと、毎回 Claude API で失敗してから Bedrock に回るだけで気づきにくい
   it.each([
     ['ruleId', 'rule_123'],
     ['organizationId', 'not-a-uuid'],
     ['serviceAccountId', 'sa_123'],
     ['workspaceId', 'default'],
+    ['benchRuleId', 'bench'],
   ])('%s の形が違えば合成で落とす', (key, value) => {
     expect(() => parseAnthropicFederation({ ...VALID, [key]: value })).toThrow(key);
   });

@@ -7,10 +7,9 @@ import {
   PermissionDeniedError,
   RateLimitError,
 } from '@anthropic-ai/sdk/core/error';
-import { oidcFederationProvider } from '@anthropic-ai/sdk/lib/credentials/oidc-federation';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { GetWebIdentityTokenCommand, STSClient } from '@aws-sdk/client-sts';
-import { DEFAULT_ANTHROPIC_MODEL_OCR, IDENTITY_TOKEN_AUDIENCE, IDENTITY_TOKEN_SECONDS } from './llm-constants';
+import { createAnthropicClient, readFederation, type AnthropicFederationEnv } from '../shared/anthropic-client';
+import { DEFAULT_ANTHROPIC_MODEL_OCR } from './llm-constants';
 
 /**
  * レシートを読むモデルの呼び出し。呼び先は 2 つで、どちらも同じ Messages API の形で頼む。
@@ -53,12 +52,7 @@ type Config = {
   provider: Provider;
   anthropicModel: string;
   bedrockModel: string;
-  federation?: {
-    ruleId: string;
-    organizationId: string;
-    serviceAccountId: string;
-    workspaceId?: string;
-  };
+  federation?: AnthropicFederationEnv;
 };
 
 /**
@@ -70,13 +64,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!bedrockModel) throw new Error('BEDROCK_MODEL_ID is not set');
   const anthropicModel = env.ANTHROPIC_MODEL_OCR || DEFAULT_ANTHROPIC_MODEL_OCR;
 
-  const ruleId = env.ANTHROPIC_FEDERATION_RULE_ID;
-  const organizationId = env.ANTHROPIC_ORGANIZATION_ID;
-  const serviceAccountId = env.ANTHROPIC_SERVICE_ACCOUNT_ID;
-  const federation =
-    ruleId && organizationId && serviceAccountId
-      ? { ruleId, organizationId, serviceAccountId, workspaceId: env.ANTHROPIC_WORKSPACE_ID || undefined }
-      : undefined;
+  const federation = readFederation(env);
 
   const wanted = env.LLM_PROVIDER === 'bedrock' ? 'bedrock' : 'anthropic';
   const provider = wanted === 'anthropic' && federation ? 'anthropic' : 'bedrock';
@@ -125,37 +113,9 @@ function buildContent(images: OcrImage[], prompt: string) {
 
 const config = readConfig();
 const bedrock = new BedrockRuntimeClient({});
-const anthropic = config.federation ? createAnthropicClient(config.federation) : undefined;
-
-function createAnthropicClient(federation: NonNullable<Config['federation']>): Anthropic {
-  // GetWebIdentityToken は地域ごとの STS にしかない。発行者 URL は global なので、どの地域で呼んでも同じ
-  const sts = new STSClient({ region: process.env.AWS_REGION });
-  return new Anthropic({
-    // ログの水準は既定（warn）のまま。debug にすると本文とヘッダが CloudWatch に出る
-    timeout: ANTHROPIC_TIMEOUT_MS,
-    maxRetries: ANTHROPIC_MAX_RETRIES,
-    credentials: oidcFederationProvider({
-      // 交換のたびに新しい JWT を取る（jti は使い回すと弾かれる）
-      identityTokenProvider: async () => {
-        const out = await sts.send(
-          new GetWebIdentityTokenCommand({
-            Audience: [IDENTITY_TOKEN_AUDIENCE],
-            SigningAlgorithm: 'RS256',
-            DurationSeconds: IDENTITY_TOKEN_SECONDS,
-          }),
-        );
-        if (!out.WebIdentityToken) throw new Error('STS が ID トークンを返しませんでした');
-        return out.WebIdentityToken;
-      },
-      federationRuleId: federation.ruleId,
-      organizationId: federation.organizationId,
-      serviceAccountId: federation.serviceAccountId,
-      workspaceId: federation.workspaceId,
-      baseURL: 'https://api.anthropic.com',
-      fetch,
-    }),
-  });
-}
+const anthropic = config.federation
+  ? createAnthropicClient(config.federation, { timeout: ANTHROPIC_TIMEOUT_MS, maxRetries: ANTHROPIC_MAX_RETRIES })
+  : undefined;
 
 /**
  * レシートの写真を読ませて、モデルの返した文字列を返す。
