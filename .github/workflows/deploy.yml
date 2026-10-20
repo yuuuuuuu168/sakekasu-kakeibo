@@ -119,13 +119,12 @@ jobs:
             fi
           done
 
+      # 移せないスタックがあれば落ちて、ここで止まる（理由はスクリプトの冒頭）
       - name: CloudFormation から cdkd へ移す
-        id: migrate
         working-directory: infra
         run: bash scripts/migrate-to-cdkd.sh
 
       - name: cdkd deploy
-        if: steps.migrate.outputs.engine == 'cdkd'
         working-directory: infra
         run: |
           # cdkd はスタックが失敗しても終了コード 0 で抜けることがある（2026-10-04 の builder で、
@@ -137,30 +136,16 @@ jobs:
             exit 1
           fi
 
-      # 移行の前検査で引っかかったときだけ通る。スタックはまだ CloudFormation の管理下に
-      # あるので、これまでどおり出す。cdkd ロールでも bootstrap ロールを引き受けられる
-      - name: cdk deploy（cdkd へ移せなかったとき）
-        if: steps.migrate.outputs.engine == 'cfn'
-        working-directory: infra
-        run: npx cdk deploy --all --require-approval never -c env=${{ env.TARGET_ENV }}
-
-      # 出力は cdkd の状態から読む。移せなかったときは CloudFormation から読む
+      # 出力は cdkd の状態から読む
       - name: スタックの出力を読む
         id: outputs
         working-directory: infra
-        env:
-          ENGINE: ${{ steps.migrate.outputs.engine }}
         run: |
           set -euo pipefail
           prefix="sakekasu-kakeibo-${TARGET_ENV}"
           read_output() {
             local value
-            if [ "$ENGINE" = cdkd ]; then
-              value="$(npx cdkd state show "$1" --stack-region "$AWS_REGION" --json | jq -r --arg k "$2" '.state.outputs[$k] // empty')"
-            else
-              value="$(aws cloudformation describe-stacks --stack-name "$1" \
-                --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text)"
-            fi
+            value="$(npx cdkd state show "$1" --stack-region "$AWS_REGION" --json | jq -r --arg k "$2" '.state.outputs[$k] // empty')"
             if [ -z "$value" ] || [ "$value" = None ]; then
               echo "$1 の出力 $2 が読めません" >&2
               exit 1

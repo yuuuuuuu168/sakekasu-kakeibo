@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SEED_CATEGORIES } from '../categories';
-import { linkedTransaction, receiptCategorySummary, transactionFromReceipt } from '../receipt/register';
+import {
+  linkedTransaction,
+  receiptCategorySummary,
+  transactionFromReceipt,
+  transactionToRemoveWith,
+} from '../receipt/register';
 import { sumSplits } from '../receipt/split';
 import type { Receipt, Transaction } from '../types';
 
@@ -49,6 +54,23 @@ describe('linkedTransaction', () => {
 
   it('つながっている明細が無ければ undefined', () => {
     expect(linkedTransaction({ ...RECEIPT, id: 'r-2' }, [card, made])).toBeUndefined();
+  });
+});
+
+describe('transactionToRemoveWith', () => {
+  const made = transactionFromReceipt(RECEIPT, 'suica');
+  const card: Transaction = { ...made, id: 'card-1', source: 'credit', receiptId: undefined };
+
+  it('レシートから作った明細は一緒に消す', () => {
+    expect(transactionToRemoveWith(RECEIPT, [card, made])?.id).toBe(made.id);
+  });
+
+  it('取り込んだ明細に当てただけのレシートなら、明細は残す', () => {
+    expect(transactionToRemoveWith({ ...RECEIPT, status: 'matched', txnId: 'card-1' }, [card, made])).toBeUndefined();
+  });
+
+  it('未紐付けのレシートには消す明細が無い', () => {
+    expect(transactionToRemoveWith({ ...RECEIPT, status: 'pending' }, [card, made])).toBeUndefined();
   });
 });
 

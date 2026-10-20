@@ -9,6 +9,7 @@ import {
   splitEvenly,
   sumSplits,
   type Category,
+  type CategoryRule,
   type Split,
   type Transaction,
 } from '@kakeibo/core';
@@ -16,6 +17,7 @@ import { CategoryOptions } from '../../components/CategoryOptions';
 import { judgeReceiptItems } from '../../api/classify';
 import { Dialog } from '../../components/ui/Dialog';
 import { Button, Input, Select } from '../../components/ui/primitives';
+import { useAction } from '../../lib/action';
 
 /**
  * 1 回の支払いを複数のカテゴリに割る画面。
@@ -28,15 +30,19 @@ import { Button, Input, Select } from '../../components/ui/primitives';
 export function SplitDialog({
   transaction,
   categories,
+  rules = [],
   onClose,
   onSave,
 }: {
   transaction: Transaction;
   categories: Category[];
+  /** 覚えた品目のカテゴリ。レシートの画面と同じく、当たった品名は判定に聞かずにこれを使う */
+  rules?: CategoryRule[];
   onClose: () => void;
   onSave: (transaction: Transaction) => Promise<void>;
 }) {
   const options = activeCategories(categories);
+  const run = useAction();
   const [rows, setRows] = useState<Split[]>(
     transaction.splits.length > 0
       ? transaction.splits
@@ -133,15 +139,18 @@ export function SplitDialog({
           <Button
             variant="primary"
             disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories)));
-                onClose();
-              } finally {
-                setBusy(false);
-              }
-            }}
+            onClick={() =>
+              // 保存に失敗したら閉じない。理由は画面上部の帯に出る
+              void run(async () => {
+                setBusy(true);
+                try {
+                  await onSave(applySplits(transaction, await categorizeByName(rows, transaction.rawMerchant, categories, rules)));
+                  onClose();
+                } finally {
+                  setBusy(false);
+                }
+              })
+            }
           >
             保存する
           </Button>
@@ -166,7 +175,12 @@ function withName(split: Split, name: string | undefined): Split {
  * 人がこの画面で選んだカテゴリと、レシートから付いたカテゴリは触らない。
  * 判定に送るのは品名と店名だけで、レシートの品目と同じ扱いになる。
  */
-async function categorizeByName(rows: Split[], storeName: string, categories: Category[]): Promise<Split[]> {
+async function categorizeByName(
+  rows: Split[],
+  storeName: string,
+  categories: Category[],
+  rules: CategoryRule[],
+): Promise<Split[]> {
   const named = rows.map((row) => withName(row, row.name));
   const targets = named.filter((row) => row.name && (row.categoryId === UNCATEGORIZED_ID || provisional(row)));
   if (targets.length === 0) return named;
@@ -178,6 +192,7 @@ async function categorizeByName(rows: Split[], storeName: string, categories: Ca
     }),
     storeName,
     categories,
+    rules,
   );
   return named.map((row) => {
     const index = targets.indexOf(row);

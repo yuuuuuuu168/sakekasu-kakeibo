@@ -22,6 +22,8 @@ import { judgeUnmatchedMerchants } from '../../api/classify';
 import { useStore } from '../../api/store';
 import { Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { DUPLICATES_FILTER, navigate } from '../../lib/router';
+import { useNotice } from '../../lib/notice';
+import { Notice } from '../../components/ui/Notice';
 import { parsePdfStatement } from './parsePdf';
 import type { SkippedRow } from '@kakeibo/core';
 
@@ -45,7 +47,7 @@ export function ImportPage() {
   const [mapping, setMapping] = useState<ColumnMapping | undefined>();
   const [source, setSource] = useState<SourceKind>('credit');
   const [sourceLabel, setSourceLabel] = useState('');
-  const [message, setMessage] = useState<string | undefined>();
+  const { notice, info, fail, clear } = useNotice();
   const [busy, setBusy] = useState(false);
 
   const width = useMemo(() => Math.max(0, ...(loaded?.rows ?? []).map((row) => row.length)), [loaded]);
@@ -70,17 +72,17 @@ export function ImportPage() {
   }, [result, snapshot.transactions]);
 
   async function onFile(file: File) {
-    setMessage(undefined);
+    clear();
     setBusy(true);
     try {
       if (file.name.toLowerCase().endsWith('.pdf')) {
         const parsed = await parsePdfStatement(file);
         if (parsed.imageOnly) {
-          setMessage('この PDF は文字を持っていません（画像として出力されています）。CSV でダウンロードし直してください。');
+          info('この PDF は文字を持っていません（画像として出力されています）。CSV でダウンロードし直してください。');
           return;
         }
         if (parsed.rows.length === 0) {
-          setMessage(`${parsed.pageCount} ページを読みましたが、明細の行が見つかりませんでした。CSV があればそちらを使ってください。`);
+          info(`${parsed.pageCount} ページを読みましたが、明細の行が見つかりませんでした。CSV があればそちらを使ってください。`);
           return;
         }
         setLoaded({ fileName: file.name, rows: parsed.rows, encoding: 'pdf', kind: 'pdf' });
@@ -92,7 +94,7 @@ export function ImportPage() {
       const decoded = decodeStatementBytes(bytes);
       const rows = parseCsv(decoded.text, detectDelimiter(decoded.text));
       if (rows.length === 0) {
-        setMessage('中身が空でした。');
+        info('中身が空でした。');
         return;
       }
 
@@ -101,7 +103,7 @@ export function ImportPage() {
       setMapping(saved?.mapping ?? detectColumns(rows));
       if (saved) setSourceLabel(saved.label);
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      fail(cause);
     } finally {
       setBusy(false);
     }
@@ -138,7 +140,7 @@ export function ImportPage() {
        */
       const suspects = duplicatesInvolving(findDuplicates(merge.merged), fresh.map((txn) => txn.id));
 
-      setMessage(
+      info(
         `${merge.added} 件を取り込みました。` +
           (merge.kept > 0 ? `${merge.kept} 件は既にあったので飛ばしました。` : '') +
           (judged.judged > 0 ? `初めての店 ${judged.judged} 件にカテゴリを当てました` : '') +
@@ -152,7 +154,7 @@ export function ImportPage() {
       if (suspects.length > 0) navigate(`#/transactions?month=${monthOf(suspects[0].a.date)}&filter=${DUPLICATES_FILTER}`);
       else if (merge.added > 0) navigate('#/transactions');
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      fail(cause);
     } finally {
       setBusy(false);
     }
@@ -209,7 +211,11 @@ export function ImportPage() {
           </Field>
         </div>
 
-        {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
+        {notice && (
+          <Notice tone={notice.tone} className="mt-3">
+            {notice.text}
+          </Notice>
+        )}
       </Card>
 
       {loaded && mapping && (
@@ -227,9 +233,9 @@ export function ImportPage() {
           }
         >
           <div className="grid gap-3 sm:grid-cols-4">
-            <ColumnSelect label="日付の列" value={mapping.date} width={width} loaded={loaded} onChange={(date) => setMapping({ ...mapping, date })} />
-            <ColumnSelect label="店名の列" value={mapping.merchant} width={width} loaded={loaded} onChange={(merchant) => setMapping({ ...mapping, merchant })} />
-            <ColumnSelect label="金額の列" value={mapping.amount} width={width} loaded={loaded} onChange={(amount) => setMapping({ ...mapping, amount })} />
+            <ColumnSelect label="日付の列" value={mapping.date} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(date) => setMapping({ ...mapping, date })} />
+            <ColumnSelect label="店名の列" value={mapping.merchant} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(merchant) => setMapping({ ...mapping, merchant })} />
+            <ColumnSelect label="金額の列" value={mapping.amount} width={width} loaded={loaded} headerRowIndex={mapping.headerRowIndex} onChange={(amount) => setMapping({ ...mapping, amount })} />
             <Field label="金額の符号">
               <Select
                 value={mapping.sign}
@@ -273,15 +279,18 @@ function ColumnSelect({
   value,
   width,
   loaded,
+  headerRowIndex,
   onChange,
 }: {
   label: string;
   value: number;
   width: number;
   loaded: Loaded;
+  /** 見出しの行。前置きの行がある CSV では 0 行目ではない。見出しが無い（-1）なら先頭の行を見本に出す */
+  headerRowIndex: number;
   onChange: (value: number) => void;
 }) {
-  const header = loaded.rows[Math.max(0, 0)];
+  const header = loaded.rows[Math.max(0, headerRowIndex)];
   return (
     <Field label={label}>
       <Select value={value} onChange={(event) => onChange(Number(event.target.value))} className="w-full">

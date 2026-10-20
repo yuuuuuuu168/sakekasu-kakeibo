@@ -31,6 +31,7 @@ import {
   receiptYenTotal,
   toMinor,
   transactionFromReceipt,
+  transactionToRemoveWith,
   usableRate,
   type Currency,
   type DuplicateReceiptPair,
@@ -38,6 +39,7 @@ import {
   type Receipt,
   type ReceiptItem,
   type SourceKind,
+  type Transaction,
 } from '@kakeibo/core';
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { api } from '../../api/index';
@@ -47,7 +49,11 @@ import { shrinkPhoto } from './shrinkPhoto';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
 import { config } from '../../config';
+import { useAction } from '../../lib/action';
 import { todayIso } from '../../lib/month';
+import { errorMessage } from '../../lib/errors';
+import { useNotice } from '../../lib/notice';
+import { Notice } from '../../components/ui/Notice';
 import { ReadingProgress, type Reading, type ReadingStage } from './ReadingProgress';
 
 type Draft = {
@@ -157,7 +163,8 @@ export function ReceiptsPage() {
   const [busy, setBusy] = useState(false);
   /** 写真を選んでから下書きが出るまでの進み具合。読み取り中でなければ undefined */
   const [reading, setReading] = useState<Reading | undefined>();
-  const [message, setMessage] = useState<string | undefined>();
+  const { notice, info, fail, clear } = useNotice();
+  const run = useAction();
 
   const categories = activeCategories(snapshot.categories);
   const linked = editing && editing.status !== 'pending' ? linkedTransaction(editing, snapshot.transactions) : undefined;
@@ -180,12 +187,24 @@ export function ReceiptsPage() {
    * 取り込んだ明細に当てただけのレシートなら、明細は本物なのでそのまま残す
    */
   async function keepOneReceipt(keep: Receipt, drop: Receipt) {
-    const created = drop.status === 'cash' ? snapshot.transactions.find((txn) => txn.receiptId === drop.id) : undefined;
+    const created = transactionToRemoveWith(drop, snapshot.transactions);
     const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
     if (!window.confirm(`${drop.date} の ${drop.storeName || '店名なし'} を消して、もう片方を残しますか${notice}`)) return;
-    await removeReceipt(drop.id);
+    await deleteReceipt(drop, created);
+    info(`同じレシートとして片方を消しました。${keep.storeName || '店名なし'} のレシートが残っています。`);
+  }
+
+  /** 保存済み一覧のゴミ箱。重複の組を片付けるときと同じく、レシートから作った明細も一緒に消す */
+  async function confirmDeleteReceipt(receipt: Receipt) {
+    const created = transactionToRemoveWith(receipt, snapshot.transactions);
+    const notice = created ? '。このレシートから作った明細も一緒に消えます' : '';
+    if (!window.confirm(`このレシートを消しますか${notice}`)) return;
+    await deleteReceipt(receipt, created);
+  }
+
+  async function deleteReceipt(receipt: Receipt, created: Transaction | undefined) {
+    await removeReceipt(receipt.id);
     if (created) await removeTransaction(created.id);
-    setMessage(`同じレシートとして片方を消しました。${keep.storeName || '店名なし'} のレシートが残っています。`);
   }
 
   /** 別の買い物だと言われた組。両側に印を付けて、次からは候補に出さない */
@@ -200,16 +219,16 @@ export function ReceiptsPage() {
    * まとめて 1 回の OCR に渡し、1 枚のレシートとして読ませる
    */
   async function onImages(files: File[]) {
-    setMessage(undefined);
+    clear();
     if (files.length > MAX_RECEIPT_PHOTOS) {
-      setMessage(`1 枚のレシートとして読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです。選び直してください。`);
+      info(`1 枚のレシートとして読めるのは ${MAX_RECEIPT_PHOTOS} 枚までです。選び直してください。`);
       return;
     }
     setBusy(true);
     // 送る前にモデルが読める大きさまで縮め、JPEG に直す（shrinkPhoto）。縮められなかった写真は元のまま
     const photos = await Promise.all(files.map((file) => shrinkPhoto(file)));
     if (photos.some((photo) => photo.type && !READABLE_IMAGE_TYPES.includes(photo.type))) {
-      setMessage('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
+      info('この形式の画像は読めません。JPEG・PNG・WebP の写真を選んでください。');
       setBusy(false);
       return;
     }
@@ -267,11 +286,11 @@ export function ReceiptsPage() {
       setDraft(next);
       const auto = autoMatch(findCandidates({ ...next, status: 'pending' }, snapshot.transactions));
       setSelectedTxnId(auto?.id);
-      if (auto) setMessage(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
+      if (auto) info(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
     } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = errorMessage(cause);
       const keys = uploadedKeys();
-      setMessage(
+      fail(
         keys.length === files.length
           ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）`
           : keys.length > 0
@@ -309,19 +328,19 @@ export function ReceiptsPage() {
       if (asPayment) {
         // 新しい明細なので saveTransactions で足す。saveTransaction は既にある明細の差し替えにしか効かない
         await saveTransactions([transactionFromReceipt(receipt, paidWith)]);
-        setMessage(`${paymentPhrase(paidWith)}として明細に足しました。${learned}`);
+        info(`${paymentPhrase(paidWith)}として明細に足しました。${learned}`);
       } else if (selectedTxnId) {
         if (selected) {
           await saveTransaction(applyReceipt(selected, receipt));
-          setMessage(`明細に当てました。内訳が品目ごとに分かれています。${learned}`);
+          info(`明細に当てました。内訳が品目ごとに分かれています。${learned}`);
         }
       } else {
-        setMessage(`レシートだけ保存しました。対応する明細を取り込んだら、もう一度開いて当ててください。${learned}`);
+        info(`レシートだけ保存しました。対応する明細を取り込んだら、もう一度開いて当ててください。${learned}`);
       }
 
       closeDraft();
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      fail(cause);
     } finally {
       setBusy(false);
     }
@@ -342,7 +361,7 @@ export function ReceiptsPage() {
     setDraft(draftFromReceipt(receipt));
     setEditing(receipt);
     setSelectedTxnId(receipt.txnId);
-    setMessage(undefined);
+    clear();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -377,16 +396,16 @@ export function ReceiptsPage() {
       if (editing.status === 'cash') {
         const txn = transactionFromReceipt(receipt, paidWith, linked);
         await (linked ? saveTransaction(txn) : saveTransactions([txn]));
-        setMessage(`${linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。'}${learned}`);
+        info(`${linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。'}${learned}`);
       } else if (linked) {
         await saveTransaction(applyReceipt(linked, receipt));
-        setMessage(`レシートを直し、紐付けた明細の内訳も合わせました。${learned}`);
+        info(`レシートを直し、紐付けた明細の内訳も合わせました。${learned}`);
       } else {
-        setMessage(`レシートを直しました。紐付けていた明細は見つかりませんでした。${learned}`);
+        info(`レシートを直しました。紐付けていた明細は見つかりませんでした。${learned}`);
       }
       closeDraft();
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause));
+      fail(cause);
     } finally {
       setBusy(false);
     }
@@ -466,7 +485,11 @@ export function ReceiptsPage() {
             : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。`}
         </p>
         {reading && <ReadingProgress reading={reading} />}
-        {message && <p className="mt-3 rounded-lg bg-plane px-3 py-2 text-sm text-ink">{message}</p>}
+        {notice && (
+          <Notice tone={notice.tone} className="mt-3">
+            {notice.text}
+          </Notice>
+        )}
       </Card>
 
       {draft && (
@@ -726,7 +749,11 @@ export function ReceiptsPage() {
       )}
 
       {duplicates.length > 0 && (
-        <DuplicateReceiptsCard pairs={duplicates} onKeep={keepOneReceipt} onDismiss={dismissDuplicateReceipts} />
+        <DuplicateReceiptsCard
+          pairs={duplicates}
+          onKeep={(keep, drop) => run(() => keepOneReceipt(keep, drop))}
+          onDismiss={(pair) => run(() => dismissDuplicateReceipts(pair))}
+        />
       )}
 
       <Card title={`保存済み ${snapshot.receipts.length} 枚`}>
@@ -757,9 +784,7 @@ export function ReceiptsPage() {
                   <span className="tnum text-sm font-medium text-ink">{formatMoney(receipt.total, receiptCurrency(receipt))}</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (window.confirm('このレシートを消しますか')) void removeReceipt(receipt.id);
-                    }}
+                    onClick={() => void run(() => confirmDeleteReceipt(receipt))}
                     className="rounded-md p-1.5 text-ink-2 hover:bg-plane"
                     aria-label="消す"
                   >

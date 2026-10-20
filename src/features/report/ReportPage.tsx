@@ -8,6 +8,9 @@ import { MonthPicker } from '../../components/ui/MonthPicker';
 import { StatTile } from '../../components/ui/StatTile';
 import { currentMonth, formatMonth, shiftMonth } from '../../lib/month';
 import { cn } from '../../lib/cn';
+import { useAction } from '../../lib/action';
+import { errorMessage } from '../../lib/errors';
+import { Notice } from '../../components/ui/Notice';
 
 const SCOLD_ICON: Record<ScoldLevel, typeof Award> = {
   0: Award,
@@ -33,6 +36,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
   const { snapshot, loading: storeLoading, saveTransaction } = useStore();
+  const run = useAction();
 
   /**
    * レポートは月初に作って保存したものなので、後からレシートを当てたり「身に覚えあり」と
@@ -52,11 +56,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
   async function confirmOne(id: string) {
     const txn = snapshot.transactions.find((item) => item.id === id);
     if (!txn) return;
-    try {
-      await saveTransaction(confirmPayment(txn));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+    await saveTransaction(confirmPayment(txn));
   }
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
         }
       })
       .catch((cause: unknown) => {
-        if (alive) setError(cause instanceof Error ? cause.message : String(cause));
+        if (alive) setError(errorMessage(cause));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -90,7 +90,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
         <MonthPicker month={month} onChange={setMonth} />
       </div>
 
-      {error && <p className="rounded-lg bg-critical/12 px-3 py-2 text-sm text-critical">{error}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
       {loading && <p className="py-8 text-center text-sm text-ink-2">読み込み中…</p>}
 
       {!loading && !report && (
@@ -158,7 +158,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
                     <div className="mt-1 flex items-center justify-end gap-3">
                       <span className="text-xs text-muted">{payment.sourceLabel}</span>
                       <span className="tnum text-sm font-medium text-ink">{formatYen(payment.amount)}</span>
-                      <Button size="sm" onClick={() => void confirmOne(payment.id)} disabled={storeLoading}>
+                      <Button size="sm" onClick={() => void run(() => confirmOne(payment.id))} disabled={storeLoading}>
                         身に覚えあり
                       </Button>
                     </div>

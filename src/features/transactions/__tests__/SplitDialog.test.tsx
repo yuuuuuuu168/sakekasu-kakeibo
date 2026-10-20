@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { SEED_CATEGORIES, type Transaction } from '@kakeibo/core';
+import { SEED_CATEGORIES, learnItemRules, type Transaction } from '@kakeibo/core';
 import { SplitDialog } from '../SplitDialog';
 
 const TXN: Transaction = {
@@ -118,5 +118,35 @@ describe('SplitDialog の品名', () => {
     });
 
     expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ name: 'てるてるおばけポンチョ', categoryId: 'work', origin: 'manual' });
+  });
+
+  it('覚えた品目のカテゴリがあれば、それを当てる', async () => {
+    const onSave = vi.fn(async (_transaction: Transaction) => undefined);
+    const rules = learnItemRules([{ name: 'Selected Posh', amount: 1200, categoryId: 'hobby-books', categoryEdited: true }]);
+    render(
+      <SplitDialog transaction={TXN} categories={SEED_CATEGORIES} rules={rules} onClose={() => undefined} onSave={onSave} />,
+    );
+
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: 'Selected Posh' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave.mock.calls[0][0].splits[0]).toMatchObject({ name: 'Selected Posh', categoryId: 'hobby-books' });
+  });
+
+  it('保存に失敗したらダイアログを閉じない', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onSave = vi.fn(async (_transaction: Transaction) => Promise.reject(new Error('API がエラーを返しました (500)')));
+    const onClose = vi.fn();
+    render(<SplitDialog transaction={TXN} categories={SEED_CATEGORIES} onClose={onClose} onSave={onSave} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存する' }));
+    });
+
+    expect(onSave).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '保存する' })).toBeEnabled();
   });
 });

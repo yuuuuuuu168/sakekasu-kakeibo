@@ -30,11 +30,13 @@ import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Select } from '../../components/ui/primitives';
 import { MonthPicker } from '../../components/ui/MonthPicker';
 import { SplitDialog } from './SplitDialog';
+import { useAction } from '../../lib/action';
 import { currentMonth } from '../../lib/month';
 import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER } from '../../lib/router';
 
 export function TransactionsPage({ month: initialMonth, filter: initialFilter }: { month?: string; filter?: string }) {
   const { snapshot, rules, saveTransaction, saveTransactions, saveReceipt, removeTransaction, saveRules } = useStore();
+  const run = useAction();
   const [month, setMonth] = useState(initialMonth ?? currentMonth());
   const [filter, setFilter] = useState(initialFilter ?? 'all');
   const [editing, setEditing] = useState<Transaction | undefined>();
@@ -151,7 +153,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
           <p className="flex-1 text-sm text-ink">
             チャージらしい明細が {misfiled.length} 件、まだ支出として計上されています。振替にすると、この分がカテゴリ別の実績から外れます。
           </p>
-          <Button variant="primary" size="sm" onClick={() => void markAllAsTransfer()}>
+          <Button variant="primary" size="sm" onClick={() => void run(markAllAsTransfer)}>
             まとめて振替にする
           </Button>
         </div>
@@ -164,7 +166,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
             値引きのカテゴリを作る前に入れた値引きが、明細 {discounts.transactions.length} 件・レシート {discounts.receipts.length} 枚に残っています
             （全期間）。付け替えると、品目は値引き前の額になり、値引きは「値引き」の行に出ます。
           </p>
-          <Button variant="primary" size="sm" onClick={() => void refileAllDiscounts()} disabled={refiling}>
+          <Button variant="primary" size="sm" onClick={() => void run(refileAllDiscounts)} disabled={refiling}>
             値引きに付け替える
           </Button>
         </div>
@@ -175,8 +177,8 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
           pairs={duplicates}
           categories={snapshot.categories}
           receipts={snapshot.receipts}
-          onRemove={removeTransaction}
-          onDismiss={dismissDuplicate}
+          onRemove={(id) => run(() => removeTransaction(id))}
+          onDismiss={(pair) => run(() => dismissDuplicate(pair))}
         />
       ) : (
         <Card title={`${rows.length} 件`} action={<span className="tnum text-sm font-semibold text-ink">{formatYen(total)}</span>}>
@@ -217,7 +219,10 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                         <div className="mt-1.5">
                           <Select
                             value={txn.splits[0]?.categoryId ?? UNCATEGORIZED_ID}
-                            onChange={(event) => void recategorize(txn, event.target.value)}
+                            onChange={(event) => {
+                              const categoryId = event.target.value;
+                              void run(() => recategorize(txn, categoryId));
+                            }}
                             className="text-xs"
                             aria-label="カテゴリ"
                           >
@@ -245,7 +250,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                         <button
                           type="button"
                           onClick={() => {
-                            if (window.confirm('この明細を消しますか')) void removeTransaction(txn.id);
+                            if (window.confirm('この明細を消しますか')) void run(() => removeTransaction(txn.id));
                           }}
                           className="rounded-md p-1.5 text-ink-2 hover:bg-plane"
                           aria-label="消す"
@@ -266,6 +271,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
         <SplitDialog
           transaction={editing}
           categories={snapshot.categories}
+          rules={snapshot.rules}
           onClose={() => setEditing(undefined)}
           onSave={saveTransaction}
         />

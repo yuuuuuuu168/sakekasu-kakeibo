@@ -12,7 +12,7 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
+import { MAX_TRANSACTIONS_PER_REQUEST, RECEIPT_IMAGE_TYPES, isReceiptImageType } from '@kakeibo/core';
 import {
   OCR_JOB_STALE_MS,
   OCR_JOB_TTL_SECONDS,
@@ -21,6 +21,7 @@ import {
   type OcrJobRequest,
   type OcrJobStatus,
 } from '../shared/ocr-job';
+import { userPk } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
 const RECEIPT_BUCKET = requireEnv('RECEIPT_BUCKET');
@@ -37,9 +38,6 @@ function requireEnv(name: string): string {
   if (!value) throw new Error(`${name} is not set`);
   return value;
 }
-
-/** 1 回の取り込みで受け取る明細の上限。取り込み画面は 1 ファイル分しか送らない */
-const MAX_TRANSACTIONS_PER_REQUEST = 2000;
 
 type Json = Record<string, unknown>;
 
@@ -61,7 +59,7 @@ export async function handler(
   if (typeof sub !== 'string' || sub === '') return json(401, { message: 'サインインが必要です' });
 
   const method = event.requestContext.http.method;
-  const segments = (event.rawPath ?? '').split('/').filter(Boolean);
+  const segments = (event.rawPath ?? '').split('/').filter(Boolean).map(decodeSegment);
   const body = parseBody(event.body, event.isBase64Encoded);
   const started = Date.now();
 
@@ -163,6 +161,18 @@ function countCategories(rows: unknown[]): Json {
 
 class BadRequest extends Error {}
 
+/**
+ * rawPath はエンコードされたまま届く。画面は id を encodeURIComponent してパスに入れるので、
+ * ここで戻してからキーにする。壊れたエンコードはそのまま使う（id として見つからないだけ）
+ */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 async function route(sub: string, method: string, segments: string[], body: Json): Promise<APIGatewayProxyResultV2> {
   const [resource, param, child] = segments;
 
@@ -214,7 +224,7 @@ async function route(sub: string, method: string, segments: string[], body: Json
   if (method === 'GET' && resource === 'reports' && param) {
     assertMonth(param);
     const found = await documents.send(
-      new GetCommand({ TableName: TABLE_NAME, Key: { pk: `USER#${sub}`, sk: SK.report(param) } }),
+      new GetCommand({ TableName: TABLE_NAME, Key: { pk: userPk(sub), sk: SK.report(param) } }),
     );
     if (!found.Item) return json(404, { message: 'この月のレポートはまだありません' });
     return json(200, found.Item.report);
@@ -232,7 +242,7 @@ async function loadSnapshot(sub: string) {
       new QueryCommand({
         TableName: TABLE_NAME,
         KeyConditionExpression: 'pk = :pk',
-        ExpressionAttributeValues: { ':pk': `USER#${sub}` },
+        ExpressionAttributeValues: { ':pk': userPk(sub) },
         ...(startKey ? { ExclusiveStartKey: startKey } : {}),
       }),
     );
@@ -290,7 +300,7 @@ async function putTransactions(sub: string, body: Json): Promise<APIGatewayProxy
     let request: Record<string, unknown[]> | undefined = {
       [TABLE_NAME]: chunk.map((txn) => ({
         // キーは展開の後ろに置く。本文に pk / sk があっても、sub から組み立てた値が勝つ
-        PutRequest: { Item: { ...txn, pk: `USER#${sub}`, sk: SK.transaction(txn.id) } },
+        PutRequest: { Item: { ...txn, pk: userPk(sub), sk: SK.transaction(txn.id) } },
       })),
     };
 
@@ -361,13 +371,13 @@ async function put(sub: string, sk: string, attributes: Json): Promise<void> {
   await documents.send(
     new PutCommand({
       TableName: TABLE_NAME,
-      Item: { ...attributes, pk: `USER#${sub}`, sk, updatedAt: new Date().toISOString() },
+      Item: { ...attributes, pk: userPk(sub), sk, updatedAt: new Date().toISOString() },
     }),
   );
 }
 
 async function remove(sub: string, sk: string): Promise<APIGatewayProxyResultV2> {
-  await documents.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: `USER#${sub}`, sk } }));
+  await documents.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: userPk(sub), sk } }));
   return json(204, undefined);
 }
 

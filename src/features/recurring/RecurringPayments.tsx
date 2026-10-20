@@ -12,6 +12,7 @@ import {
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
+import { useAction } from '../../lib/action';
 import { currentMonth, formatMonth, todayIso } from '../../lib/month';
 
 const INTERVALS: { value: number; label: string }[] = [
@@ -31,6 +32,7 @@ const INTERVALS: { value: number; label: string }[] = [
  */
 export function RecurringPayments() {
   const { snapshot, saveRecurring } = useStore();
+  const run = useAction();
   const [editing, setEditing] = useState<RecurringPayment | 'new' | undefined>();
   // 振替（チャージ）は支出ではないので、定期支払いの行き先には選ばせない。集計でも外れている
   const categories = activeCategories(snapshot.categories).filter((category) => category.id !== TRANSFER_ID);
@@ -116,12 +118,12 @@ export function RecurringPayments() {
                     </Button>
                     <Button
                       size="sm"
-                      onClick={() => void toggleArchived(payment)}
+                      onClick={() => void run(() => toggleArchived(payment))}
                       aria-label={payment.archived ? `${payment.label} を再開` : `${payment.label} を停止`}
                     >
                       {payment.archived ? <Play size={14} aria-hidden /> : <Pause size={14} aria-hidden />}
                     </Button>
-                    <Button size="sm" variant="danger" onClick={() => void remove(payment)} aria-label={`${payment.label} を削除`}>
+                    <Button size="sm" variant="danger" onClick={() => void run(() => remove(payment))} aria-label={`${payment.label} を削除`}>
                       <Trash2 size={14} aria-hidden />
                     </Button>
                   </div>
@@ -206,6 +208,7 @@ function RecurringForm({
 }) {
   const [draft, setDraft] = useState<Draft>(() => toDraft(initial, categories));
   const [busy, setBusy] = useState(false);
+  const run = useAction();
 
   const amount = Math.round(Number(draft.amount));
   const valid = draft.label.trim() !== '' && Number.isFinite(amount) && amount > 0 && /^\d{4}-\d{2}$/.test(draft.startMonth);
@@ -328,7 +331,7 @@ function RecurringForm({
       </label>
 
       <div className="flex items-center gap-2">
-        <Button variant="primary" onClick={() => void submit()} disabled={!valid || busy}>
+        <Button variant="primary" onClick={() => void run(submit)} disabled={!valid || busy}>
           保存する
         </Button>
         <Button onClick={onCancel} disabled={busy}>
