@@ -4,10 +4,9 @@ import type {
   CategoryRule,
   ClassifyTarget,
   ColumnMapping,
-  Currency,
   MonthlyReport,
   Receipt,
-  ReceiptItem,
+  ReceiptDraft,
   RecurringPayment,
   SourceKind,
   Transaction,
@@ -32,20 +31,8 @@ export type Snapshot = {
   recurring: RecurringPayment[];
 };
 
-/** OCR が返すレシートの下書き。確定前なので id は持たない */
-export type ReceiptDraft = {
-  storeName: string;
-  date: string;
-  /** currency の最小単位の整数（円、セント）。品目の amount も同じ */
-  total: number;
-  items: ReceiptItem[];
-  /** ドルのレシートと読めたときだけ入る。無ければ円 */
-  currency?: Currency;
-  /** 支払いの印字から読めた支払い方法。読めなければ無い */
-  paymentMethod?: SourceKind;
-  /** OCR が読み切れなかった項目の説明。画面に出して直させる */
-  warnings?: string[];
-};
+/** OCR が返すレシートの下書き。Lambda と同じ型を core から読む */
+export type { ReceiptDraft } from '@kakeibo/core';
 
 export type UploadTarget = {
   uploadUrl: string;

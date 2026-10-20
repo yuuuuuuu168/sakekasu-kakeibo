@@ -19,6 +19,7 @@ export * from './receipt/match';
 export * from './receipt/register';
 export * from './receipt/discount';
 export * from './receipt/photos';
+export * from './receipt/draft';
 export * from './duplicate';
 export * from './transfer';
 export * from './payment';

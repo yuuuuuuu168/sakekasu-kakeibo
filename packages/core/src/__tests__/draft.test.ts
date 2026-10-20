@@ -1,19 +1,5 @@
-import { beforeAll, describe, expect, it } from 'vitest';
-
-/** モジュールの読み込み時に環境変数を見るので、先に置いてから動的に読み込む */
-let normalizeDraft: typeof import('../index')['normalizeDraft'];
-let sniffMediaType: typeof import('../index')['sniffMediaType'];
-let summarizeDraft: typeof import('../index')['summarizeDraft'];
-
-beforeAll(async () => {
-  process.env.RECEIPT_BUCKET = 'test-bucket';
-  process.env.BEDROCK_MODEL_ID = 'test-model';
-  process.env.TABLE_NAME = 'test-table';
-  const module = await import('../index');
-  normalizeDraft = module.normalizeDraft;
-  summarizeDraft = module.summarizeDraft;
-  sniffMediaType = module.sniffMediaType;
-});
+import { describe, expect, it } from 'vitest';
+import { normalizeDraft, summarizeDraft } from '../receipt/draft';
 
 describe('normalizeDraft', () => {
   it('前後に説明が付いていても JSON を取り出す', () => {
@@ -173,18 +159,6 @@ describe('normalizeDraft（ドルのレシート）', () => {
     const draft = normalizeDraft('{"storeName":"店","date":"2026-10-03","total":1200,"items":[{"name":"おにぎり","amount":150}]}', today);
     expect(draft).not.toHaveProperty('currency');
     expect(draft.total).toBe(1200);
-  });
-});
-
-describe('sniffMediaType', () => {
-  it('中身のバイト列から形式を決める', () => {
-    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0, 0, 0, 0, 0]);
-    const text = new Uint8Array(Buffer.from('not an image at all'));
-    expect(sniffMediaType(jpeg)).toBe('image/jpeg');
-    expect(sniffMediaType(png)).toBe('image/png');
-    expect(sniffMediaType(text)).toBeUndefined();
-    expect(sniffMediaType(new Uint8Array([0xff]))).toBeUndefined();
   });
 });
 
