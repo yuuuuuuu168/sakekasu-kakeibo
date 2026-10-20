@@ -56,12 +56,13 @@ UI コンポーネントのライブラリとルータは入れていない。�
 ```
 packages/core/     # AWS に依存しない純粋関数。画面と Lambda の両方から読む
   src/statement/   # CSV の解析・文字コード判定・列の推定・明細への正規化
-  src/receipt/     # 品目のカテゴリ推定・内訳の分割・明細とのマッチ
+  src/receipt/     # 品目のカテゴリ推定・内訳の分割・明細とのマッチ・OCR の下書きの正規化
   src/rules.ts     # 自動分類と初期搭載ルール
-  src/classify.ts  # 大カテゴリ → 小カテゴリの 2 段判定（材料づくりと採否）
+  src/classify.ts  # 大カテゴリ → 小カテゴリの 2 段判定（材料づくりと、答えを品目・明細に当てる採否）
   src/recurring.ts # 定期支払いの発生回・残り回数・明細との突き合わせ
   src/budget.ts    # 月次の集計
   src/report.ts    # 叱りの生成
+  src/snapshot.ts  # 保存データの形と、欠けの補い方・保存したものの差し込み
 src/
   features/        # 機能ごとのディレクトリ（auth / receipts / transactions / import /
                    # dashboard / report / categories / recurring / settings）

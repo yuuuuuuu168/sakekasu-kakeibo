@@ -3,33 +3,18 @@ import type {
   Category,
   CategoryRule,
   ClassifyTarget,
-  ColumnMapping,
   MonthlyReport,
   Receipt,
   ReceiptDraft,
+  SavedMapping,
+  Snapshot,
   RecurringPayment,
-  SourceKind,
   Transaction,
   Verdict,
 } from '@kakeibo/core';
 
-/** CSV の列の対応をソースごとに覚えておく。2 回目以降は指定し直さなくて済む */
-export type SavedMapping = {
-  sourceId: string;
-  label: string;
-  source: SourceKind;
-  mapping: ColumnMapping;
-};
-
-export type Snapshot = {
-  categories: Category[];
-  rules: CategoryRule[];
-  budgets: Budget[];
-  transactions: Transaction[];
-  receipts: Receipt[];
-  mappings: SavedMapping[];
-  recurring: RecurringPayment[];
-};
+/** 保存データの形は core（snapshot.ts）にある。月次レポートの Lambda と同じ型を見る */
+export type { SavedMapping, Snapshot } from '@kakeibo/core';
 
 /** OCR が返すレシートの下書き。Lambda と同じ型を core から読む */
 export type { ReceiptDraft } from '@kakeibo/core';

@@ -1,8 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  SEED_CATEGORIES,
   allRules,
-  withLaterSeeds,
+  emptySnapshot,
+  normalizeSnapshot,
+  removeReceiptFrom,
+  removeTransactionFrom,
+  replaceTransaction,
+  upsertBudget,
+  upsertMapping,
+  upsertReceipt,
+  upsertTransactions,
   type Budget,
   type Category,
   type CategoryRule,
@@ -33,20 +40,10 @@ type Store = {
   removeReceipt: (id: string) => Promise<void>;
 };
 
-const EMPTY: Snapshot = {
-  categories: SEED_CATEGORIES,
-  rules: [],
-  budgets: [],
-  transactions: [],
-  receipts: [],
-  mappings: [],
-  recurring: [],
-};
-
 const StoreContext = createContext<Store | undefined>(undefined);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [snapshot, setSnapshot] = useState<Snapshot>(EMPTY);
+  const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
 
@@ -54,8 +51,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const loaded = await api.loadSnapshot();
-      // 使い始めた後で初期カテゴリに足したもの（値引き）は、保存済みの一覧に補う
-      setSnapshot({ ...EMPTY, ...loaded, categories: loaded.categories?.length ? withLaterSeeds(loaded.categories) : SEED_CATEGORIES });
+      // 欠けの補い方（使い始めの初期カテゴリ、後から足した値引き）は core の normalizeSnapshot
+      setSnapshot(normalizeSnapshot(loaded));
       setError(undefined);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -84,24 +81,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveTransactions: (transactions) =>
         commit(
           () => api.putTransactions(transactions),
-          (current) => {
-            const byId = new Map(current.transactions.map((txn) => [txn.id, txn]));
-            for (const txn of transactions) byId.set(txn.id, txn);
-            return { ...current, transactions: [...byId.values()] };
-          },
+          (current) => upsertTransactions(current, transactions),
         ),
       saveTransaction: (transaction) =>
         commit(
           () => api.updateTransaction(transaction),
-          (current) => ({
-            ...current,
-            transactions: current.transactions.map((txn) => (txn.id === transaction.id ? transaction : txn)),
-          }),
+          (current) => replaceTransaction(current, transaction),
         ),
       removeTransaction: (id) =>
         commit(
           () => api.deleteTransaction(id),
-          (current) => ({ ...current, transactions: current.transactions.filter((txn) => txn.id !== id) }),
+          (current) => removeTransactionFrom(current, id),
         ),
       saveCategories: (categories) =>
         commit(
@@ -121,25 +111,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveBudget: (budget) =>
         commit(
           () => api.putBudget(budget),
-          (current) => ({ ...current, budgets: [...current.budgets.filter((item) => item.month !== budget.month), budget] }),
+          (current) => upsertBudget(current, budget),
         ),
       saveMapping: (mapping) =>
         commit(
           () => api.putMapping(mapping),
-          (current) => ({
-            ...current,
-            mappings: [...current.mappings.filter((item) => item.sourceId !== mapping.sourceId), mapping],
-          }),
+          (current) => upsertMapping(current, mapping),
         ),
       saveReceipt: (receipt) =>
         commit(
           () => api.putReceipt(receipt),
-          (current) => ({ ...current, receipts: [...current.receipts.filter((item) => item.id !== receipt.id), receipt] }),
+          (current) => upsertReceipt(current, receipt),
         ),
       removeReceipt: (id) =>
         commit(
           () => api.deleteReceipt(id),
-          (current) => ({ ...current, receipts: current.receipts.filter((item) => item.id !== id) }),
+          (current) => removeReceiptFrom(current, id),
         ),
     }),
     [snapshot, loading, error, reload, commit],

@@ -1,6 +1,15 @@
 import {
-  SEED_CATEGORIES,
   buildMonthlyReport,
+  emptySnapshot,
+  normalizeSnapshot,
+  removeReceiptFrom,
+  removeTransactionFrom,
+  replaceTransaction,
+  reportInputFor,
+  upsertBudget,
+  upsertMapping,
+  upsertReceipt,
+  upsertTransactions,
   type Budget,
   type Category,
   type CategoryRule,
@@ -13,18 +22,6 @@ import {
 import { ApiUnavailable, type KakeiboApi, type ReceiptDraft, type SavedMapping, type Snapshot, type UploadTarget } from './types';
 
 const KEY = 'sakekasu-kakeibo.snapshot.v1';
-
-function emptySnapshot(): Snapshot {
-  return {
-    categories: SEED_CATEGORIES,
-    rules: [],
-    budgets: [],
-    transactions: [],
-    receipts: [],
-    mappings: [],
-    recurring: [],
-  };
-}
 
 function read(): Snapshot {
   try {
@@ -57,22 +54,15 @@ export const localApi: KakeiboApi = {
   },
 
   async putTransactions(transactions: Transaction[]): Promise<void> {
-    update((snapshot) => {
-      const byId = new Map(snapshot.transactions.map((txn) => [txn.id, txn]));
-      for (const txn of transactions) byId.set(txn.id, txn);
-      return { ...snapshot, transactions: [...byId.values()] };
-    });
+    update((snapshot) => upsertTransactions(snapshot, transactions));
   },
 
   async updateTransaction(transaction: Transaction): Promise<void> {
-    update((snapshot) => ({
-      ...snapshot,
-      transactions: snapshot.transactions.map((txn) => (txn.id === transaction.id ? transaction : txn)),
-    }));
+    update((snapshot) => replaceTransaction(snapshot, transaction));
   },
 
   async deleteTransaction(id: string): Promise<void> {
-    update((snapshot) => ({ ...snapshot, transactions: snapshot.transactions.filter((txn) => txn.id !== id) }));
+    update((snapshot) => removeTransactionFrom(snapshot, id));
   },
 
   async putCategories(categories: Category[]): Promise<void> {
@@ -88,28 +78,19 @@ export const localApi: KakeiboApi = {
   },
 
   async putBudget(budget: Budget): Promise<void> {
-    update((snapshot) => ({
-      ...snapshot,
-      budgets: [...snapshot.budgets.filter((item) => item.month !== budget.month), budget],
-    }));
+    update((snapshot) => upsertBudget(snapshot, budget));
   },
 
   async putMapping(mapping: SavedMapping): Promise<void> {
-    update((snapshot) => ({
-      ...snapshot,
-      mappings: [...snapshot.mappings.filter((item) => item.sourceId !== mapping.sourceId), mapping],
-    }));
+    update((snapshot) => upsertMapping(snapshot, mapping));
   },
 
   async putReceipt(receipt: Receipt): Promise<void> {
-    update((snapshot) => ({
-      ...snapshot,
-      receipts: [...snapshot.receipts.filter((item) => item.id !== receipt.id), receipt],
-    }));
+    update((snapshot) => upsertReceipt(snapshot, receipt));
   },
 
   async deleteReceipt(id: string): Promise<void> {
-    update((snapshot) => ({ ...snapshot, receipts: snapshot.receipts.filter((item) => item.id !== id) }));
+    update((snapshot) => removeReceiptFrom(snapshot, id));
   },
 
   async requestUpload(): Promise<UploadTarget> {
@@ -128,16 +109,11 @@ export const localApi: KakeiboApi = {
     throw new ApiUnavailable('カテゴリの判定には AWS 側が必要です。');
   },
 
-  /** ローカルモードでは月次レポートをその場で組む。Lambda の代わり */
+  /**
+   * ローカルモードでは月次レポートをその場で組む。Lambda の代わり。
+   * 補い方と材料は Lambda と同じ（normalizeSnapshot / reportInputFor）
+   */
   async getReport(month: string): Promise<MonthlyReport | undefined> {
-    const snapshot = read();
-    return buildMonthlyReport({
-      month,
-      transactions: snapshot.transactions,
-      categories: snapshot.categories,
-      budget: snapshot.budgets.find((budget) => budget.month === month),
-      receipts: snapshot.receipts,
-      recurring: snapshot.recurring,
-    });
+    return buildMonthlyReport(reportInputFor(normalizeSnapshot(read()), month));
   },
 };
