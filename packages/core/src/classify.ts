@@ -1,5 +1,7 @@
-import { DISCOUNT_ID, TRANSFER_ID, UNCATEGORIZED_ID, childCategories, topLevelCategories } from './categories';
-import type { Category } from './types';
+import { DISCOUNT_ID, TRANSFER_ID, UNCATEGORIZED_ID, categoryLabel, childCategories, topLevelCategories } from './categories';
+import { normalizeMerchant } from './merchant';
+import { applyItemRules, learnRule } from './rules';
+import type { Category, CategoryRule, ReceiptItem, Transaction } from './types';
 
 /**
  * カテゴリ判定を 2 段に分ける。まず大カテゴリを選び、その中の小カテゴリを選ぶ。
@@ -167,7 +169,7 @@ export function decideVerdict(
   parent: ChoiceAnswer | undefined,
   child: ChoiceAnswer | undefined,
 ): Verdict {
-  const known = new Set(categories.filter((category) => !category.archived).map((category) => category.id));
+  const known = knownCategoryIds(categories);
 
   // 未分類を選んだときは「置き場所が分からなかった」という答えなので、確信が高くても未解決として扱う。
   // 呼び出し側から見ると、ルールを学習させてはいけない・人に見せたい、という点で確信の低い答えと同じ
@@ -220,4 +222,155 @@ export function decideVerdicts(
     verdicts[subject.key] = decideVerdict(target.categories, parentAnswers[subject.key], childAnswers[subject.key]);
   }
   return verdicts;
+}
+
+/*
+ * ここから下は、返ってきた答えを品目や明細に書き込む側の採否。
+ * 判定の呼び出し（api.classify）は画面の src/api/classify.ts に残し、何を聞くか（plan）と
+ * 答えをどう採るか（apply）をここに置く。Lambda から同じ採否が要るときに 2 回書かないため。
+ */
+
+/** 使っているカテゴリの ID。消した（archived）カテゴリは入れない */
+export function knownCategoryIds(categories: Category[]): Set<string> {
+  return new Set(categories.filter((category) => !category.archived).map((category) => category.id));
+}
+
+/**
+ * 使える答えかどうかを確かめる。手元にあるカテゴリを指していない答えは捨てる。
+ *
+ * 同じ検査は判定の側（`decideVerdict`）でもしているが、こちらは受け取った ID を
+ * 内訳とルールに書き込む側なので、書き込む直前にもう一度見る。画面が知らない
+ * カテゴリが内訳に入ると、どの行にも出てこない額ができて、集計が静かに狂う。
+ * ルールとして覚えてしまえば、以降の取り込み全部に効き続ける。
+ */
+export function usableVerdict(verdict: Verdict | undefined, known: Set<string>): verdict is Verdict {
+  return verdict !== undefined && verdict.status !== 'unresolved' && known.has(verdict.categoryId);
+}
+
+export type ItemJudgement = {
+  /** 判定に聞く分。空なら聞かなくてよい */
+  target: ClassifyTarget;
+  /** 覚えた品目のカテゴリを当てた後の品目 */
+  items: ReceiptItem[];
+  /** 判定に聞かない行（覚えた品目と値引き）の位置 */
+  skipped: Set<number>;
+};
+
+/**
+ * レシートの品目のうち、判定に聞く分を決める。順番は、人が覚えさせたカテゴリ（品目のルール）、
+ * 判定（Jev）、OCR の関数がキーワード表で付けた答え。
+ *
+ * 覚えさせた品目は判定に聞かない。人が決めた答えを上書きさせないためと、聞く数を減らすため。
+ * 負の金額の行は値引きなので聞かない（キーワード表の側で値引きに入っている）。
+ * 「おにぎり 値引」を聞くと食費と答えが返り、値引きが品目の側に混ざる
+ */
+export function planItemJudgement(
+  items: ReceiptItem[],
+  storeName: string,
+  categories: Category[],
+  rules: CategoryRule[] = [],
+): ItemJudgement {
+  const known = knownCategoryIds(categories);
+  // 覚えたカテゴリが今は使われていない（消した・統合した）ときは、覚えていないのと同じに扱う
+  const ruled = applyItemRules(items, rules.filter((rule) => known.has(rule.categoryId)));
+  const skipped = new Set([...ruled.ruled, ...items.flatMap((item, index) => (item.amount < 0 ? [index] : []))]);
+  return {
+    target: {
+      kind: 'item',
+      categories,
+      subjects: items.flatMap((item, index) =>
+        skipped.has(index) ? [] : [{ key: String(index), text: item.name, ...(storeName ? { context: storeName } : {}) }],
+      ),
+    },
+    items: ruled.items,
+    skipped,
+  };
+}
+
+/**
+ * 判定の答えを品目に当てる。答えが届かなかった品目は、キーワード表の答えをそのまま残す。
+ * 確信が中くらいの答えは使うが、下書きの注意書きに混ぜる文を返す
+ */
+export function applyItemVerdicts(
+  plan: ItemJudgement,
+  verdicts: Record<string, Verdict>,
+  categories: Category[],
+): { items: ReceiptItem[]; warnings: string[] } {
+  const known = knownCategoryIds(categories);
+  const warnings: string[] = [];
+  const items = plan.items.map((item, index) => {
+    if (plan.skipped.has(index)) return item;
+    const verdict = verdicts[String(index)];
+    if (!usableVerdict(verdict, known)) return item;
+    if (verdict.status === 'review') {
+      warnings.push(`「${item.name}」は ${categoryLabel(categories, verdict.categoryId)} と見ましたが、確信は高くありません。`);
+    }
+    return { ...item, categoryId: verdict.categoryId };
+  });
+  return { items, warnings };
+}
+
+export type MerchantJudgement = {
+  target: ClassifyTarget;
+  /** 正規化した店舗名 → 判定に見せた元の店舗名 */
+  names: Map<string, string>;
+};
+
+/** ルールに当たらなかった明細。内訳がまだ 1 行で、未分類のまま */
+export function isUnclassified(txn: Transaction): boolean {
+  return txn.splits.length === 1 && txn.splits[0].categoryId === UNCATEGORIZED_ID;
+}
+
+/**
+ * 取り込んだ明細のうち、ルールに当たらなかった店を判定に聞く分にする。
+ * 正規化した店舗名で 1 つにまとめ、表記が揺れただけの同じ店を 2 回聞かない
+ */
+export function planMerchantJudgement(transactions: Transaction[], categories: Category[]): MerchantJudgement {
+  const names = new Map<string, string>();
+  for (const txn of transactions) {
+    if (!isUnclassified(txn)) continue;
+    const key = normalizeMerchant(txn.rawMerchant);
+    if (key === '' || names.has(key)) continue;
+    names.set(key, txn.rawMerchant);
+  }
+  return {
+    target: { kind: 'merchant', categories, subjects: [...names].map(([key, text]) => ({ key, text })) },
+    names,
+  };
+}
+
+/**
+ * 店の判定の答えを明細に当てる。同じ店の行には全部同じ答えが効く。
+ * 確信が高ければルールにして覚えるので、次の月の取り込みではルールが先に当たり、判定そのものを呼ばなくなる。
+ * 確信が中くらいならカテゴリだけ入れて、ルールは作らない（間違いを固定しないため）。
+ */
+export function applyMerchantVerdicts(
+  transactions: Transaction[],
+  plan: MerchantJudgement,
+  verdicts: Record<string, Verdict>,
+  categories: Category[],
+): { transactions: Transaction[]; learned: CategoryRule[]; judged: number } {
+  const known = knownCategoryIds(categories);
+  const keys = [...plan.names.keys()];
+
+  const learned: CategoryRule[] = [];
+  for (const key of keys) {
+    const verdict = verdicts[key];
+    if (usableVerdict(verdict, known) && verdict.status === 'accepted') {
+      learned.push(learnRule(plan.names.get(key) ?? key, verdict.categoryId));
+    }
+  }
+
+  const judged = transactions.map((txn) => {
+    if (!isUnclassified(txn)) return txn;
+    const verdict = verdicts[normalizeMerchant(txn.rawMerchant)];
+    if (!usableVerdict(verdict, known)) return txn;
+    return { ...txn, splits: txn.splits.map((split) => ({ ...split, categoryId: verdict.categoryId })) };
+  });
+
+  return {
+    transactions: judged,
+    learned,
+    judged: keys.filter((key) => usableVerdict(verdicts[key], known)).length,
+  };
 }
