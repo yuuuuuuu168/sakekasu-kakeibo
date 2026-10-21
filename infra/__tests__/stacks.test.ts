@@ -35,7 +35,7 @@ const anthropicFederation: AnthropicFederation = {
 };
 
 /** 既定は本番と同じく ID 連携あり。`{ federation: false }` で Bedrock だけの構成を組む */
-function stacks({ federation = true }: { federation?: boolean } = {}) {
+function stacks({ federation = true, benchRuleId }: { federation?: boolean; benchRuleId?: string } = {}) {
   const app = new cdk.App();
   const data = new DataStack(app, 'test-data', { envName: 'test', env, receiptRetentionDays: 90 });
   const api = new ApiStack(app, 'test-api', {
@@ -45,7 +45,7 @@ function stacks({ federation = true }: { federation?: boolean } = {}) {
     receiptBucket: data.receiptBucket,
     sharedAuth,
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
-    ...(federation ? { anthropicFederation } : {}),
+    ...(federation ? { anthropicFederation: { ...anthropicFederation, ...(benchRuleId ? { benchRuleId } : {}) } } : {}),
   });
   const site = new SiteStack(app, 'test-site', {
     envName: 'test',
@@ -352,7 +352,71 @@ describe('ApiStack', () => {
   it('カスタムリソースを作らない（ロググループは明示して作る）', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
-    template.resourceCountIs('AWS::Logs::LogGroup', 4);
+    // api / ocr-receipt / classify / monthly-report / model-bench
+    template.resourceCountIs('AWS::Logs::LogGroup', 5);
+  });
+
+  /*
+   * モデルの評価は保存済みのレシートを正解として読むが、家計簿のデータは書き換えない。
+   * Claude Console の ID 連携のルールがロールの ARN を照合するので、ロールの名前は固定する。
+   */
+  describe('モデルの評価', () => {
+    const benchPolicy = (template: Template) => {
+      const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+      const bench = policies.find((policy) => JSON.stringify(policy.Properties.Roles).includes('ModelBenchFunctionRole'));
+      return bench!.Properties.PolicyDocument.Statement as Record<string, unknown>[];
+    };
+
+    it('ロールの名前を固定し、同時実行は 1・再試行は 0', () => {
+      const template = Template.fromStack(stacks().api);
+      template.hasResourceProperties('AWS::IAM::Role', { RoleName: 'sakekasu-kakeibo-test-model-bench' });
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: 'sakekasu-kakeibo-test-model-bench',
+        Role: { 'Fn::GetAtt': [Match.stringLikeRegexp('^ModelBenchFunctionRole'), 'Arn'] },
+        ReservedConcurrentExecutions: 1,
+        Timeout: 900,
+      });
+      template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+        FunctionName: Match.objectLike({ Ref: Match.stringLikeRegexp('^ModelBenchFunction') }),
+        MaximumRetryAttempts: 0,
+      });
+    });
+
+    it('テーブルとバケットは読むだけ', () => {
+      const actions = benchPolicy(Template.fromStack(stacks().api)).flatMap((statement) =>
+        Array.isArray(statement.Action) ? (statement.Action as string[]) : [statement.Action as string],
+      );
+      expect(actions.some((action) => /^dynamodb:(Put|Update|Delete|BatchWrite)/.test(action))).toBe(false);
+      expect(actions.some((action) => /^s3:(Put|Delete)/.test(action))).toBe(false);
+      expect(actions).toContain('dynamodb:Scan');
+      expect(actions).toContain('s3:GetObject*');
+    });
+
+    it('STS の ID トークンは OCR と同じ条件で絞る', () => {
+      const sts = benchPolicy(Template.fromStack(stacks().api)).find((statement) => statement.Action === 'sts:GetWebIdentityToken');
+      expect(sts).toMatchObject({
+        Condition: {
+          'ForAllValues:StringEquals': { 'sts:IdentityTokenAudience': ['https://api.anthropic.com'] },
+          NumericLessThanEquals: { 'sts:DurationSeconds': 300 },
+          StringEquals: { 'sts:SigningAlgorithm': 'RS256' },
+        },
+      });
+    });
+
+    it('評価用のルールがあればそれで、無ければ OCR のルールで交換する', () => {
+      const ruleOf = (template: Template) =>
+        Object.values(template.findResources('AWS::Lambda::Function')).find(
+          (fn) => fn.Properties.FunctionName === 'sakekasu-kakeibo-test-model-bench',
+        )!.Properties.Environment.Variables.ANTHROPIC_FEDERATION_RULE_ID;
+      expect(ruleOf(Template.fromStack(stacks().api))).toBe('fdrl_test');
+      expect(ruleOf(Template.fromStack(stacks({ benchRuleId: 'fdrl_bench' }).api))).toBe('fdrl_bench');
+    });
+
+    it('ID 連携が無ければ作らない', () => {
+      const template = Template.fromStack(stacks({ federation: false }).api);
+      const names = Object.values(template.findResources('AWS::Lambda::Function')).map((fn) => fn.Properties.FunctionName);
+      expect(names).not.toContain('sakekasu-kakeibo-test-model-bench');
+    });
   });
 });
 

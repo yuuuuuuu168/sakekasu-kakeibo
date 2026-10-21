@@ -18,6 +18,11 @@ export interface AnthropicFederation {
   serviceAccountId: string;
   /** ワークスペース（wrkspc_...）。ルールが 1 つのワークスペースに絞ってあれば省ける */
   workspaceId?: string;
+  /**
+   * モデルの評価（model-bench）のロール用のルール（fdrl_...）。ルールはロールの ARN を照合するので、
+   * OCR のルールとは別に要る。無ければ ruleId を使う（評価の関数は Claude API に入れない）
+   */
+  benchRuleId?: string;
 }
 
 const RULE_ID = /^fdrl_[A-Za-z0-9]+$/;
@@ -36,7 +41,7 @@ export function parseAnthropicFederation(value: unknown): AnthropicFederation | 
   if (typeof value !== 'object') {
     throw new Error('context の anthropicFederation は { "ruleId", "organizationId", "serviceAccountId", "workspaceId" } で書く');
   }
-  const { ruleId, organizationId, serviceAccountId, workspaceId } = value as Record<string, unknown>;
+  const { ruleId, organizationId, serviceAccountId, workspaceId, benchRuleId } = value as Record<string, unknown>;
   if (typeof ruleId !== 'string' || !RULE_ID.test(ruleId)) {
     throw new Error(`anthropicFederation.ruleId が不正です（fdrl_ で始まる）: ${String(ruleId)}`);
   }
@@ -49,5 +54,14 @@ export function parseAnthropicFederation(value: unknown): AnthropicFederation | 
   if (workspaceId !== undefined && (typeof workspaceId !== 'string' || !WORKSPACE_ID.test(workspaceId))) {
     throw new Error(`anthropicFederation.workspaceId が不正です（wrkspc_ で始まる）: ${String(workspaceId)}`);
   }
-  return { ruleId, organizationId, serviceAccountId, ...(workspaceId ? { workspaceId } : {}) };
+  if (benchRuleId !== undefined && (typeof benchRuleId !== 'string' || !RULE_ID.test(benchRuleId))) {
+    throw new Error(`anthropicFederation.benchRuleId が不正です（fdrl_ で始まる）: ${String(benchRuleId)}`);
+  }
+  return {
+    ruleId,
+    organizationId,
+    serviceAccountId,
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(benchRuleId ? { benchRuleId } : {}),
+  };
 }
