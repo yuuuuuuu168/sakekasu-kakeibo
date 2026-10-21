@@ -1,0 +1,597 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakeibo-dev-api の論理 ID・ロール・名前・保持の設定が変わっていない 1`] = `
+{
+  "names": {
+    "Api5xxAlarm31F257DC": {
+      "AlarmName": "sakekasu-kakeibo-dev-api-5xx",
+    },
+    "ApiAvailabilitySlo": {
+      "Name": "sakekasu-kakeibo-dev-api-availability",
+    },
+    "ApiAvailabilitySloBreachDAFCBB48": {
+      "AlarmName": "sakekasu-kakeibo-dev-api-slo-availability",
+    },
+    "ApiErrorsAlarm77A8953B": {
+      "AlarmName": "sakekasu-kakeibo-dev-api-errors",
+    },
+    "ApiFunctionCE271BD4": {
+      "FunctionName": "sakekasu-kakeibo-dev-api",
+    },
+    "ApiLogs3D05D88B": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-api",
+    },
+    "ApiThrottlesAlarmEF45997D": {
+      "AlarmName": "sakekasu-kakeibo-dev-api-throttles",
+    },
+    "ClassifyAvailabilitySlo": {
+      "Name": "sakekasu-kakeibo-dev-classify-availability",
+    },
+    "ClassifyAvailabilitySloBreach5508EB3F": {
+      "AlarmName": "sakekasu-kakeibo-dev-classify-slo-availability",
+    },
+    "ClassifyErrorsAlarm60AA1109": {
+      "AlarmName": "sakekasu-kakeibo-dev-classify-errors",
+    },
+    "ClassifyFunctionEFB7FF4E": {
+      "FunctionName": "sakekasu-kakeibo-dev-classify",
+    },
+    "ClassifyLogs38813EB7": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-classify",
+    },
+    "ClassifyThrottlesAlarm83AD5C0A": {
+      "AlarmName": "sakekasu-kakeibo-dev-classify-throttles",
+    },
+    "HttpApiAuthorizerD4468D9A": {
+      "Name": "Authorizer",
+    },
+    "HttpApiDELETEproxyApiIntegrationPermission1DB5BFD9": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ApiFunctionCE271BD4",
+          "Arn",
+        ],
+      },
+    },
+    "HttpApiF5A9A8A7": {
+      "Name": "sakekasu-kakeibo-dev-api",
+    },
+    "HttpApiGETproxyApiIntegrationPermission0859F8EC": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ApiFunctionCE271BD4",
+          "Arn",
+        ],
+      },
+    },
+    "HttpApiPOSTclassifyClassifyIntegrationPermissionBBF02334": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ClassifyFunctionEFB7FF4E",
+          "Arn",
+        ],
+      },
+    },
+    "HttpApiPOSTproxyApiIntegrationPermissionF19E857A": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ApiFunctionCE271BD4",
+          "Arn",
+        ],
+      },
+    },
+    "HttpApiPOSTreceiptsanalyzeApiIntegrationPermission1B047D96": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ApiFunctionCE271BD4",
+          "Arn",
+        ],
+      },
+    },
+    "HttpApiPUTproxyApiIntegrationPermission3E835C00": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "ApiFunctionCE271BD4",
+          "Arn",
+        ],
+      },
+    },
+    "ModelBenchFunction8F19D965": {
+      "FunctionName": "sakekasu-kakeibo-dev-model-bench",
+    },
+    "ModelBenchFunctionEventInvokeConfig48F4B62F": {
+      "FunctionName": {
+        "Ref": "ModelBenchFunction8F19D965",
+      },
+    },
+    "ModelBenchFunctionRole81616D8D": {
+      "RoleName": "sakekasu-kakeibo-dev-model-bench",
+    },
+    "ModelBenchLogsC502695D": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-model-bench",
+    },
+    "MonthlyReportErrorsAlarmF3DD040E": {
+      "AlarmName": "sakekasu-kakeibo-dev-monthly-report-errors",
+    },
+    "MonthlyReportFailureFilter19B9D828": {
+      "LogGroupName": {
+        "Ref": "MonthlyReportLogs96D829BD",
+      },
+    },
+    "MonthlyReportFailuresAlarm8D71CB2F": {
+      "AlarmName": "sakekasu-kakeibo-dev-monthly-report-failures",
+    },
+    "MonthlyReportFunction81722C15": {
+      "FunctionName": "sakekasu-kakeibo-dev-monthly-report",
+    },
+    "MonthlyReportInvocationFailuresAlarm9582CB3D": {
+      "AlarmName": "sakekasu-kakeibo-dev-monthly-report-invocation-failures",
+    },
+    "MonthlyReportLogs96D829BD": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-monthly-report",
+    },
+    "MonthlyReportScheduleAllowEventRulesakekasukakeibodevapiMonthlyReportFunction43AB72E75D6147B5": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "MonthlyReportFunction81722C15",
+          "Arn",
+        ],
+      },
+    },
+    "MonthlyReportScheduleD3B0EED0": {
+      "Name": "sakekasu-kakeibo-dev-monthly-report",
+    },
+    "MonthlyReportThrottlesAlarmA3729B5A": {
+      "AlarmName": "sakekasu-kakeibo-dev-monthly-report-throttles",
+    },
+    "OcrFailureFilter9D3497A4": {
+      "LogGroupName": {
+        "Ref": "OcrLogs6F18DD85",
+      },
+    },
+    "OcrFailuresAlarm840C063B": {
+      "AlarmName": "sakekasu-kakeibo-dev-ocr-receipt-failures",
+    },
+    "OcrFallbackFilter8316B9E7": {
+      "LogGroupName": {
+        "Ref": "OcrLogs6F18DD85",
+      },
+    },
+    "OcrFallbacksAlarm53C1780F": {
+      "AlarmName": "sakekasu-kakeibo-dev-ocr-receipt-fallbacks",
+    },
+    "OcrFunction111EAD86": {
+      "FunctionName": "sakekasu-kakeibo-dev-ocr-receipt",
+    },
+    "OcrFunctionEventInvokeConfig0F4EAE68": {
+      "FunctionName": {
+        "Ref": "OcrFunction111EAD86",
+      },
+    },
+    "OcrFunctionRole57251C9F": {
+      "RoleName": "sakekasu-kakeibo-dev-ocr-receipt",
+    },
+    "OcrLogs6F18DD85": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-ocr-receipt",
+    },
+    "OcrReceiptAvailabilitySlo": {
+      "Name": "sakekasu-kakeibo-dev-ocr-receipt-availability",
+    },
+    "OcrReceiptAvailabilitySloBreach973E492D": {
+      "AlarmName": "sakekasu-kakeibo-dev-ocr-receipt-slo-availability",
+    },
+    "OcrReceiptErrorsAlarmFCB03575": {
+      "AlarmName": "sakekasu-kakeibo-dev-ocr-receipt-errors",
+    },
+    "OcrReceiptThrottlesAlarmEF05AB8F": {
+      "AlarmName": "sakekasu-kakeibo-dev-ocr-receipt-throttles",
+    },
+    "TypeSafeApiKey4A4CB935": {
+      "Name": "sakekasu-kakeibo-dev-typesafe-api-key",
+    },
+  },
+  "resources": {
+    "Api5xxAlarm31F257DC": "AWS::CloudWatch::Alarm",
+    "ApiAvailabilitySlo": "AWS::ApplicationSignals::ServiceLevelObjective",
+    "ApiAvailabilitySloBreachDAFCBB48": "AWS::CloudWatch::Alarm",
+    "ApiErrorsAlarm77A8953B": "AWS::CloudWatch::Alarm",
+    "ApiFunctionCE271BD4": "AWS::Lambda::Function",
+    "ApiFunctionServiceRole52B9747B": "AWS::IAM::Role",
+    "ApiFunctionServiceRoleDefaultPolicy20A32B8D": "AWS::IAM::Policy",
+    "ApiLogs3D05D88B": "AWS::Logs::LogGroup",
+    "ApiThrottlesAlarmEF45997D": "AWS::CloudWatch::Alarm",
+    "ClassifyAvailabilitySlo": "AWS::ApplicationSignals::ServiceLevelObjective",
+    "ClassifyAvailabilitySloBreach5508EB3F": "AWS::CloudWatch::Alarm",
+    "ClassifyErrorsAlarm60AA1109": "AWS::CloudWatch::Alarm",
+    "ClassifyFunctionEFB7FF4E": "AWS::Lambda::Function",
+    "ClassifyFunctionServiceRole0927E4BC": "AWS::IAM::Role",
+    "ClassifyFunctionServiceRoleDefaultPolicy9E2FDFA1": "AWS::IAM::Policy",
+    "ClassifyLogs38813EB7": "AWS::Logs::LogGroup",
+    "ClassifyThrottlesAlarm83AD5C0A": "AWS::CloudWatch::Alarm",
+    "HttpApiAuthorizerD4468D9A": "AWS::ApiGatewayV2::Authorizer",
+    "HttpApiDELETEproxyApiIntegrationPermission1DB5BFD9": "AWS::Lambda::Permission",
+    "HttpApiDELETEproxyED63FCD8": "AWS::ApiGatewayV2::Route",
+    "HttpApiDefaultStage3EEB07D6": "AWS::ApiGatewayV2::Stage",
+    "HttpApiF5A9A8A7": "AWS::ApiGatewayV2::Api",
+    "HttpApiGETproxyApiIntegrationPermission0859F8EC": "AWS::Lambda::Permission",
+    "HttpApiGETproxyC12F9FC6": "AWS::ApiGatewayV2::Route",
+    "HttpApiPOSTclassifyC5D5A800": "AWS::ApiGatewayV2::Route",
+    "HttpApiPOSTclassifyClassifyIntegration26F44F24": "AWS::ApiGatewayV2::Integration",
+    "HttpApiPOSTclassifyClassifyIntegrationPermissionBBF02334": "AWS::Lambda::Permission",
+    "HttpApiPOSTproxyApiIntegrationPermissionF19E857A": "AWS::Lambda::Permission",
+    "HttpApiPOSTproxyCBD28088": "AWS::ApiGatewayV2::Route",
+    "HttpApiPOSTreceiptsanalyze05F0F112": "AWS::ApiGatewayV2::Route",
+    "HttpApiPOSTreceiptsanalyzeApiIntegration6004674F": "AWS::ApiGatewayV2::Integration",
+    "HttpApiPOSTreceiptsanalyzeApiIntegrationPermission1B047D96": "AWS::Lambda::Permission",
+    "HttpApiPUTproxy52C9B2AF": "AWS::ApiGatewayV2::Route",
+    "HttpApiPUTproxyApiIntegrationPermission3E835C00": "AWS::Lambda::Permission",
+    "ModelBenchFunction8F19D965": "AWS::Lambda::Function",
+    "ModelBenchFunctionEventInvokeConfig48F4B62F": "AWS::Lambda::EventInvokeConfig",
+    "ModelBenchFunctionRole81616D8D": "AWS::IAM::Role",
+    "ModelBenchFunctionRoleDefaultPolicy4EF0E902": "AWS::IAM::Policy",
+    "ModelBenchLogsC502695D": "AWS::Logs::LogGroup",
+    "MonthlyReportErrorsAlarmF3DD040E": "AWS::CloudWatch::Alarm",
+    "MonthlyReportFailureFilter19B9D828": "AWS::Logs::MetricFilter",
+    "MonthlyReportFailuresAlarm8D71CB2F": "AWS::CloudWatch::Alarm",
+    "MonthlyReportFunction81722C15": "AWS::Lambda::Function",
+    "MonthlyReportFunctionServiceRole516D5A15": "AWS::IAM::Role",
+    "MonthlyReportFunctionServiceRoleDefaultPolicy76B12244": "AWS::IAM::Policy",
+    "MonthlyReportInvocationFailuresAlarm9582CB3D": "AWS::CloudWatch::Alarm",
+    "MonthlyReportLogs96D829BD": "AWS::Logs::LogGroup",
+    "MonthlyReportScheduleAllowEventRulesakekasukakeibodevapiMonthlyReportFunction43AB72E75D6147B5": "AWS::Lambda::Permission",
+    "MonthlyReportScheduleD3B0EED0": "AWS::Events::Rule",
+    "MonthlyReportThrottlesAlarmA3729B5A": "AWS::CloudWatch::Alarm",
+    "OcrFailureFilter9D3497A4": "AWS::Logs::MetricFilter",
+    "OcrFailuresAlarm840C063B": "AWS::CloudWatch::Alarm",
+    "OcrFallbackFilter8316B9E7": "AWS::Logs::MetricFilter",
+    "OcrFallbacksAlarm53C1780F": "AWS::CloudWatch::Alarm",
+    "OcrFunction111EAD86": "AWS::Lambda::Function",
+    "OcrFunctionEventInvokeConfig0F4EAE68": "AWS::Lambda::EventInvokeConfig",
+    "OcrFunctionRole57251C9F": "AWS::IAM::Role",
+    "OcrFunctionRoleDefaultPolicyD1C3B97F": "AWS::IAM::Policy",
+    "OcrLogs6F18DD85": "AWS::Logs::LogGroup",
+    "OcrReceiptAvailabilitySlo": "AWS::ApplicationSignals::ServiceLevelObjective",
+    "OcrReceiptAvailabilitySloBreach973E492D": "AWS::CloudWatch::Alarm",
+    "OcrReceiptErrorsAlarmFCB03575": "AWS::CloudWatch::Alarm",
+    "OcrReceiptThrottlesAlarmEF05AB8F": "AWS::CloudWatch::Alarm",
+    "TypeSafeApiKey4A4CB935": "AWS::SecretsManager::Secret",
+  },
+  "retention": {
+    "ApiAvailabilitySlo": {},
+    "ApiLogs3D05D88B": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ClassifyAvailabilitySlo": {},
+    "ClassifyLogs38813EB7": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ModelBenchLogsC502695D": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MonthlyReportLogs96D829BD": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "OcrLogs6F18DD85": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "OcrReceiptAvailabilitySlo": {},
+    "TypeSafeApiKey4A4CB935": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+  },
+  "roles": {
+    "ApiFunctionServiceRole52B9747B": {
+      "cdkdName": "sakekasu-kakeibo-dev-api-ApiFunctionServiceRole52B9747B",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+      },
+    },
+    "ClassifyFunctionServiceRole0927E4BC": {
+      "cdkdName": "sakekasu-kakeibo-dev-api-ClassifyFunctionServiceRole0927E4BC",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+      },
+    },
+    "ModelBenchFunctionRole81616D8D": {
+      "cdkdName": "sakekasu-kakeibo-dev-model-bench",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+        "RoleName": "sakekasu-kakeibo-dev-model-bench",
+      },
+    },
+    "MonthlyReportFunctionServiceRole516D5A15": {
+      "cdkdName": "sakekasu-kakeibo-dev-api-MonthlyReportFunctionServiceRo-18405508",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+      },
+    },
+    "OcrFunctionRole57251C9F": {
+      "cdkdName": "sakekasu-kakeibo-dev-ocr-receipt",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+        "RoleName": "sakekasu-kakeibo-dev-ocr-receipt",
+      },
+    },
+  },
+}
+`;
+
+exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakeibo-dev-data の論理 ID・ロール・名前・保持の設定が変わっていない 1`] = `
+{
+  "names": {
+    "Receipts59C0D3E0": {
+      "BucketName": "sakekasu-kakeibo-dev-receipts-123456789012",
+    },
+    "TableCD117FA1": {
+      "TableName": "sakekasu-kakeibo-dev",
+    },
+    "TableReadThrottleAlarm8B6132AD": {
+      "AlarmName": "sakekasu-kakeibo-dev-dynamodb-read-throttles",
+    },
+    "TableWriteThrottleAlarmC1C881EE": {
+      "AlarmName": "sakekasu-kakeibo-dev-dynamodb-write-throttles",
+    },
+  },
+  "resources": {
+    "Receipts59C0D3E0": "AWS::S3::Bucket",
+    "ReceiptsPolicyFAF1CC38": "AWS::S3::BucketPolicy",
+    "TableCD117FA1": "AWS::DynamoDB::GlobalTable",
+    "TableReadThrottleAlarm8B6132AD": "AWS::CloudWatch::Alarm",
+    "TableWriteThrottleAlarmC1C881EE": "AWS::CloudWatch::Alarm",
+  },
+  "retention": {
+    "Receipts59C0D3E0": {
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+    },
+    "TableCD117FA1": {
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+    },
+  },
+  "roles": {},
+}
+`;
+
+exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakeibo-dev-dns の論理 ID・ロール・名前・保持の設定が変わっていない 1`] = `
+{
+  "names": {
+    "ZoneA5DE4B68": {
+      "Name": "kakeibo.sakekasu-builder.com.",
+    },
+  },
+  "resources": {
+    "ZoneA5DE4B68": "AWS::Route53::HostedZone",
+  },
+  "retention": {
+    "ZoneA5DE4B68": {
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+    },
+  },
+  "roles": {},
+}
+`;
+
+exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakeibo-dev-site の論理 ID・ロール・名前・保持の設定が変わっていない 1`] = `
+{
+  "names": {
+    "AliasAAAA067338AF": {
+      "Name": "kakeibo.sakekasu-builder.com.",
+    },
+    "AliasAEAD92310": {
+      "Name": "kakeibo.sakekasu-builder.com.",
+    },
+    "SiteBucket397A1860": {
+      "BucketName": "sakekasu-kakeibo-dev-site-123456789012",
+    },
+  },
+  "resources": {
+    "AliasAAAA067338AF": "AWS::Route53::RecordSet",
+    "AliasAEAD92310": "AWS::Route53::RecordSet",
+    "Distribution830FAC52": "AWS::CloudFront::Distribution",
+    "DistributionOrigin1S3OriginAccessControlEB606076": "AWS::CloudFront::OriginAccessControl",
+    "SecurityHeadersE66B69D3": "AWS::CloudFront::ResponseHeadersPolicy",
+    "SiteBucket397A1860": "AWS::S3::Bucket",
+    "SiteBucketPolicy3AC1D0F8": "AWS::S3::BucketPolicy",
+  },
+  "retention": {
+    "SiteBucket397A1860": {
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+    },
+  },
+  "roles": {},
+}
+`;
