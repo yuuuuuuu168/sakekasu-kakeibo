@@ -99,6 +99,11 @@ export function currencyFields(draft: Draft, paidYen?: number): Pick<Receipt, 'c
   return { currency: draft.currency, ...(rate !== undefined ? { exchangeRate: rate } : {}) };
 }
 
+/** 日付が入っていない下書き（日付の欄を空にしたもの）。API は YYYY-MM-DD でない日付を受け取らない */
+export function lacksDate(draft: Draft): boolean {
+  return !/^\d{4}-\d{2}-\d{2}$/.test(draft.date);
+}
+
 /** 円に直せない下書き（ドルなのにレートが無い）。明細を作れない */
 export function lacksRate(draft: Draft): boolean {
   return draft.currency !== 'JPY' && usableRate(draft.exchangeRate) === undefined;

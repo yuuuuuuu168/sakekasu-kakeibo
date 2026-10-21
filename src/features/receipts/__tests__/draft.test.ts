@@ -5,6 +5,7 @@ import {
   draftFromReceipt,
   editedReceipt,
   imageFields,
+  lacksDate,
   lacksRate,
   receiptFromDraft,
   removeItem,
@@ -120,5 +121,12 @@ describe('レシートの組み立て', () => {
   it('保存済みのレシートは、そのまま下書きに戻せる', () => {
     const saved = receiptFromDraft(DRAFT, { asPayment: true, createdAt });
     expect(draftFromReceipt(saved)).toMatchObject({ id: 'r-1', storeName: 'ローソン', total: 300, currency: 'JPY', paidWith: 'suica' });
+  });
+});
+
+describe('日付', () => {
+  it('YYYY-MM-DD でなければ保存できない', () => {
+    expect(lacksDate(DRAFT)).toBe(false);
+    expect(lacksDate({ ...DRAFT, date: '' })).toBe(true);
   });
 });

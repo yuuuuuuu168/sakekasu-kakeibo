@@ -42,6 +42,7 @@ import {
   editedReceipt,
   emptyDraft,
   imageFields,
+  lacksDate,
   lacksRate,
   paymentPhrase,
   receiptFromDraft,
@@ -376,7 +377,7 @@ export function ReceiptsPage() {
                 <Button
                   variant="primary"
                   onClick={() => void saveEdit()}
-                  disabled={busy || draft.total <= 0 || (editing.status === 'cash' && lacksRate(draft))}
+                  disabled={busy || draft.total <= 0 || lacksDate(draft) || (editing.status === 'cash' && lacksRate(draft))}
                 >
                   直した内容で保存
                 </Button>
@@ -399,10 +400,10 @@ export function ReceiptsPage() {
               </div>
 
               <div className="mt-3 flex flex-wrap justify-end gap-2">
-                <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0 || lacksRate(draft)}>
+                <Button onClick={() => void save(true)} disabled={busy || draft.total <= 0 || lacksDate(draft) || lacksRate(draft)}>
                   {paymentPhrase(draft.paidWith)}として登録
                 </Button>
-                <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0}>
+                <Button variant="primary" onClick={() => void save(false)} disabled={busy || draft.total <= 0 || lacksDate(draft)}>
                   {selectedTxnId ? '明細に当てる' : 'レシートだけ保存'}
                 </Button>
               </div>
