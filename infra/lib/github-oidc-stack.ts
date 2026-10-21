@@ -52,7 +52,14 @@ export class GithubOidcStack extends cdk.Stack {
       }),
     );
 
-    // ワークフローがスタックの出力（API の URL、UserPool の ID、配信先）を読む
+    /*
+     * 以前はワークフローがスタックの出力を CloudFormation から読むのに使っていた。
+     * いまの出力は `cdkd state show` で読むので、ワークフローから直接は使わない。
+     * それでも残しているのは、このロールで cdkd 用ロールのスタックを `cdk deploy`（CloudFormation）
+     * しており、CDK の CLI がこのロールのまま DescribeStacks を呼ばないとは言い切れないため。
+     * 外して落ちると、このスタックを手で入れ直すまでデプロイが止まる。読み取りだけで、
+     * 自分のスタックに限ってあるので、残しておく
+     */
     deployRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'ReadStackOutputs',
