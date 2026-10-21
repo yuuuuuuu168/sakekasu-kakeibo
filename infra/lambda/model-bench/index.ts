@@ -174,7 +174,7 @@ export async function handler(
 
   await runPool(samples, request.parallel, async (sample) => {
     if (stopped) return;
-    if (spent >= request.maxUsd) stopped = 'budget';
+    if (overBudget(request, spent)) stopped = 'budget';
     else if (context && context.getRemainingTimeInMillis() < TIME_MARGIN_MS) stopped = 'time';
     if (stopped) return;
 
@@ -195,6 +195,14 @@ export async function handler(
   const summary = { runId, ...request, stopped: stopped ?? null, ...summarize(outcomes) };
   console.info('[bench] summary', JSON.stringify(summary));
   return summary;
+}
+
+/**
+ * 予算に届いたか。予算で止めるのは Claude の組だけ。jev と keywords はここで費用を数えない（usd は常に 0）ので、
+ * maxUsd が 0 でも止めない。止めると「使った 0 ≥ 予算 0」で 1 枚も測らずに終わる
+ */
+export function overBudget(request: Pick<BenchRequest, 'model' | 'maxUsd'>, spent: number): boolean {
+  return request.model.startsWith('claude-') && spent >= request.maxUsd;
 }
 
 function claudeClient(): Anthropic {

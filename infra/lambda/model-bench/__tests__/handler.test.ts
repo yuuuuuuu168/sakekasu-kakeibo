@@ -5,13 +5,14 @@ let parseRequest: typeof import('../index')['parseRequest'];
 let selectSamples: typeof import('../index')['selectSamples'];
 let isSpendLimit: typeof import('../index')['isSpendLimit'];
 let summarize: typeof import('../index')['summarize'];
+let overBudget: typeof import('../index')['overBudget'];
 
 beforeAll(async () => {
   process.env.TABLE_NAME = 'test-table';
   process.env.RECEIPT_BUCKET = 'test-bucket';
   process.env.TYPESAFE_SECRET_ID = 'test-secret';
   process.env.TYPESAFE_MODEL_ID = 'test-model';
-  ({ parseRequest, selectSamples, isSpendLimit, summarize } = await import('../index'));
+  ({ parseRequest, selectSamples, isSpendLimit, summarize, overBudget } = await import('../index'));
 });
 
 describe('parseRequest', () => {
@@ -83,6 +84,18 @@ describe('selectSamples', () => {
   it('判定は値引きとカテゴリの無い品目しかないレシートを外す', () => {
     const samples = [receipt('a', '2026-10-01', { items: [{ name: '値引', amount: -50, categoryId: 'discount' }, { name: '?', amount: 10 }] })];
     expect(selectSamples(samples, { task: 'classify', offset: 0, limit: 10 })).toEqual([]);
+  });
+});
+
+describe('overBudget', () => {
+  it('Claude の組は使った額が予算に届いたら止める', () => {
+    expect(overBudget({ model: 'claude-opus-5-5', maxUsd: 1 }, 0.99)).toBe(false);
+    expect(overBudget({ model: 'claude-opus-5-5', maxUsd: 1 }, 1)).toBe(true);
+  });
+
+  it('費用を数えない jev と keywords は、予算が 0 でも止めない', () => {
+    expect(overBudget({ model: 'jev', maxUsd: 0 }, 0)).toBe(false);
+    expect(overBudget({ model: 'keywords', maxUsd: 0 }, 0)).toBe(false);
   });
 });
 
