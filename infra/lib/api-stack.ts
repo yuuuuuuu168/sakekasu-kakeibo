@@ -1,5 +1,3 @@
-import * as path from 'node:path';
-import * as url from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -8,9 +6,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
-import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { OCR_JOB_PARTITION_PREFIX, OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
 import {
   DEFAULT_ANTHROPIC_MODEL_OCR,
@@ -18,18 +14,13 @@ import {
   IDENTITY_TOKEN_SECONDS,
 } from '../lambda/ocr-receipt/llm-constants';
 import type { AnthropicFederation } from './anthropic-federation';
-import { NodejsFunction, type BundlingOptions } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
-import { SharedAlarms } from './alarms';
+import { addApiAlarms } from './api-alarms';
+import { appFunction } from './app-function';
 import { lambdaLogGroup } from './log-group';
-import { addAvailabilitySlos } from './slo';
 import { userPoolRegion, type SharedAuth } from './shared-auth';
-
-const here = path.dirname(url.fileURLToPath(import.meta.url));
-const repoRoot = path.join(here, '..', '..');
 
 /**
  * OCR に使う推論プロファイルと、その振り先の基盤モデル。
@@ -90,14 +81,6 @@ if (OCR_TIMEOUT_SECONDS * 1000 >= OCR_JOB_STALE_MS) {
   throw new Error('OCR_JOB_STALE_MS は OCR の Lambda のタイムアウトより長くすること');
 }
 
-/**
- * AWS SDK も含めて 1 ファイルに固める。
- * Node.js の実行環境にも SDK v3 は入っているが、どのパッケージがどの版で入るかは
- * AWS 側の都合で変わる。家計簿が黙って動かなくなる経路を残したくないので、
- * 使うものは全部こちらで持つ。関数あたり数 MB 増えるだけで、実害は無い。
- */
-const BUNDLING: BundlingOptions = { externalModules: [], target: 'node22', minify: true, sourceMap: false };
-
 export interface ApiStackProps extends cdk.StackProps {
   envName: string;
   table: dynamodb.ITableV2;
@@ -118,18 +101,13 @@ export class ApiStack extends cdk.Stack {
 
     const prefix = `sakekasu-kakeibo-${props.envName}`;
 
-    const apiFunctionName = `${prefix}-api`;
-    const apiFunction = new NodejsFunction(this, 'ApiFunction', {
-      functionName: apiFunctionName,
-      entry: path.join(repoRoot, 'infra/lambda/api/index.ts'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
+    // 関数の共通の設定（実行環境・バンドル・ロググループ）は app-function.ts にある。論理 ID は第 2 引数のまま
+    const { fn: apiFunction } = appFunction(this, 'ApiFunction', {
+      prefix,
+      key: 'api',
+      logsId: 'ApiLogs',
       memorySize: 512,
       timeout: cdk.Duration.seconds(20),
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      bundling: BUNDLING,
-      logGroup: lambdaLogGroup(this, 'ApiLogs', apiFunctionName),
       environment: {
         TABLE_NAME: props.table.tableName,
         RECEIPT_BUCKET: props.receiptBucket.bucketName,
@@ -162,20 +140,15 @@ export class ApiStack extends cdk.Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
     });
 
-    const ocrFunction = new NodejsFunction(this, 'OcrFunction', {
-      functionName: ocrFunctionName,
+    const { fn: ocrFunction } = appFunction(this, 'OcrFunction', {
+      prefix,
+      key: 'ocr-receipt',
+      logGroup: ocrLogGroup,
       role: ocrRole,
-      entry: path.join(repoRoot, 'infra/lambda/ocr-receipt/index.ts'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
       memorySize: 1024,
       timeout: cdk.Duration.seconds(OCR_TIMEOUT_SECONDS),
       reservedConcurrentExecutions: 3,
       retryAttempts: 0,
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      bundling: BUNDLING,
-      logGroup: ocrLogGroup,
       environment: {
         RECEIPT_BUCKET: props.receiptBucket.bucketName,
         TABLE_NAME: props.table.tableName,
@@ -260,19 +233,13 @@ export class ApiStack extends cdk.Stack {
      * つながるので同時実行を絞れるようにしておきたい。
      * 権限はこのシークレットの読み取りだけ。table もバケットも Bedrock も要らない。
      */
-    const classifyFunctionName = `${prefix}-classify`;
-    const classifyFunction = new NodejsFunction(this, 'ClassifyFunction', {
-      functionName: classifyFunctionName,
-      entry: path.join(repoRoot, 'infra/lambda/classify/index.ts'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
+    const { fn: classifyFunction } = appFunction(this, 'ClassifyFunction', {
+      prefix,
+      key: 'classify',
+      logsId: 'ClassifyLogs',
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       reservedConcurrentExecutions: 3,
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      bundling: BUNDLING,
-      logGroup: lambdaLogGroup(this, 'ClassifyLogs', classifyFunctionName),
       environment: {
         TYPESAFE_SECRET_ID: typesafeApiKey.secretArn,
         TYPESAFE_MODEL_ID,
@@ -287,17 +254,12 @@ export class ApiStack extends cdk.Stack {
 
     const reportFunctionName = `${prefix}-monthly-report`;
     const reportLogGroup = lambdaLogGroup(this, 'MonthlyReportLogs', reportFunctionName);
-    const reportFunction = new NodejsFunction(this, 'MonthlyReportFunction', {
-      functionName: reportFunctionName,
-      entry: path.join(repoRoot, 'infra/lambda/monthly-report/index.ts'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
+    const { fn: reportFunction } = appFunction(this, 'MonthlyReportFunction', {
+      prefix,
+      key: 'monthly-report',
+      logGroup: reportLogGroup,
       memorySize: 512,
       timeout: cdk.Duration.minutes(2),
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      bundling: BUNDLING,
-      logGroup: reportLogGroup,
       environment: { TABLE_NAME: props.table.tableName },
     });
 
@@ -407,7 +369,8 @@ export class ApiStack extends cdk.Stack {
       integration: apiIntegration,
     });
 
-    this.addAlarms(prefix, {
+    addApiAlarms(this, prefix, {
+      httpApi: this.httpApi,
       functions: [
         { key: 'api', fn: apiFunction, what: 'API（明細・カテゴリ・上限の読み書き）' },
         { key: 'ocr-receipt', fn: ocrFunction, what: 'レシートの OCR' },
@@ -460,21 +423,16 @@ export class ApiStack extends cdk.Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')],
     });
 
-    const fn = new NodejsFunction(this, 'ModelBenchFunction', {
-      functionName,
+    const { fn } = appFunction(this, 'ModelBenchFunction', {
+      prefix,
+      key: 'model-bench',
+      logsId: 'ModelBenchLogs',
       role,
-      entry: path.join(repoRoot, 'infra/lambda/model-bench/index.ts'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
       memorySize: 1024,
       timeout: cdk.Duration.minutes(15),
       reservedConcurrentExecutions: 1,
       retryAttempts: 0,
       maxEventAge: cdk.Duration.hours(6),
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      bundling: BUNDLING,
-      logGroup: lambdaLogGroup(this, 'ModelBenchLogs', functionName),
       environment: {
         TABLE_NAME: props.table.tableName,
         RECEIPT_BUCKET: props.receiptBucket.bucketName,
@@ -506,161 +464,4 @@ export class ApiStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'ModelBenchFunctionName', { value: fn.functionName });
   }
-
-  /**
-   * 共通基盤の通知先（Slack）へ送るアラーム。一覧と考え方は docs/operations.md の「監視」にある。
-   *
-   * 3 つの関数（api / ocr-receipt / classify）は例外を握って 500 / 502 を返すので、
-   * 処理の失敗は Lambda の Errors には出ず、HTTP API の 5xx に出る。Errors に出るのは
-   * タイムアウト・メモリ不足・初期化の失敗など、関数そのものが落ちたときだけ。
-   * 月次レポートも利用者ごとの失敗を握って先へ進むので、ログから数える。
-   */
-  private addAlarms(
-    prefix: string,
-    props: {
-      functions: { key: string; fn: NodejsFunction; what: string }[];
-      reportLogGroup: logs.ILogGroup;
-      ocrLogGroup: logs.ILogGroup;
-      /** OCR が Claude API から Bedrock に読み直した回数を見るか（ID 連携があるときだけ） */
-      watchFallback: boolean;
-      /** 月次レポートを呼ぶ EventBridge のルール名（説明文と次元に使う。トークンにしないため文字列で渡す） */
-      reportScheduleName: string;
-    },
-  ): void {
-    const alarms = new SharedAlarms(this);
-    const fiveMinutes = cdk.Duration.minutes(5);
-
-    for (const { key, fn, what } of props.functions) {
-      alarms.add(`${pascal(key)}ErrorsAlarm`, {
-        alarmName: `${prefix}-${key}-errors`,
-        description:
-          `${what} の Lambda が落ちています（タイムアウト・メモリ不足・初期化の失敗など）。` +
-          `まず CloudWatch Logs の /aws/lambda/${prefix}-${key} を見る。`,
-        metric: fn.metricErrors({ period: fiveMinutes, statistic: 'Sum' }),
-        threshold: 1,
-      });
-
-      alarms.add(`${pascal(key)}ThrottlesAlarm`, {
-        alarmName: `${prefix}-${key}-throttles`,
-        description:
-          `${what} の Lambda が同時実行の上限で弾かれています。` +
-          'まず関数の同時実行数（予約の上限、アカウントの上限）と、呼び出しが急に増えていないかを見る。',
-        metric: fn.metricThrottles({ period: fiveMinutes, statistic: 'Sum' }),
-        threshold: 1,
-      });
-    }
-
-    // 30 日の成功率の SLO と、それを割ったときのアラーム。対象と理由は slo.ts にある
-    addAvailabilitySlos(this, alarms, prefix);
-
-    alarms.add('Api5xxAlarm', {
-      alarmName: `${prefix}-api-5xx`,
-      description:
-        'HTTP API が 5xx を返しています。画面では保存・読み取りの受付・カテゴリ判定のどれかが失敗しています。' +
-        'まず api / classify の CloudWatch Logs で ERROR を探す（カテゴリ判定は鍵が未設定でも 502 を返す）。' +
-        '読み取りそのものの失敗はここには出ず、ocr-receipt-failures が鳴る。',
-      metric: this.httpApi.metricServerError({ period: fiveMinutes, statistic: 'Sum' }),
-      threshold: 1,
-    });
-
-    /*
-     * 読み取りの失敗。OCR の関数は失敗をジョブに書いて正常に終えるので、Errors にも 5xx にも出ない。
-     * ログの行を数える。読めない画像（ピンぼけなど）でも鳴るのは、非同期にする前の 502 と同じ。
-     */
-    const ocrFailures = new logs.MetricFilter(this, 'OcrFailureFilter', {
-      logGroup: props.ocrLogGroup,
-      // infra/lambda/ocr-receipt/index.ts の console.error の文言と合わせる
-      filterPattern: logs.FilterPattern.literal('"[ocr] failed"'),
-      metricNamespace: 'sakekasu-kakeibo',
-      metricName: `${prefix}-ocr-receipt-failures`,
-      metricValue: '1',
-    });
-
-    alarms.add('OcrFailuresAlarm', {
-      alarmName: `${prefix}-ocr-receipt-failures`,
-      description:
-        'レシートの読み取りに失敗しました（画面には「読み取れませんでした」と出ている）。' +
-        `まず CloudWatch Logs の /aws/lambda/${prefix}-ocr-receipt で「[ocr] failed」を探す。` +
-        '読めない画像なら放っておいてよい。モデルの権限やクォータのエラーなら直す。',
-      metric: ocrFailures.metric({ period: fiveMinutes, statistic: 'Sum' }),
-      threshold: 1,
-    });
-
-    /*
-     * OCR が Claude API から Bedrock に読み直した回数。読み取り自体は成功しているので
-     * ocr-receipt-failures には出ない。残高切れ（credit_balance）・ID 連携の失敗（authentication,
-     * credentials）・障害のどれかで、続くなら Bedrock の課金に切り替わっている。
-     */
-    if (props.watchFallback) {
-      const ocrFallbacks = new logs.MetricFilter(this, 'OcrFallbackFilter', {
-        logGroup: props.ocrLogGroup,
-        // infra/lambda/ocr-receipt/llm.ts の console.warn の文言と合わせる
-        filterPattern: logs.FilterPattern.literal('"[ocr] fallback"'),
-        metricNamespace: 'sakekasu-kakeibo',
-        metricName: `${prefix}-ocr-receipt-fallbacks`,
-        metricValue: '1',
-      });
-
-      alarms.add('OcrFallbacksAlarm', {
-        alarmName: `${prefix}-ocr-receipt-fallbacks`,
-        description:
-          'レシートの読み取りが Claude API で失敗し、Bedrock で読み直しました（読み取りは続いている）。' +
-          `まず CloudWatch Logs の /aws/lambda/${prefix}-ocr-receipt で「[ocr] fallback」を探し、errorType を見る。` +
-          'credit_balance なら Claude Console のクレジット、authentication / credentials なら ID 連携の設定' +
-          '（docs/operations.md の「Claude API の ID 連携」）を疑う。',
-        metric: ocrFallbacks.metric({ period: fiveMinutes, statistic: 'Sum' }),
-        threshold: 1,
-      });
-    }
-
-    /*
-     * 月次レポートの失敗は 2 通り拾う。
-     * - 利用者ごとの失敗: 関数は握って先へ進み、正常終了する。ログの行を数える
-     * - そもそも呼べなかった: EventBridge の FailedInvocations（権限が外れた、関数が無いなど）
-     * 関数そのものが落ちた場合は、上の monthly-report-errors が鳴る。
-     * 動かなかったこと（月 1 回の呼び出しが来なかったこと）は見ていない。月に 1 点しか出ない
-     * 指標を BREACHING で見ると、残りの期間ずっと鳴り続けるため。
-     */
-    const reportFailures = new logs.MetricFilter(this, 'MonthlyReportFailureFilter', {
-      logGroup: props.reportLogGroup,
-      // infra/lambda/monthly-report/index.ts の console.error の文言と合わせる
-      filterPattern: logs.FilterPattern.literal('"[monthly-report] failed"'),
-      metricNamespace: 'sakekasu-kakeibo',
-      metricName: `${prefix}-monthly-report-failures`,
-      metricValue: '1',
-    });
-
-    alarms.add('MonthlyReportFailuresAlarm', {
-      alarmName: `${prefix}-monthly-report-failures`,
-      description:
-        '月次レポートの生成に失敗した利用者がいます（関数は止まらずに先へ進んでいる）。' +
-        `まず CloudWatch Logs の /aws/lambda/${prefix}-monthly-report で「[monthly-report] failed」を探す。` +
-        '直したら docs/operations.md の「月次レポートを手で作り直す」で作り直す。',
-      metric: reportFailures.metric({ period: fiveMinutes, statistic: 'Sum' }),
-      threshold: 1,
-    });
-
-    alarms.add('MonthlyReportInvocationFailuresAlarm', {
-      alarmName: `${prefix}-monthly-report-invocation-failures`,
-      description:
-        'EventBridge が月次レポートの Lambda を呼べませんでした（関数の権限・存在を疑う）。' +
-        `まずルール ${props.reportScheduleName} のターゲットと、関数のリソースポリシーを見る。`,
-      metric: new cloudwatch.Metric({
-        namespace: 'AWS/Events',
-        metricName: 'FailedInvocations',
-        dimensionsMap: { RuleName: props.reportScheduleName },
-        period: fiveMinutes,
-        statistic: 'Sum',
-      }),
-      threshold: 1,
-    });
-  }
-}
-
-/** `ocr-receipt` → `OcrReceipt`（論理 ID 用） */
-function pascal(key: string): string {
-  return key
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join('');
 }
