@@ -1,150 +1,62 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { Camera, Copy, ImageIcon, Plus, Trash2 } from 'lucide-react';
+import { Camera, ImageIcon } from 'lucide-react';
 import {
-  CURRENCIES,
   MAX_RECEIPT_PHOTOS,
-  RECEIPT_IMAGE_TYPES,
-  CURRENCY_LABELS,
-  RECEIPT_PAYMENT_METHODS,
   SOURCE_LABELS,
-  UNCATEGORIZED_ID,
   activeCategories,
   applyReceipt,
   autoMatch,
-  classifyItem,
-  convertDisplayed,
-  duplicateKey,
   findCandidates,
   findDuplicateReceipts,
-  formatMoney,
   formatYen,
-  fromMinor,
   hasImportableStatement,
-  impliedRate,
   latestUsdRate,
   learnItemRules,
-  mergeItemRules,
   linkedTransaction,
   markNotDuplicate,
-  receiptCategorySummary,
-  receiptCurrency,
-  receiptYenTotal,
-  toMinor,
+  mergeItemRules,
   transactionFromReceipt,
   transactionToRemoveWith,
-  usableRate,
-  type Currency,
   type DuplicateReceiptPair,
   type MatchCandidate,
   type Receipt,
-  type ReceiptItem,
   type SourceKind,
   type Transaction,
 } from '@kakeibo/core';
-import { CategoryOptions } from '../../components/CategoryOptions';
-import { api } from '../../api/index';
-import { judgeReceiptItems } from '../../api/classify';
-import { uploadToS3 } from '../../api/remote';
-import { shrinkPhoto } from './shrinkPhoto';
 import { useStore } from '../../api/store';
-import { Badge, Button, Card, EmptyState, Field, Input, Select } from '../../components/ui/primitives';
+import { Notice } from '../../components/ui/Notice';
+import { Button, Card } from '../../components/ui/primitives';
 import { config } from '../../config';
 import { useAction } from '../../lib/action';
-import { todayIso } from '../../lib/month';
 import { errorMessage } from '../../lib/errors';
 import { useNotice } from '../../lib/notice';
-import { Notice } from '../../components/ui/Notice';
+import { DraftEditor } from './DraftEditor';
+import { DuplicateReceiptsCard } from './DuplicateReceiptsCard';
+import { MatchCandidates } from './MatchCandidates';
 import { ReadingProgress, type Reading, type ReadingStage } from './ReadingProgress';
-
-type Draft = {
-  id: string;
-  storeName: string;
-  date: string;
-  /** 合計と品目の金額は currency の最小単位（円、セント） */
-  total: number;
-  items: DraftItem[];
-  currency: Currency;
-  /** ドルのときの 1 ドルの円。円のときは使わない */
-  exchangeRate?: number;
-  imageKey?: string;
-  /** 分けて撮ったときの全部の写真。1 枚なら持たない */
-  imageKeys?: string[];
-  /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
-  paidWith: SourceKind;
-  warnings?: string[];
-};
-
-/**
- * 下書きの品目。categoryEdited は人がカテゴリを選び直した印で、保存するときに
- * その品目名とカテゴリを覚える（learnItemRules）。レシートには残さない。
- */
-type DraftItem = ReceiptItem & { categoryEdited?: boolean };
-
-/** 下書きの品目から、保存する品目を作る。覚えるための印を落とす */
-function toReceiptItems(items: DraftItem[]): ReceiptItem[] {
-  return items.map(({ categoryEdited: _edited, ...item }) => item);
-}
-
-/** 保存済みのレシートを直すときの下書き。読み取り結果と同じ欄に載せる */
-function draftFromReceipt(receipt: Receipt): Draft {
-  return {
-    id: receipt.id,
-    storeName: receipt.storeName,
-    date: receipt.date,
-    total: receipt.total,
-    items: receipt.items,
-    currency: receiptCurrency(receipt),
-    ...(receipt.exchangeRate !== undefined ? { exchangeRate: receipt.exchangeRate } : {}),
-    ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
-    ...(receipt.imageKeys ? { imageKeys: receipt.imageKeys } : {}),
-    paidWith: receipt.paidWith ?? 'cash',
-  };
-}
-
-/**
- * 下書きから、レシートに保存する通貨の欄を作る。円なら何も持たせない（これまでのレシートと同じ形）。
- * `paidYen` は当てた明細の請求額。渡すと、そこから割り戻した実際のレートを残す。
- */
-function currencyFields(draft: Draft, paidYen?: number): Pick<Receipt, 'currency' | 'exchangeRate'> {
-  if (draft.currency === 'JPY') return {};
-  const rate = (paidYen !== undefined ? impliedRate(paidYen, draft.total) : undefined) ?? usableRate(draft.exchangeRate);
-  return { currency: draft.currency, ...(rate !== undefined ? { exchangeRate: rate } : {}) };
-}
-
-/** 円に直せない下書き（ドルなのにレートが無い）。明細を作れない */
-function lacksRate(draft: Draft): boolean {
-  return draft.currency !== 'JPY' && usableRate(draft.exchangeRate) === undefined;
-}
-
-/** 登録ボタンの文言と、登録後の知らせに使う。「不明払い」とは言わないので分けている */
-function paymentPhrase(method: SourceKind): string {
-  return method === 'unknown' ? '支払い方法不明' : `${SOURCE_LABELS[method]}払い`;
-}
-
-/**
- * OCR が読める形式（core の RECEIPT_IMAGE_TYPES）。読む側（ocr-receipt）が中身のバイト列で確かめるのも、
- * API が署名付き URL を出すのもこの 3 つ。
- * カメラロールから選ぶ入力にはこれを列挙して渡す。iOS は HEIC の写真をここに無い形式と見て
- * JPEG に直してから渡してくれる。`image/*` だと HEIC のまま届いて OCR で落ちることがある。
- */
-const READABLE_IMAGE_TYPES = Object.keys(RECEIPT_IMAGE_TYPES);
-
-/**
- * 写真のキーを下書きの欄にする。1 枚目は imageKey、分けて撮ったときだけ imageKeys に全部を持たせる
- * （1 枚で撮ったレシートの形はこれまでと変えない）
- */
-function imageFields(keys: string[]): Pick<Draft, 'imageKey' | 'imageKeys'> {
-  if (keys.length === 0) return {};
-  return { imageKey: keys[0], ...(keys.length > 1 ? { imageKeys: keys } : {}) };
-}
-
-function emptyDraft(): Draft {
-  return { id: `r-${Date.now().toString(36)}`, storeName: '', date: todayIso(), total: 0, items: [], currency: 'JPY', paidWith: 'cash' };
-}
+import { PaymentMethodField } from './ReceiptParts';
+import { SavedReceiptList } from './SavedReceiptList';
+import {
+  READABLE_IMAGE_TYPES,
+  draftFromReceipt,
+  editedReceipt,
+  emptyDraft,
+  imageFields,
+  lacksRate,
+  paymentPhrase,
+  receiptFromDraft,
+  type Draft,
+  type DraftItem,
+} from './draft';
+import { ReadPhotosError, readPhotos } from './readPhotos';
+import { shrinkPhoto } from './shrinkPhoto';
 
 /**
  * レシートを読み込んで明細に当てる画面。この家計簿の主役。
  * 写真 → OCR → 品目ごとのカテゴリ → 金額と日付で明細に自動マッチ、までを 1 画面で済ませる。
+ *
+ * ここに置くのは画面の状態と保存の流れだけ。下書きの扱いは draft.ts、写真を読む流れは readPhotos.ts、
+ * 欄や一覧は DraftEditor などの部品にある。
  */
 export function ReceiptsPage() {
   const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, removeTransaction, saveRules } = useStore();
@@ -214,10 +126,7 @@ export function ReceiptsPage() {
     await saveReceipt(b);
   }
 
-  /**
-   * 写真を読んで下書きにする。複数枚は、1 枚に収まらない長いレシートを分けて撮ったもの。
-   * まとめて 1 回の OCR に渡し、1 枚のレシートとして読ませる
-   */
+  /** 写真を読んで下書きにする。読む流れそのものは readPhotos */
   async function onImages(files: File[]) {
     clear();
     if (files.length > MAX_RECEIPT_PHOTOS) {
@@ -233,63 +142,23 @@ export function ReceiptsPage() {
       return;
     }
     const previewUrls = files.map((file) => URL.createObjectURL(file));
-    const enter = (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrls });
-    enter('upload');
-    // 送った割合は全部の写真のバイト数で均す。1 枚目だけ 100% になって止まって見えないように
-    const sent = files.map(() => 0);
-    const totalBytes = photos.reduce((sum, photo) => sum + photo.size, 0);
-    const progress = () =>
-      totalBytes > 0
-        ? photos.reduce((sum, photo, index) => sum + photo.size * sent[index], 0) / totalBytes
-        : sent.reduce((sum, ratio) => sum + ratio, 0) / files.length;
-    // 届いた写真のキー（選んだ順）。途中で落ちても、届いた分はレシートに付けて残す
-    const uploaded: (string | undefined)[] = files.map(() => undefined);
-    const uploadedKeys = () => uploaded.filter((key): key is string => key !== undefined);
     try {
-      // 1 枚が落ちても、他の写真は送り終えるまで待つ（Promise.all だと届く前に諦めてしまう）
-      const results = await Promise.allSettled(
-        photos.map(async (photo, index) => {
-          const target = await api.requestUpload(photo.type || 'image/jpeg');
-          await uploadToS3(target, photo, (ratio) => {
-            sent[index] = ratio;
-            setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded: progress() } : now));
-          });
-          uploaded[index] = target.key;
-        }),
+      const next = await readPhotos(
+        photos,
+        { categories: snapshot.categories, rules: snapshot.rules, receipts: snapshot.receipts },
+        {
+          onStage: (stage: ReadingStage) => setReading({ stage, uploaded: 0, stageStartedAt: Date.now(), previewUrls }),
+          onUploaded: (uploaded) => setReading((now) => (now?.stage === 'upload' ? { ...now, uploaded } : now)),
+        },
       );
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed) throw failed.reason;
-      const keys = uploadedKeys();
-      enter('read');
-      // 1 枚なら key で送る。これまでと同じ呼び方にしておく
-      const result = await api.analyzeReceipt(keys.length === 1 ? { key: keys[0] } : { keys });
-      enter('classify');
-      // OCR は印字を起こすところまで。どの費目かは判定（Jev）に聞く。
-      // 判定が届かなければキーワード表の答えがそのまま残る
-      const read = result.items.map((item) => ({ ...item, categoryId: classifyItem(item.name, item.categoryId, item.amount) }));
-      const judged = await judgeReceiptItems(read, result.storeName, snapshot.categories, snapshot.rules);
-      const warnings = [...(result.warnings ?? []), ...judged.warnings];
-
-      const next: Draft = {
-        id: `r-${Date.now().toString(36)}`,
-        storeName: result.storeName,
-        date: result.date || todayIso(),
-        total: result.total,
-        items: judged.items,
-        currency: result.currency ?? 'JPY',
-        ...(result.currency === 'USD' ? { exchangeRate: latestUsdRate(snapshot.receipts) } : {}),
-        ...imageFields(keys),
-        paidWith: result.paymentMethod ?? 'cash',
-        ...(warnings.length > 0 ? { warnings } : {}),
-      };
       setEditing(undefined);
       setDraft(next);
       const auto = autoMatch(findCandidates({ ...next, status: 'pending' }, snapshot.transactions));
       setSelectedTxnId(auto?.id);
       if (auto) info(`${auto.rawMerchant} の明細に自動で当てました。違っていれば下で選び直してください。`);
     } catch (cause) {
-      const reason = errorMessage(cause);
-      const keys = uploadedKeys();
+      const keys = cause instanceof ReadPhotosError ? cause.keys : [];
+      const reason = errorMessage(cause instanceof ReadPhotosError ? cause.reason : cause);
       fail(
         keys.length === files.length
           ? `写真は届いていますが、読み取れませんでした。下に手で入れてください。（${reason}）`
@@ -311,24 +180,20 @@ export function ReceiptsPage() {
     if (!draft) return;
     setBusy(true);
     try {
-      const { paidWith, currency: _currency, exchangeRate: _rate, ...rest } = draft;
       const selected = selectedTxnId && !asPayment ? snapshot.transactions.find((item) => item.id === selectedTxnId) : undefined;
-      const receipt: Receipt = {
-        ...rest,
-        ...currencyFields(draft, selected?.amount),
-        items: toReceiptItems(draft.items),
-        status: asPayment ? 'cash' : selectedTxnId ? 'matched' : 'pending',
-        ...(asPayment ? { paidWith } : {}),
-        ...(selectedTxnId && !asPayment ? { txnId: selectedTxnId } : {}),
+      const receipt = receiptFromDraft(draft, {
+        asPayment,
+        txnId: selectedTxnId,
+        paidYen: selected?.amount,
         createdAt: editing?.createdAt ?? new Date().toISOString(),
-      };
+      });
       await saveReceipt(receipt);
       const learned = await learnFromDraft(draft.items);
 
       if (asPayment) {
         // 新しい明細なので saveTransactions で足す。saveTransaction は既にある明細の差し替えにしか効かない
-        await saveTransactions([transactionFromReceipt(receipt, paidWith)]);
-        info(`${paymentPhrase(paidWith)}として明細に足しました。${learned}`);
+        await saveTransactions([transactionFromReceipt(receipt, draft.paidWith)]);
+        info(`${paymentPhrase(draft.paidWith)}として明細に足しました。${learned}`);
       } else if (selectedTxnId) {
         if (selected) {
           await saveTransaction(applyReceipt(selected, receipt));
@@ -380,21 +245,12 @@ export function ReceiptsPage() {
     if (!draft || !editing) return;
     setBusy(true);
     try {
-      const { paidWith, warnings: _warnings, currency: _currency, exchangeRate: _rate, ...rest } = draft;
-      // 円に戻したときにドルの欄が残らないよう、開いた時点の通貨の欄は外してから載せ直す
-      const { currency: _was, exchangeRate: _wasRate, ...base } = editing;
-      const receipt: Receipt = {
-        ...base,
-        ...rest,
-        ...currencyFields(draft, editing.status === 'matched' ? linked?.amount : undefined),
-        items: toReceiptItems(draft.items),
-        ...(editing.status === 'cash' ? { paidWith } : {}),
-      };
+      const receipt = editedReceipt(editing, draft, editing.status === 'matched' ? linked?.amount : undefined);
       await saveReceipt(receipt);
       const learned = await learnFromDraft(draft.items);
 
       if (editing.status === 'cash') {
-        const txn = transactionFromReceipt(receipt, paidWith, linked);
+        const txn = transactionFromReceipt(receipt, draft.paidWith, linked);
         await (linked ? saveTransaction(txn) : saveTransactions([txn]));
         info(`${linked ? 'レシートと明細を直しました。' : 'レシートを直し、消えていた明細を作り直しました。'}${learned}`);
       } else if (linked) {
@@ -418,25 +274,8 @@ export function ReceiptsPage() {
     event.target.value = '';
   }
 
-  const itemsTotal = draft?.items.reduce((sum, item) => sum + item.amount, 0) ?? 0;
-  const money = (amount: number) => formatMoney(amount, draft?.currency ?? 'JPY');
-  /** 下書きの合計を円に直した額。ドルのときだけ添える */
-  const yenHint =
-    draft && draft.currency !== 'JPY' && !lacksRate(draft)
-      ? `約 ${formatYen(receiptYenTotal(draft))}`
-      : undefined;
-
-  /** 通貨を切り替える。画面に見えている数はそのままにする（OCR が通貨を取り違えたとき用） */
-  function changeCurrency(next: Currency) {
-    if (!draft || draft.currency === next) return;
-    const convert = (amount: number) => convertDisplayed(amount, draft.currency, next);
-    setDraft({
-      ...draft,
-      currency: next,
-      total: convert(draft.total),
-      items: draft.items.map((item) => ({ ...item, amount: convert(item.amount) })),
-      ...(next === 'USD' && usableRate(draft.exchangeRate) === undefined ? { exchangeRate: latestUsdRate(snapshot.receipts) } : {}),
-    });
+  function setPaidWith(paidWith: SourceKind) {
+    if (draft) setDraft({ ...draft, paidWith });
   }
 
   return (
@@ -494,134 +333,7 @@ export function ReceiptsPage() {
 
       {draft && (
         <Card title={editing ? 'レシートを直す' : '読み取り結果'} action={<Button size="sm" onClick={closeDraft}>やめる</Button>}>
-          {draft.warnings && draft.warnings.length > 0 && (
-            <ul className="mb-3 space-y-1 rounded-lg bg-warning/12 px-3 py-2 text-xs text-ink">
-              {draft.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          )}
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="店名">
-              <Input value={draft.storeName} onChange={(event) => setDraft({ ...draft, storeName: event.target.value })} />
-            </Field>
-            <Field label="日付">
-              <Input type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} />
-            </Field>
-            {/* 1 つの label に 2 つの入力を入れると、ラベルを押したときに通貨の側へ行ってしまう */}
-            <div className="flex gap-1.5">
-              <div className="w-[4.5rem] shrink-0">
-                <Field label="通貨">
-                  <Select
-                    value={draft.currency}
-                    onChange={(event) => changeCurrency(event.target.value as Currency)}
-                    className="w-full"
-                  >
-                    {CURRENCIES.map((currency) => (
-                      <option key={currency} value={currency}>
-                        {CURRENCY_LABELS[currency]}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-              </div>
-              <div className="min-w-0 flex-1">
-                <Field label="合計" hint={itemsTotal !== draft.total ? `品目の合計は ${money(itemsTotal)}` : yenHint}>
-                  <MoneyInput amount={draft.total} currency={draft.currency} onChange={(total) => setDraft({ ...draft, total })} className="w-full" />
-                </Field>
-              </div>
-            </div>
-          </div>
-
-          {draft.currency !== 'JPY' && (
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <Field
-                label="1 ドルの円"
-                hint={
-                  lacksRate(draft)
-                    ? 'レートを入れてください'
-                    : itemsTotal !== draft.total
-                      ? yenHint
-                      : '明細に当てると、請求額から実際のレートに置き換えます'
-                }
-              >
-                <Input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.01"
-                  value={draft.exchangeRate ?? ''}
-                  onChange={(event) => {
-                    const rate = Number(event.target.value);
-                    setDraft({ ...draft, exchangeRate: event.target.value === '' || !Number.isFinite(rate) ? undefined : rate });
-                  }}
-                  className="tnum text-right"
-                />
-              </Field>
-            </div>
-          )}
-
-          <h3 className="mt-4 text-xs font-semibold text-ink-2">品目</h3>
-          <ul className="mt-1 space-y-2">
-            {draft.items.map((item, index) => (
-              // 目印に品目名を混ぜると、1 文字打つたびに行が作り直されて入力欄から外れる
-              <li key={index} className="flex items-center gap-1.5">
-                {/* 左からカテゴリ・品名・金額。幅は品名に回し、カテゴリは選べる分だけに絞る */}
-                <Select
-                  value={item.categoryId ?? UNCATEGORIZED_ID}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      items: draft.items.map((row, position) =>
-                        position === index ? { ...row, categoryId: event.target.value, categoryEdited: true } : row,
-                      ),
-                    })
-                  }
-                  className="w-[5.5rem] min-w-0 shrink-0"
-                  aria-label="カテゴリ"
-                >
-                  <CategoryOptions categories={categories} />
-                </Select>
-                <Input
-                  value={item.name}
-                  onChange={(event) =>
-                    setDraft({ ...draft, items: draft.items.map((row, position) => (position === index ? { ...row, name: event.target.value } : row)) })
-                  }
-                  placeholder="品目名"
-                  className="min-w-0 flex-1"
-                  aria-label="品目名"
-                />
-                <MoneyInput
-                  amount={item.amount}
-                  currency={draft.currency}
-                  onChange={(amount) =>
-                    setDraft({
-                      ...draft,
-                      items: draft.items.map((row, position) => (position === index ? { ...row, amount } : row)),
-                    })
-                  }
-                  className="w-[4.5rem] shrink-0"
-                  aria-label="金額"
-                />
-                <button
-                  type="button"
-                  onClick={() => setDraft({ ...draft, items: draft.items.filter((_, position) => position !== index) })}
-                  className="shrink-0 rounded-md p-1 text-ink-2 hover:bg-plane"
-                  aria-label="この品目を消す"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <Button
-            size="sm"
-            className="mt-2"
-            onClick={() => setDraft({ ...draft, items: [...draft.items, { name: '', amount: 0, categoryId: UNCATEGORIZED_ID }] })}
-          >
-            <Plus size={14} />
-            品目を足す
-          </Button>
+          <DraftEditor draft={draft} onChange={setDraft} categories={categories} fallbackRate={latestUsdRate(snapshot.receipts)} />
 
           {editing && editing.status !== 'pending' ? (
             <>
@@ -648,26 +360,15 @@ export function ReceiptsPage() {
 
               {editing.status === 'cash' && (
                 <div className="mt-4 border-t border-grid pt-3">
-                  <Field
-                    label="支払い方法"
-                    hint={
+                  <PaymentMethodField
+                    value={draft.paidWith}
+                    onChange={setPaidWith}
+                    importableHint={
                       hasImportableStatement(draft.paidWith)
                         ? `${SOURCE_LABELS[draft.paidWith]}の利用明細も取り込むと、同じ支払いが 2 件になります。取り込んだら、明細の画面で重複として片方を消してください。`
                         : undefined
                     }
-                  >
-                    <Select
-                      value={draft.paidWith}
-                      onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
-                      className="w-full"
-                    >
-                      {RECEIPT_PAYMENT_METHODS.map((method) => (
-                        <option key={method} value={method}>
-                          {SOURCE_LABELS[method]}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
+                  />
                 </div>
               )}
 
@@ -683,56 +384,18 @@ export function ReceiptsPage() {
             </>
           ) : (
             <>
-              <h3 className="mt-4 text-xs font-semibold text-ink-2">当てる明細</h3>
-              {candidates.length === 0 ? (
-                <p className="mt-1 text-sm text-ink-2">
-                  {draft.currency === 'JPY'
-                    ? `金額 ${formatYen(draft.total)} に一致する明細がありません。`
-                    : `${money(draft.total)}${yenHint ? `（${yenHint}）` : ''} に近い明細がありません。`}
-                  支払い方法を選べば、そのまま明細として登録できます。
-                </p>
-              ) : (
-                <ul className="mt-1 space-y-1">
-                  {candidates.map((candidate) => (
-                    <li key={candidate.txn.id}>
-                      <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-plane">
-                        <input
-                          type="radio"
-                          name="candidate"
-                          checked={selectedTxnId === candidate.txn.id}
-                          onChange={() => setSelectedTxnId(candidate.txn.id)}
-                        />
-                        <span className="tnum text-xs text-muted">{candidate.txn.date.slice(5)}</span>
-                        <span className="min-w-0 flex-1 truncate text-sm text-ink">{candidate.txn.rawMerchant}</span>
-                        <span className="text-xs text-muted">{candidate.reasons.join('・')}</span>
-                        <span className="tnum text-sm text-ink">{formatYen(candidate.txn.amount)}</span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <MatchCandidates draft={draft} candidates={candidates} selectedTxnId={selectedTxnId} onSelect={setSelectedTxnId} />
 
               <div className="mt-4 border-t border-grid pt-3">
-                <Field
-                  label="支払い方法"
-                  hint={
+                <PaymentMethodField
+                  value={draft.paidWith}
+                  onChange={setPaidWith}
+                  importableHint={
                     hasImportableStatement(draft.paidWith)
                       ? `${SOURCE_LABELS[draft.paidWith]}の利用明細を取り込むなら、ここでは登録せず「レシートだけ保存」して、取り込んだ明細に当ててください。両方だと二重に数えます。`
                       : undefined
                   }
-                >
-                  <Select
-                    value={draft.paidWith}
-                    onChange={(event) => setDraft({ ...draft, paidWith: event.target.value as SourceKind })}
-                    className="w-full"
-                  >
-                    {RECEIPT_PAYMENT_METHODS.map((method) => (
-                      <option key={method} value={method}>
-                        {SOURCE_LABELS[method]}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
+                />
               </div>
 
               <div className="mt-3 flex flex-wrap justify-end gap-2">
@@ -756,165 +419,12 @@ export function ReceiptsPage() {
         />
       )}
 
-      <Card title={`保存済み ${snapshot.receipts.length} 枚`}>
-        {snapshot.receipts.length === 0 ? (
-          <EmptyState title="まだレシートがありません">
-            内訳待ちの明細は、レシートを読ませると品目ごとに分かれます
-          </EmptyState>
-        ) : (
-          <ul className="divide-y divide-grid">
-            {[...snapshot.receipts]
-              .sort((a, b) => b.date.localeCompare(a.date))
-              .map((receipt) => (
-                <li key={receipt.id} className="flex items-center gap-2 py-2">
-                  {/* 行を押すと上の欄に開いて、中身を見たり直したりできる */}
-                  <button
-                    type="button"
-                    onClick={() => openReceipt(receipt)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left hover:bg-plane"
-                    aria-label={`${receipt.date} の ${receipt.storeName || '店名なし'} のレシートを開く`}
-                  >
-                    <span className="tnum text-xs text-muted">{receipt.date.slice(5)}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{receipt.storeName || '（店名なし）'}</span>
-                    <span className="shrink-0 text-xs text-muted">{receiptCategorySummary(receipt, snapshot.categories)}</span>
-                  </button>
-                  {receipt.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                  {receipt.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[receipt.paidWith ?? 'cash']}</Badge>}
-                  {receipt.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                  <span className="tnum text-sm font-medium text-ink">{formatMoney(receipt.total, receiptCurrency(receipt))}</span>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => confirmDeleteReceipt(receipt))}
-                    className="rounded-md p-1.5 text-ink-2 hover:bg-plane"
-                    aria-label="消す"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </li>
-              ))}
-          </ul>
-        )}
-      </Card>
+      <SavedReceiptList
+        receipts={snapshot.receipts}
+        categories={snapshot.categories}
+        onOpen={openReceipt}
+        onDelete={(receipt) => void run(() => confirmDeleteReceipt(receipt))}
+      />
     </div>
-  );
-}
-
-/** 見比べるのに出す品目の行数。長いレシートで組が縦に伸びすぎないよう、残りは開いたときだけ */
-const DUPLICATE_ITEM_LINES = 5;
-
-/**
- * 同じレシートかもしれない組。合計は一致しているので、見比べる材料は品目のほうにある。
- * 人に答えてもらう形にして、同じなら残す方を選んで片方を消し、別の買い物なら両方残して二度と聞かない。
- */
-function DuplicateReceiptsCard({
-  pairs,
-  onKeep,
-  onDismiss,
-}: {
-  pairs: DuplicateReceiptPair[];
-  onKeep: (keep: Receipt, drop: Receipt) => Promise<void>;
-  onDismiss: (pair: DuplicateReceiptPair) => Promise<void>;
-}) {
-  return (
-    <Card title={`同じレシートかもしれない組 ${pairs.length} 件`}>
-      <p className="text-xs text-muted">
-        合計が一致して日付が近いレシートです。品目を見比べて、2 回撮ったものなら残す方を選んでください。別々の買い物なら「別の買い物」を押すと、この組は二度と出ません
-      </p>
-      <ul className="mt-2 divide-y divide-grid">
-        {pairs.map((pair) => (
-          <li key={duplicateKey(pair)} className="py-3">
-            <div className="flex items-center gap-1.5">
-              <Copy size={14} className="text-muted" aria-hidden />
-              <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
-            </div>
-            <ul className="mt-2 grid gap-2 md:grid-cols-2">
-              {[
-                [pair.a, pair.b],
-                [pair.b, pair.a],
-              ].map(([item, other]) => (
-                <li key={item.id} className="rounded-lg bg-plane px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <span className="tnum text-xs text-muted">{item.date.slice(5)}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{item.storeName || '（店名なし）'}</span>
-                    {item.status === 'matched' && <Badge tone="good">明細に紐付き</Badge>}
-                    {item.status === 'cash' && <Badge tone="neutral">{SOURCE_LABELS[item.paidWith ?? 'cash']}</Badge>}
-                    {item.status === 'pending' && <Badge tone="warning">未紐付け</Badge>}
-                    <span className="tnum text-sm font-semibold text-ink">{formatMoney(item.total, receiptCurrency(item))}</span>
-                  </div>
-                  <DuplicateReceiptItems receipt={item} />
-                  <div className="mt-2 flex justify-end">
-                    <Button size="sm" onClick={() => void onKeep(item, other)}>
-                      同じレシート：こちらを残す
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-2 flex justify-end">
-              <Button size="sm" variant="primary" onClick={() => void onDismiss(pair)}>
-                別の買い物（両方残す）
-              </Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
-}
-
-/** 組の片側の品目。同じ会計かどうかはここを見比べて決めてもらう */
-function DuplicateReceiptItems({ receipt }: { receipt: Receipt }) {
-  const [expanded, setExpanded] = useState(false);
-  if (receipt.items.length === 0) return <p className="mt-1.5 border-t border-grid pt-1.5 text-xs text-muted">品目なし</p>;
-  const items = expanded ? receipt.items : receipt.items.slice(0, DUPLICATE_ITEM_LINES);
-  const hidden = receipt.items.length - items.length;
-  return (
-    <div className="mt-1.5 border-t border-grid pt-1.5 text-xs">
-      <ul className="space-y-0.5" aria-label={`${receipt.date} の ${receipt.storeName || '店名なし'} の品目`}>
-        {items.map((item, index) => (
-          <li key={index} className="flex items-baseline gap-2">
-            <span className="truncate text-ink-2">{item.name || '（品名なし）'}</span>
-            <span className="flex-1 border-b border-dotted border-grid" />
-            <span className="tnum text-ink-2">{formatMoney(item.amount, receiptCurrency(receipt))}</span>
-          </li>
-        ))}
-      </ul>
-      {receipt.items.length > DUPLICATE_ITEM_LINES && (
-        <button type="button" onClick={() => setExpanded(!expanded)} className="text-accent">
-          {expanded ? '閉じる' : `ほか ${hidden} 品を見る`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-/**
- * 金額の入力欄。保存は最小単位の整数（円、セント）で、見せるのはその通貨の数（12.34 ドル）。
- * ドルは小数を打てるように step と inputMode を変える。
- */
-function MoneyInput({
-  amount,
-  currency,
-  onChange,
-  className,
-  ...rest
-}: {
-  amount: number;
-  currency: Currency;
-  onChange: (amount: number) => void;
-  className?: string;
-  'aria-label'?: string;
-}) {
-  const decimal = currency !== 'JPY';
-  return (
-    <Input
-      type="number"
-      inputMode={decimal ? 'decimal' : 'numeric'}
-      step={decimal ? '0.01' : '1'}
-      value={fromMinor(amount, currency)}
-      onChange={(event) => onChange(toMinor(Number(event.target.value) || 0, currency))}
-      className={`tnum text-right ${className ?? ''}`}
-      {...rest}
-    />
   );
 }
