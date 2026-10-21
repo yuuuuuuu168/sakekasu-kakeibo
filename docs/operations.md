@@ -1027,6 +1027,8 @@ fields @timestamp, @message
 
 ### 切り替えるかを決める基準
 
+これまでに測った結果と、切り替えなかった理由は [model-bench-2026-10.md](model-bench-2026-10.md) にある。
+
 比べる相手は今の本番（OCR は `claude-sonnet-5-5` の effort `low`、判定は `jev`）で、同じ `offset` と `limit` の
 レシートで比べる。主の指標で本番を上回り、守る線をすべて満たした組だけを切り替えの候補にする。
 
