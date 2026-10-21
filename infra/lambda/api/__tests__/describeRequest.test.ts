@@ -1,14 +1,5 @@
-import { beforeAll, describe, expect, it } from 'vitest';
-
-let describeRequest: typeof import('../index')['describeRequest'];
-let LOGGED_TRANSACTIONS: number;
-
-beforeAll(async () => {
-  process.env.TABLE_NAME = 'test-table';
-  process.env.RECEIPT_BUCKET = 'test-bucket';
-  process.env.OCR_FUNCTION_NAME = 'test-ocr';
-  ({ describeRequest, LOGGED_TRANSACTIONS } = await import('../index'));
-});
+import { describe, expect, it } from 'vitest';
+import { LOGGED_TRANSACTIONS, describeRequest } from '../log';
 
 const TXN = {
   id: 't1',

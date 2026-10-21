@@ -2,6 +2,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { buildMonthlyReport, normalizeSnapshot, previousMonth, reportInputFor } from '@kakeibo/core';
 import { SK, snapshotFromItems } from '../shared/snapshot-items';
+import { requireEnv } from '../shared/env';
 import { USER_PARTITION_PREFIX, isUserPartition } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
@@ -9,12 +10,6 @@ const TABLE_NAME = requireEnv('TABLE_NAME');
 const documents = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-}
 
 type Event = {
   /** 対象の月。省略すると前月。手で呼び直すときに使う */

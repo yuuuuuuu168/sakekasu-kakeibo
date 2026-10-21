@@ -21,6 +21,7 @@ import { askClaude, type ClaudeEffort, type ClaudeUsage } from '../classify/clau
 import { ask, buildState, clientOnce } from '../classify/index';
 import { buildPrompt, normalizeDraft, toOcrImage } from '../ocr-receipt/draft';
 import { createAnthropicClient, readFederation } from '../shared/anthropic-client';
+import { requireEnv } from '../shared/env';
 import { costUsd, priceOf, type Price } from './pricing';
 import { f1, scoreClassify, scoreOcr, type ClassifyCase, type ClassifyScore, type OcrScore } from './score';
 
@@ -62,12 +63,6 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 const TIME_MARGIN_MS = 2 * 60_000;
 
 const EFFORTS: readonly ClaudeEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-}
 
 export type BenchRequest = {
   task: 'ocr' | 'classify';

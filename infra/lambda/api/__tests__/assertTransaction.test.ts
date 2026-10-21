@@ -1,6 +1,5 @@
-import { beforeAll, describe, expect, it } from 'vitest';
-
-let assertTransaction: typeof import('../index')['assertTransaction'];
+import { describe, expect, it } from 'vitest';
+import { assertTransaction } from '../validate';
 
 const VALID = {
   id: 't1',
@@ -11,13 +10,6 @@ const VALID = {
     { id: 's2', amount: 400, categoryId: 'daily', origin: 'receipt' },
   ],
 };
-
-beforeAll(async () => {
-  process.env.TABLE_NAME = 'test-table';
-  process.env.RECEIPT_BUCKET = 'test-bucket';
-  process.env.OCR_FUNCTION_NAME = 'test-ocr';
-  assertTransaction = (await import('../index')).assertTransaction;
-});
 
 describe('assertTransaction', () => {
   it('内訳の合計が金額に一致していれば通す', () => {

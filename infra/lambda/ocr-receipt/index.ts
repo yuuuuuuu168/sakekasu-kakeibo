@@ -2,6 +2,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { ocrJobKey, parseKeys, type OcrJobRequest } from '../shared/ocr-job';
+import { requireEnv } from '../shared/env';
 import { buildPrompt, normalizeDraft, summarizeDraft, toOcrImage, type Draft } from './draft';
 import { readReceipt, type OcrImage } from './llm';
 
@@ -14,12 +15,6 @@ const s3 = new S3Client({});
 const documents = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
 });
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-}
 
 /**
  * api の Lambda から非同期で呼ばれ、読み取った結果をジョブの行に書き込む（shared/ocr-job.ts）。
