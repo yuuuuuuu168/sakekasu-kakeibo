@@ -14,6 +14,8 @@ import {
   type Verdict,
 } from '@kakeibo/core';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
+import { requireEnv } from '../shared/env';
+import { asArray, json, parseBody, subOf } from '../shared/http';
 
 /**
  * カテゴリ判定。レシートの品目名と明細の店舗名を、大カテゴリ → 小カテゴリの 2 段で決める。
@@ -58,17 +60,11 @@ const MAX_KEY_LENGTH = MAX_TEXT_LENGTH;
 
 const secrets = new SecretsManagerClient({});
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-}
-
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyResultV2> {
-  const sub = event.requestContext.authorizer?.jwt?.claims?.sub;
-  if (typeof sub !== 'string' || sub === '') return json(401, { message: 'サインインが必要です' });
+  const sub = subOf(event);
+  if (!sub) return json(401, { message: 'サインインが必要です' });
 
   const target = parseTarget(parseBody(event.body, event.isBase64Encoded));
   if (!target) return json(400, { message: '判定する対象とカテゴリが要ります' });
@@ -285,27 +281,4 @@ async function buildClient(): Promise<TypeSafeClient> {
     // debug にするとリクエストの本文とヘッダが CloudWatch に出る。鍵が載る
     logLevel: 'warn',
   });
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function parseBody(body: string | undefined, isBase64Encoded: boolean | undefined): Record<string, unknown> {
-  if (!body) return {};
-  const text = isBase64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
-  try {
-    const parsed = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function json(statusCode: number, payload: unknown): APIGatewayProxyResultV2 {
-  return {
-    statusCode,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(payload),
-  };
 }
