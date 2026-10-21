@@ -21,6 +21,7 @@ import {
   type OcrJobRequest,
   type OcrJobStatus,
 } from '../shared/ocr-job';
+import { SK, snapshotFromItems } from '../shared/snapshot-items';
 import { userPk } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
@@ -40,17 +41,6 @@ function requireEnv(name: string): string {
 }
 
 type Json = Record<string, unknown>;
-
-const SK = {
-  transaction: (id: string) => `TXN#${id}`,
-  categories: 'CONFIG#categories',
-  rules: 'CONFIG#rules',
-  recurring: 'CONFIG#recurring',
-  budget: (month: string) => `BUDGET#${month}`,
-  mapping: (sourceId: string) => `MAPPING#${sourceId}`,
-  receipt: (id: string) => `RECEIPT#${id}`,
-  report: (month: string) => `REPORT#${month}`,
-};
 
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -250,28 +240,8 @@ async function loadSnapshot(sub: string) {
     startKey = page.LastEvaluatedKey;
   } while (startKey);
 
-  const snapshot = {
-    categories: [] as unknown[],
-    rules: [] as unknown[],
-    budgets: [] as unknown[],
-    transactions: [] as unknown[],
-    receipts: [] as unknown[],
-    mappings: [] as unknown[],
-    recurring: [] as unknown[],
-  };
-
-  for (const item of items) {
-    const sk = String(item.sk);
-    if (sk.startsWith('TXN#')) snapshot.transactions.push(strip(item));
-    else if (sk === SK.categories) snapshot.categories = asArray(item.categories);
-    else if (sk === SK.rules) snapshot.rules = asArray(item.rules);
-    else if (sk === SK.recurring) snapshot.recurring = asArray(item.recurring);
-    else if (sk.startsWith('BUDGET#')) snapshot.budgets.push(strip(item));
-    else if (sk.startsWith('RECEIPT#')) snapshot.receipts.push(strip(item));
-    else if (sk.startsWith('MAPPING#')) snapshot.mappings.push(strip(item));
-  }
-
-  return snapshot;
+  // 欠けは補わずに返す。補うのは画面の store（core の normalizeSnapshot）
+  return snapshotFromItems(items);
 }
 
 /** DynamoDB のキーは画面に要らないので落とす */

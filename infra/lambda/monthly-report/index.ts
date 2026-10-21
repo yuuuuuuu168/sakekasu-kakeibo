@@ -1,16 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import {
-  SEED_CATEGORIES,
-  withLaterSeeds,
-  buildMonthlyReport,
-  previousMonth,
-  type Budget,
-  type Category,
-  type Receipt,
-  type RecurringPayment,
-  type Transaction,
-} from '@kakeibo/core';
+import { buildMonthlyReport, normalizeSnapshot, previousMonth, reportInputFor } from '@kakeibo/core';
+import { SK, snapshotFromItems } from '../shared/snapshot-items';
 import { USER_PARTITION_PREFIX, isUserPartition } from '../shared/user-partition';
 
 const TABLE_NAME = requireEnv('TABLE_NAME');
@@ -86,30 +77,18 @@ async function listUsers(): Promise<string[]> {
   return [...found];
 }
 
+/**
+ * 保存データの組み方と補い方は、画面と同じもの（snapshotFromItems → core の normalizeSnapshot）を通す。
+ * 別に書いていた頃は、カテゴリの行が空のときに値引きのカテゴリしか残らず、画面のレポートと食い違った
+ */
 async function generate(pk: string, month: string): Promise<void> {
-  const items = await queryAll(pk);
-
-  const transactions: Transaction[] = [];
-  const receipts: Receipt[] = [];
-  let recurring: RecurringPayment[] = [];
-  let categories: Category[] = SEED_CATEGORIES;
-  let budget: Budget | undefined;
-
-  for (const item of items) {
-    const sk = String(item.sk);
-    if (sk.startsWith('TXN#')) transactions.push(item as unknown as Transaction);
-    else if (sk.startsWith('RECEIPT#')) receipts.push(item as unknown as Receipt);
-    else if (sk === 'CONFIG#recurring' && Array.isArray(item.recurring)) recurring = item.recurring as RecurringPayment[];
-    else if (sk === 'CONFIG#categories' && Array.isArray(item.categories)) categories = withLaterSeeds(item.categories as Category[]);
-    else if (sk === `BUDGET#${month}`) budget = { month, limits: (item.limits ?? {}) as Record<string, number> };
-  }
-
-  const report = buildMonthlyReport({ month, transactions, categories, budget, receipts, recurring });
+  const snapshot = normalizeSnapshot(snapshotFromItems(await queryAll(pk)));
+  const report = buildMonthlyReport(reportInputFor(snapshot, month));
 
   await documents.send(
     new PutCommand({
       TableName: TABLE_NAME,
-      Item: { pk, sk: `REPORT#${month}`, month, report, updatedAt: new Date().toISOString() },
+      Item: { pk, sk: SK.report(month), month, report, updatedAt: new Date().toISOString() },
     }),
   );
 }

@@ -3,49 +3,21 @@ import type {
   Category,
   CategoryRule,
   ClassifyTarget,
-  ColumnMapping,
-  Currency,
   MonthlyReport,
   Receipt,
-  ReceiptItem,
+  ReceiptDraft,
+  SavedMapping,
+  Snapshot,
   RecurringPayment,
-  SourceKind,
   Transaction,
   Verdict,
 } from '@kakeibo/core';
 
-/** CSV の列の対応をソースごとに覚えておく。2 回目以降は指定し直さなくて済む */
-export type SavedMapping = {
-  sourceId: string;
-  label: string;
-  source: SourceKind;
-  mapping: ColumnMapping;
-};
+/** 保存データの形は core（snapshot.ts）にある。月次レポートの Lambda と同じ型を見る */
+export type { SavedMapping, Snapshot } from '@kakeibo/core';
 
-export type Snapshot = {
-  categories: Category[];
-  rules: CategoryRule[];
-  budgets: Budget[];
-  transactions: Transaction[];
-  receipts: Receipt[];
-  mappings: SavedMapping[];
-  recurring: RecurringPayment[];
-};
-
-/** OCR が返すレシートの下書き。確定前なので id は持たない */
-export type ReceiptDraft = {
-  storeName: string;
-  date: string;
-  /** currency の最小単位の整数（円、セント）。品目の amount も同じ */
-  total: number;
-  items: ReceiptItem[];
-  /** ドルのレシートと読めたときだけ入る。無ければ円 */
-  currency?: Currency;
-  /** 支払いの印字から読めた支払い方法。読めなければ無い */
-  paymentMethod?: SourceKind;
-  /** OCR が読み切れなかった項目の説明。画面に出して直させる */
-  warnings?: string[];
-};
+/** OCR が返すレシートの下書き。Lambda と同じ型を core から読む */
+export type { ReceiptDraft } from '@kakeibo/core';
 
 export type UploadTarget = {
   uploadUrl: string;

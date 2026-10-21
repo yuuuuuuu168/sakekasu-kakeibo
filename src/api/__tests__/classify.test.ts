@@ -34,63 +34,17 @@ beforeEach(() => {
   api.classify.mockReset();
 });
 
+/*
+ * ここで見るのは、判定を呼ぶこと・答えを core の採否に渡すこと・落ちたら空で進むことだけ。
+ * 採否そのもの（確信度、手元にないカテゴリ、覚えた品目など）は core の classify-apply.test.ts
+ */
 describe('judgeReceiptItems', () => {
-  it('確信が高い判定でカテゴリを入れ替える', async () => {
+  it('品目を聞いて、答えを品目に当てる', async () => {
     api.classify.mockResolvedValue({ '0': { categoryId: 'rice', confidence: 0.95, status: 'accepted', parentId: 'food' } });
     const judged = await judgeReceiptItems(ITEMS, 'イトーヨーカドー', CATEGORIES);
+    expect(api.classify.mock.calls[0][0]).toMatchObject({ kind: 'item', subjects: [{ key: '0' }, { key: '1' }] });
     expect(judged.items[0].categoryId).toBe('rice');
     expect(judged.warnings).toEqual([]);
-  });
-
-  it('確信が中くらいならカテゴリは入れるが注意を残す', async () => {
-    api.classify.mockResolvedValue({ '1': { categoryId: 'apparel', confidence: 0.6, status: 'review' } });
-    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
-    expect(judged.items[1].categoryId).toBe('apparel');
-    expect(judged.warnings[0]).toContain('ﾃｨｯｼｭ 5P');
-    expect(judged.warnings[0]).toContain('衣類・散髪');
-  });
-
-  it('負の金額の行は判定に聞かず、値引きのまま残す', async () => {
-    api.classify.mockResolvedValue({});
-    const items: ReceiptItem[] = [...ITEMS, { name: 'ｺｼﾋｶﾘ 値引', amount: -200, categoryId: 'discount' }];
-    const judged = await judgeReceiptItems(items, '店', CATEGORIES);
-    expect(api.classify.mock.calls[0][0].subjects.map((subject) => subject.key)).toEqual(['0', '1']);
-    expect(judged.items[2].categoryId).toBe('discount');
-  });
-
-  it('判断できなかった品目はキーワード表の答えを残す', async () => {
-    api.classify.mockResolvedValue({ '1': { categoryId: UNCATEGORIZED_ID, confidence: 0.2, status: 'unresolved' } });
-    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
-    expect(judged.items[1].categoryId).toBe('daily');
-  });
-
-  it('レシートの店舗名を手がかりとして渡す', async () => {
-    api.classify.mockResolvedValue({});
-    await judgeReceiptItems(ITEMS, 'イトーヨーカドー', CATEGORIES);
-    const target = api.classify.mock.calls[0][0];
-    expect(target.kind).toBe('item');
-    expect(target.subjects).toEqual([
-      { key: '0', text: 'ｺｼﾋｶﾘ 5kg', context: 'イトーヨーカドー' },
-      { key: '1', text: 'ﾃｨｯｼｭ 5P', context: 'イトーヨーカドー' },
-    ]);
-  });
-
-  /*
-   * 判定の側でも同じ検査をしているが、内訳に書き込むのはこちらなので、
-   * 手元にないカテゴリを渡されたら書かない。どの行にも出てこない額を作らせないため
-   */
-  it('手元にないカテゴリを返されたら使わない', async () => {
-    api.classify.mockResolvedValue({ '0': { categoryId: 'ghost', confidence: 0.99, status: 'accepted' } });
-    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES);
-    expect(judged.items[0].categoryId).toBe('food');
-    expect(judged.warnings).toEqual([]);
-  });
-
-  it('使わなくなったカテゴリを返されたら使わない', async () => {
-    const archived = CATEGORIES.map((category) => (category.id === 'apparel' ? { ...category, archived: true } : category));
-    api.classify.mockResolvedValue({ '0': { categoryId: 'apparel', confidence: 0.99, status: 'accepted' } });
-    const judged = await judgeReceiptItems(ITEMS, '店', archived);
-    expect(judged.items[0].categoryId).toBe('food');
   });
 
   it('判定が落ちても品目はそのまま返す', async () => {
@@ -105,17 +59,6 @@ describe('judgeReceiptItems', () => {
     expect(api.classify).not.toHaveBeenCalled();
     expect(judged.items).toEqual([]);
   });
-});
-
-describe('judgeReceiptItems と覚えた品目', () => {
-  it('覚えた品目は判定に聞かず、そのカテゴリにする', async () => {
-    api.classify.mockResolvedValue({ '1': { categoryId: 'daily', confidence: 0.9, status: 'accepted' } });
-    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES, [learnItemRule('ｺｼﾋｶﾘ 5kg', 'rice')]);
-    expect(judged.items[0].categoryId).toBe('rice');
-    // 聞いたのは覚えていない品目だけ。答えの鍵は元の位置のまま
-    expect(api.classify.mock.calls[0][0].subjects.map((subject) => subject.key)).toEqual(['1']);
-    expect(judged.items[1].categoryId).toBe('daily');
-  });
 
   it('全部覚えていれば判定を呼ばない', async () => {
     const rules = [learnItemRule('ｺｼﾋｶﾘ 5kg', 'rice'), learnItemRule('ﾃｨｯｼｭ 5P', 'daily')];
@@ -123,83 +66,25 @@ describe('judgeReceiptItems と覚えた品目', () => {
     expect(api.classify).not.toHaveBeenCalled();
     expect(judged.items.map((item) => item.categoryId)).toEqual(['rice', 'daily']);
   });
-
-  it('覚えたカテゴリが今は無ければ、覚えていないのと同じに扱う', async () => {
-    api.classify.mockResolvedValue({});
-    const judged = await judgeReceiptItems(ITEMS, '店', CATEGORIES, [learnItemRule('ｺｼﾋｶﾘ 5kg', 'gone')]);
-    expect(api.classify.mock.calls[0][0].subjects).toHaveLength(2);
-    expect(judged.items[0].categoryId).toBe('food');
-  });
 });
 
 describe('judgeUnmatchedMerchants', () => {
   const LAWSON = txn('a', 'ローソン渋谷', 'food');
   const UNKNOWN = txn('b', '謎の商店', UNCATEGORIZED_ID);
-  const UNKNOWN_AGAIN = txn('c', '謎の商店', UNCATEGORIZED_ID, 800);
 
-  it('ルールに当たらなかった店だけを聞く', async () => {
-    api.classify.mockResolvedValue({});
-    await judgeUnmatchedMerchants([LAWSON, UNKNOWN], CATEGORIES);
-    const target = api.classify.mock.calls[0][0];
-    expect(target.kind).toBe('merchant');
-    expect(target.subjects.map((subject) => subject.text)).toEqual(['謎の商店']);
-  });
-
-  it('同じ店は 1 回しか聞かず、結果は全部の行に効く', async () => {
+  it('ルールに当たらなかった店を聞いて、答えを明細とルールに当てる', async () => {
     const key = normalizeMerchant('謎の商店');
     api.classify.mockResolvedValue({ [key]: { categoryId: 'hobby', confidence: 0.93, status: 'accepted' } });
-
-    const judged = await judgeUnmatchedMerchants([UNKNOWN, UNKNOWN_AGAIN], CATEGORIES);
-    expect(api.classify.mock.calls[0][0].subjects).toHaveLength(1);
-    expect(judged.transactions.map((item) => item.splits[0].categoryId)).toEqual(['hobby', 'hobby']);
-    expect(judged.judged).toBe(1);
-  });
-
-  it('確信が高い店はルールとして覚える', async () => {
-    const key = normalizeMerchant('謎の商店');
-    api.classify.mockResolvedValue({ [key]: { categoryId: 'hobby', confidence: 0.93, status: 'accepted' } });
-    const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
+    const judged = await judgeUnmatchedMerchants([LAWSON, UNKNOWN], CATEGORIES);
+    expect(api.classify.mock.calls[0][0]).toMatchObject({ kind: 'merchant', subjects: [{ text: '謎の商店' }] });
+    expect(judged.transactions[1].splits[0].categoryId).toBe('hobby');
     expect(judged.learned).toHaveLength(1);
-    expect(judged.learned[0]).toMatchObject({ categoryId: 'hobby', matchType: 'equals' });
   });
 
-  it('確信が中くらいならカテゴリだけ入れて、ルールは作らない', async () => {
-    const key = normalizeMerchant('謎の商店');
-    api.classify.mockResolvedValue({ [key]: { categoryId: 'hobby', confidence: 0.55, status: 'review' } });
-    const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
-    expect(judged.transactions[0].splits[0].categoryId).toBe('hobby');
-    expect(judged.learned).toEqual([]);
-  });
-
-  it('判断できなかった店は未分類のまま', async () => {
-    const key = normalizeMerchant('謎の商店');
-    api.classify.mockResolvedValue({ [key]: { categoryId: UNCATEGORIZED_ID, confidence: 0.1, status: 'unresolved' } });
-    const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
-    expect(judged.transactions[0].splits[0].categoryId).toBe(UNCATEGORIZED_ID);
-    expect(judged.judged).toBe(0);
-  });
-
-  it('手元にないカテゴリを返されたら、内訳もルールも書き換えない', async () => {
-    const key = normalizeMerchant('謎の商店');
-    api.classify.mockResolvedValue({ [key]: { categoryId: 'ghost', confidence: 0.99, status: 'accepted' } });
-    const judged = await judgeUnmatchedMerchants([UNKNOWN], CATEGORIES);
-    expect(judged.transactions[0].splits[0].categoryId).toBe(UNCATEGORIZED_ID);
-    expect(judged.learned).toEqual([]);
-    expect(judged.judged).toBe(0);
-  });
-
-  it('内訳を割った明細には触らない', async () => {
-    const split: Transaction = {
-      ...UNKNOWN,
-      splits: [
-        { id: 'b-1', amount: 400, categoryId: UNCATEGORIZED_ID, origin: 'manual' },
-        { id: 'b-2', amount: 800, categoryId: 'food', origin: 'manual' },
-      ],
-    };
-    api.classify.mockResolvedValue({});
-    const judged = await judgeUnmatchedMerchants([split], CATEGORIES);
+  it('聞く店が無ければ判定を呼ばない', async () => {
+    const judged = await judgeUnmatchedMerchants([LAWSON], CATEGORIES);
     expect(api.classify).not.toHaveBeenCalled();
-    expect(judged.transactions[0]).toEqual(split);
+    expect(judged.transactions).toEqual([LAWSON]);
   });
 
   it('判定が落ちても明細はそのまま返す', async () => {
