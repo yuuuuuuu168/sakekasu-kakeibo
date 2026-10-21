@@ -927,6 +927,137 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-monthly-report \
   --payload '{"month":"2026-08"}' --cli-binary-format raw-in-base64-out /dev/stdout
 ```
 
+## モデルを比べる
+
+レシートの OCR とカテゴリ判定を、モデルを替えて保存済みのレシートでやり直し、速さ・費用・正解との一致を
+測る関数がある（`sakekasu-kakeibo-<env>-model-bench`、中身は `infra/lambda/model-bench/`）。
+画面からも API からも呼ばれず、人が起こしたときだけ動く。正解は保存済みのレシート（人が確かめて直した後の形）。
+
+- 指示文と後始末（`ocr-receipt/draft.ts`）、判定の材料と採否（`packages/core` の classify）は本番と同じものを使う。
+  違うのはモデルと effort だけ。本番の OCR と違い、Bedrock への読み直しはしない
+- OCR に使えるのは写真が残っているレシートだけ（写真は 90 日で消える）。判定は品目名とカテゴリだけを使うので、
+  古いレシートでも測れる
+- 家計簿のデータは読むだけで書き換えない。ロールはテーブルとバケットの読み取り、TypeSafe の鍵、
+  `sts:GetWebIdentityToken` だけを持つ
+- 送るものは本番と同じ。OCR は写真と指示文、判定は品目名・店舗名・カテゴリ名だけ
+- ログに出すのは点数・時間・トークン数・費用だけで、品目名・金額・店名・日付は出さない
+
+### 一度だけ: Claude Console にルールを足す
+
+ID 連携のルールはロールの ARN を照合するので、OCR のルールのままではこの関数は Claude API に入れない
+（トークンの交換が 401 になる）。Claude Console の Settings → Workload identity で、OCR のルール
+（`sakekasu-kakeibo-workload`）と同じ発行者に、次のルールを足す。
+
+- ルール名 `sakekasu-kakeibo-bench`、IAM ロール ARN `arn:aws:iam::<アカウントID>:role/sakekasu-kakeibo-dev-model-bench`
+- audience `https://api.anthropic.com`、ワークスペース `sakekasu-kakeibo`、スコープ `workspace:developer`、寿命 600 秒
+- サービスアカウントは OCR と同じ `sakekasu-kakeibo-ocr`
+
+ワークスペースを OCR と同じにしておくと、ワークスペースの利用上限（spend limit）が評価の分にも効く。
+足したルールの ID（`fdrl_...`）を `infra/cdk.json` の `anthropicFederation.benchRuleId` に書く（秘密ではない）。
+書いていなければ、関数は OCR のルールで交換しようとして 401 で落ちる（`[bench] result` の `error` に出る）。
+
+### 走らせる
+
+1 回の呼び出しで測るのは 1 つの組（仕事 × モデル × effort）。非同期で積む。同時実行は 1 なので、
+いくつ積んでも 1 本ずつ流れる（あふれた分は Lambda が最大 6 時間待たせる）。比べたい組の一式は
+`infra/scripts/model-bench.sh` にある（OCR 6 組・判定 6 組、各組の予算の合計は 48 ドル）。
+
+```sh
+bash infra/scripts/model-bench.sh dev 60 100
+```
+
+プロファイルは `AWS_PROFILE`（既定 `sakekasu-builder`）。SSO の認証が切れていれば、スクリプトが
+`aws sso login --profile sakekasu-builder` を打ってブラウザでの承認を待つ。関数がまだ無い（デプロイ前）ときは
+何も積まずに止まる。
+
+1 組だけ走らせるときは次のとおり。
+
+```sh
+aws lambda invoke --function-name sakekasu-kakeibo-dev-model-bench --invocation-type Event \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"task":"ocr","model":"claude-opus-5-5","effort":"medium","limit":30,"maxUsd":5}' /dev/null
+```
+
+| 鍵 | 既定 | 意味 |
+| --- | --- | --- |
+| `task` | （必須） | `ocr` か `classify` |
+| `model` | （必須） | Claude のモデル ID。`classify` では `jev`（本番の判定）と `keywords`（キーワード表）も選べる |
+| `effort` | `low` | Claude の effort（`low` / `medium` / `high` / `xhigh` / `max`）。本番の OCR は `low` |
+| `limit` / `offset` | 20 / 0 | 新しい順に並べたレシートの何枚目から何枚を使うか。同じ値なら、組を替えても同じレシートになる |
+| `maxUsd` | 5（天井 50） | この組の予算。使った額がこれに届いたら、新しいレシートを始めない（並列ぶん少し超えうる） |
+| `parallel` | 3（天井 8） | 同時に読むレシートの数 |
+| `price` | 表の値 | 100 万トークンあたりのドル（`{"input":10,"output":50}`）。`pricing.ts` の表に無いモデルは、これが無いと走らせない |
+
+止まる条件は 4 つで、`[bench] summary` の `stopped` に出る。`budget`（予算に届いた）、`spend_limit`
+（クレジットの残高切れかワークスペースの利用上限）、`errors`（続けて 3 回落ちた）、`time`（Lambda の 15 分の手前）。
+新しいモデルが出たら、`pricing.ts` に料金を足すか、`price` を付けて呼べば並べられる。
+
+### 結果を読む
+
+CloudWatch Logs Insights で `/aws/lambda/sakekasu-kakeibo-dev-model-bench` に次を流す。確認用のプロファイル
+（`verify`）で読める。
+
+```
+fields @timestamp, @message
+| filter @message like /\[bench\] summary/
+| sort @timestamp asc
+```
+
+| 項目 | 意味 |
+| --- | --- |
+| `usd` / `usdPerReceipt` | 使った額（`pricing.ts` の表からの見積もり。請求は Claude Console の Usage が正しい） |
+| `msMean` / `msP50` / `msP90` | レシート 1 枚の所要時間（判定は 2 段の合計） |
+| `tokens.thinking` | 出力のうち思考に使ったトークン。effort を上げると増える |
+| `servedModels` | 実際に答えたモデル。頼んだモデルと違えば比べられない |
+| `ocr.total` / `ocr.date` / `ocr.store` | 合計・日付・店名が正解と一致したレシートの割合 |
+| `ocr.amountF1Mean` | 品目を金額だけで突き合わせた F1。行を拾えたか（読み落とし・二重取り）を見る |
+| `ocr.itemF1Mean` | 品目名と金額の両方で突き合わせた F1 |
+| `ocr.perfect` | 合計・日付・全品目の金額がそろって合ったレシートの割合 |
+| `classify.exactRate` / `rootRate` | カテゴリが小カテゴリまで / 大カテゴリまで一致した品目の割合 |
+| `classify.ruledExactRate` | 人が直して覚えさせた品目（品目のルールに当たるもの）での一致率。一番確かな正解 |
+| `classify.acceptedRate` / `acceptedPrecision` | そのまま入れた品目の割合と、そのうち当たった割合（確信度の線の効き方） |
+
+読むときの注意。
+
+- 正解は人が最後に残した形なので、品目名を手で書き換えたもの（略字を開いた、など）は、印字どおりに
+  読めていても `itemF1` では外れに数える。名前の差を除きたいときは `amountF1` を見る
+- 判定の正解には、Jev の答えを人がそのまま通したものが混ざる。`jev` の一致率は高めに出る。
+  公平に比べたいときは `ruledExactRate`（Jev が一度外して人が直した品目）を見る
+- Claude の確信度は自己申告で、Jev のように校正されていない。`acceptedRate` を Jev と同じ線で比べると甘く出ることがある
+
+### 切り替えるかを決める基準
+
+比べる相手は今の本番（OCR は `claude-sonnet-5-5` の effort `low`、判定は `jev`）で、同じ `offset` と `limit` の
+レシートで比べる。主の指標で本番を上回り、守る線をすべて満たした組だけを切り替えの候補にする。
+
+**OCR**
+
+| 種類 | 条件 | 理由 |
+| --- | --- | --- |
+| 主 | `ocr.perfect` が本番より上がる | 合計・日付・全品目の金額がそろって合えば、人の手直しが要らない |
+| 守る線 | `ocr.total` が本番より下がらない | 合計は明細との突き合わせに使う |
+| 守る線 | `msP90` が 60 秒未満 | 本番の Claude API の 1 回の待ち時間は 75 秒（`ocr-receipt/llm.ts` の `ANTHROPIC_TIMEOUT_MS`）。超えると Bedrock で読み直すので、遅いモデルに替えても実際に読むのは Bedrock の Sonnet 4.6 になる |
+| 守る線 | `usdPerReceipt` が 0.10 ドル以下 | |
+
+**カテゴリ判定**
+
+| 種類 | 条件 | 理由 |
+| --- | --- | --- |
+| 主 | `classify.ruledExactRate` が `jev` を上回る | 全品目の一致率は、Jev の答えを人がそのまま通したものが正解に混ざり、Jev に甘く出る |
+| 守る線 | `classify.acceptedPrecision` が 0.95 以上 | そのまま入れた品目は人が見ないので、外れは黙って集計に混ざる |
+| 守る線 | `msP90` が 20 秒未満 | 判定の Lambda の制限時間は 30 秒で、2 段を通して収める。Jev は 1 秒を切るので、替えると画面の待ちが延びる |
+
+Claude に替えるなら、確信度の線（`packages/core/src/classify.ts` の `ACCEPT_CONFIDENCE` / `REVIEW_CONFIDENCE`）を、
+評価の結果を見て引き直す。Claude の確信度は Jev のように校正されていないため。
+
+**判定のしかた**
+
+- 率の差だけでは決めない。60 枚では 1 枚の当たり外れで 1.7 ポイント動き、偶然の差と見分けにくい。
+  `[bench] result` の `receiptId` でレシートごとに突き合わせ、「新しい組だけが当たった枚数」と「本番だけが当たった枚数」を
+  数える。前者がはっきり多い（目安として 2 倍以上で、差が 5 枚以上）ときに上回ったとみなす
+- 最後に残った候補は、同じ条件でもう 1 回走らせ、差が再現することを確かめてから切り替える
+- `servedModels` が頼んだモデルと違う組は比べない
+
 ## 費用の見込み
 
 | 内訳 | 見込み |

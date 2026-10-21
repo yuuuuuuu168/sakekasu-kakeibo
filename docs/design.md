@@ -45,7 +45,7 @@ RPC の形をしていて、グラフで引く必要がないこと。試行錯�
 | スタック | 中身 |
 | --- | --- |
 | `sakekasu-kakeibo-{env}-data` | DynamoDB テーブル、レシート用 S3 バケット |
-| `sakekasu-kakeibo-{env}-api` | HTTP API、api Lambda、ocr-receipt Lambda、monthly-report Lambda、EventBridge ルール |
+| `sakekasu-kakeibo-{env}-api` | HTTP API、api Lambda、ocr-receipt Lambda、monthly-report Lambda、EventBridge ルール、model-bench Lambda（モデルの評価。人が呼んだときだけ動く） |
 | `sakekasu-kakeibo-{env}-site` | 静的サイト用 S3、CloudFront、ACM 証明書（us-east-1）、レスポンスヘッダポリシー |
 
 デプロイ先は sakekasu-builder と同じアカウント（<アプリのアカウント ID> / ap-northeast-1）。
@@ -496,7 +496,7 @@ priority 100 なので、こちらが勝つ。`チャージスポット` のよ�
 packages/core/      明細解析、正規化、分類、マッチ、集計、叱り。AWS に依存しない純粋関数
 src/                フロントエンド（React 19 + Vite + Tailwind v4）
 infra/              CDK
-infra/lambda/       api, ocr-receipt, classify, monthly-report
+infra/lambda/       api, ocr-receipt, classify, monthly-report, model-bench
 ```
 
 `packages/core` はビルドしない。TypeScript のソースをそのまま公開し、Vite と esbuild（NodejsFunction）

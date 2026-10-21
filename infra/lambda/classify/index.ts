@@ -252,10 +252,11 @@ export function toAnswers(raw: unknown): Record<string, ChoiceAnswer> {
 /**
  * 鍵は 1 度だけ読んで、暖まったコンテナでは作り直さない。
  * 失敗したときはキャッシュを捨てる。残すと、鍵を入れ直しても次の呼び出しまで直らない。
+ * モデルの評価（model-bench）も、Jev を基準として並べるためにこれを使う。
  */
 let client: Promise<TypeSafeClient> | undefined;
 
-function clientOnce(): Promise<TypeSafeClient> {
+export function clientOnce(): Promise<TypeSafeClient> {
   client ??= buildClient().catch((cause: unknown) => {
     client = undefined;
     throw cause;
