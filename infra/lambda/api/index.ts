@@ -6,7 +6,7 @@ import { describeRequest } from './log';
 import { createUpload, getOcrJob, startOcrJob } from './ocr';
 import { matchRoute, type Route } from './routes';
 import { getReport, loadSnapshot, put, putTransactionRows, remove } from './store';
-import { BadRequest, assertMonth, assertTransaction, decodeSegment } from './validate';
+import { BadRequest, assertLimits, assertMapping, assertMonth, assertReceipt, assertTransaction, decodeSegment } from './validate';
 
 /*
  * 画面から呼ばれる API。認証（共通のユーザープールの JWT）は API Gateway が済ませ、ここは sub だけを見る。
@@ -49,9 +49,7 @@ const ROUTES: Route<Handler>[] = [
     path: '/budgets/:month',
     handle: async ({ sub, params, body }) => {
       assertMonth(params.month);
-      const limits = body.limits;
-      if (typeof limits !== 'object' || limits === null) throw new BadRequest('limits が要ります');
-      await put(sub, SK.budget(params.month), { month: params.month, limits });
+      await put(sub, SK.budget(params.month), { month: params.month, limits: assertLimits(body.limits) });
       return noContent();
     },
   },
@@ -60,7 +58,7 @@ const ROUTES: Route<Handler>[] = [
     method: 'PUT',
     path: '/mappings/:sourceId',
     handle: async ({ sub, params, body }) => {
-      await put(sub, SK.mapping(params.sourceId), body);
+      await put(sub, SK.mapping(params.sourceId), assertMapping(body, params.sourceId));
       return noContent();
     },
   },
@@ -72,7 +70,7 @@ const ROUTES: Route<Handler>[] = [
     method: 'PUT',
     path: '/receipts/:id',
     handle: async ({ sub, params, body }) => {
-      await put(sub, SK.receipt(params.id), { ...body, id: params.id });
+      await put(sub, SK.receipt(params.id), assertReceipt(body, params.id, sub));
       return noContent();
     },
   },

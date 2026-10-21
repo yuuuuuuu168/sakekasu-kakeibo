@@ -77,6 +77,23 @@ function event(method: string, path: string, body?: unknown): APIGatewayProxyEve
   } as unknown as APIGatewayProxyEventV2WithJWTAuthorizer;
 }
 
+const RECEIPT = {
+  id: 'r1',
+  storeName: 'ローソン',
+  date: '2026-09-01',
+  total: 300,
+  items: [{ name: 'おにぎり', amount: 150, categoryId: 'food' }, { name: 'お茶', amount: 150 }],
+  status: 'pending',
+  imageKey: 'receipts/user-1/2026-09-01/a.jpg',
+};
+
+const MAPPING = {
+  sourceId: 'credit',
+  label: '楽天カード',
+  source: 'credit',
+  mapping: { headerRowIndex: 0, date: 0, merchant: 1, amount: 2, sign: 'positive-expense' },
+};
+
 const last = (kind: string) => sent.filter((command) => command.kind === kind).at(-1)?.input;
 
 beforeAll(async () => {
@@ -119,17 +136,32 @@ describe('api のルート', () => {
     expect(await handler(event('PUT', '/budgets/2026-09', {}))).toMatchObject({ statusCode: 400 });
   });
 
-  it('列の対応は取り込み元ごとに保存する', async () => {
-    expect(await handler(event('PUT', '/mappings/credit', { sourceId: 'credit' }))).toMatchObject({ statusCode: 204 });
-    expect(last('put')?.Item).toMatchObject({ pk: 'USER#user-1', sk: 'MAPPING#credit' });
+  it('列の対応は取り込み元ごとに保存し、形が違えば 400', async () => {
+    expect(await handler(event('PUT', '/mappings/credit', MAPPING))).toMatchObject({ statusCode: 204 });
+    expect(last('put')?.Item).toMatchObject({ pk: 'USER#user-1', sk: 'MAPPING#credit', sourceId: 'credit' });
+
+    expect(await handler(event('PUT', '/mappings/credit', { sourceId: 'credit' }))).toMatchObject({ statusCode: 400 });
   });
 
   it('レシートはパスの id で保存し、消す', async () => {
-    expect(await handler(event('PUT', '/receipts/r1', { id: 'other', storeName: 'ローソン' }))).toMatchObject({ statusCode: 204 });
+    expect(await handler(event('PUT', '/receipts/r1', { ...RECEIPT, id: 'other' }))).toMatchObject({ statusCode: 204 });
     expect(last('put')?.Item).toMatchObject({ pk: 'USER#user-1', sk: 'RECEIPT#r1', id: 'r1', storeName: 'ローソン' });
 
     expect(await handler(event('DELETE', '/receipts/r1'))).toMatchObject({ statusCode: 204 });
     expect(last('delete')?.Key).toEqual({ pk: 'USER#user-1', sk: 'RECEIPT#r1' });
+  });
+
+  it('レシートの形が違えば 400 で、保存しない', async () => {
+    expect(await handler(event('PUT', '/receipts/r1', { id: 'r1', storeName: 'ローソン' }))).toMatchObject({ statusCode: 400 });
+    expect(await handler(event('PUT', '/receipts/r1', { ...RECEIPT, imageKey: 'receipts/someone-else/a.jpg' }))).toMatchObject({
+      statusCode: 400,
+    });
+    expect(sent.filter((command) => command.kind === 'put')).toEqual([]);
+  });
+
+  it('壊れた JSON の本文は 400', async () => {
+    const broken = { ...event('PUT', '/receipts/r1'), body: '{"storeName": ' } as APIGatewayProxyEventV2WithJWTAuthorizer;
+    expect(await handler(broken)).toMatchObject({ statusCode: 400 });
   });
 
   it('明細を消す', async () => {

@@ -3,7 +3,7 @@ import { CURRENCIES, CURRENCY_LABELS, UNCATEGORIZED_ID, formatMoney, type Catego
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { MoneyInput } from '../../components/ui/MoneyInput';
 import { Button, Field, Input, Select } from '../../components/ui/primitives';
-import { lacksRate, removeItem, updateItem, withCurrency, yenHint, type Draft } from './draft';
+import { lacksDate, lacksRate, removeItem, updateItem, withCurrency, yenHint, type Draft } from './draft';
 
 /**
  * 下書きの中身を直す欄。読み取りの注意書き、店名・日付・通貨・合計、ドルのレート、品目の一覧。
@@ -40,7 +40,7 @@ export function DraftEditor({
         <Field label="店名">
           <Input value={draft.storeName} onChange={(event) => onChange({ ...draft, storeName: event.target.value })} />
         </Field>
-        <Field label="日付">
+        <Field label="日付" hint={lacksDate(draft) ? '日付を入れると保存できます' : undefined}>
           <Input type="date" value={draft.date} onChange={(event) => onChange({ ...draft, date: event.target.value })} />
         </Field>
         {/* 1 つの label に 2 つの入力を入れると、ラベルを押したときに通貨の側へ行ってしまう */}
