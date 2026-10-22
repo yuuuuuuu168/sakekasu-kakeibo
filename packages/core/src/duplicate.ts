@@ -175,10 +175,38 @@ export function itemOverlap(a: Receipt, b: Receipt): number | undefined {
 export const MIN_ITEM_OVERLAP = 0.5;
 
 /**
+ * 注文番号を比べられる形にそろえる。全角の英数字とハイフンを半角に、空白を落とし、英字は大文字にする。
+ * 数字を 1 つも含まないものは注文番号とみなさない（「なし」「-」などを読んだとき）
+ */
+export function normalizeOrderNumber(raw: string): string | undefined {
+  const value = raw
+    .normalize('NFKC')
+    .replace(/[\s\u2010-\u2015\u2212\uff0d]/g, (char) => (/\s/.test(char) ? '' : '-'))
+    .toUpperCase();
+  return /\d/.test(value) ? value : undefined;
+}
+
+/**
+ * 2 枚の注文番号の関係。両方にあれば同じか違うかを言い切れる。片方でも無ければ材料なし
+ */
+function compareOrderNumbers(a: Receipt, b: Receipt): 'same' | 'different' | undefined {
+  if (!a.orderNumber || !b.orderNumber) return undefined;
+  return a.orderNumber === b.orderNumber ? 'same' : 'different';
+}
+
+/** 注文番号が同じ組に足す点。これだけで候補の下限に届くようにしてある */
+const ORDER_NUMBER_SCORE = DUPLICATE_THRESHOLD;
+
+/**
  * 同じレシートを 2 回撮ったものを探す。レシート ID は撮った時刻から作るので、
  * 中身が同じでも必ず別 ID になり、ID では拾えない。
  * 捨てたレシートと、人が「別の買い物」と言った組は相手にしない。合計の一致は明細と同じく必須。
  * 両方に品目があって中身が違うものも別の会計として外す。
+ *
+ * 注文番号が両方にあるときはそれを優先する。同じなら、日付の開きや品目の読みの揺れに関わらず候補に出す
+ * （注文日と発送日のどちらを日付と読むかで、同じ注文でも日付がずれる）。
+ * 違えば別の注文として外すが、品目まで全部同じ組だけは残す。OCR が番号を 1 文字読み違えただけの
+ * 撮り直しを、番号のせいで見落とさないため（注文番号が無かった頃と同じ判定に戻す）。
  */
 export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair[] {
   const alive = receipts.filter((receipt) => receipt.status !== 'discarded');
@@ -197,13 +225,16 @@ export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair
       for (let right = left + 1; right < bucket.length; right += 1) {
         const [a, b] = orderPair(bucket[left], bucket[right]);
         if (isNotDuplicate(a, b)) continue;
+        const order = compareOrderNumbers(a, b);
         const gap = diffDays(a.date, b.date);
-        if (Math.abs(gap) > MAX_DUPLICATE_DATE_GAP) continue;
+        if (order !== 'same' && Math.abs(gap) > MAX_DUPLICATE_DATE_GAP) continue;
 
         const overlap = itemOverlap(a, b);
-        if (overlap !== undefined && overlap < MIN_ITEM_OVERLAP) continue;
+        if (order === 'different' && overlap !== 1) continue;
+        if (order !== 'same' && overlap !== undefined && overlap < MIN_ITEM_OVERLAP) continue;
 
         const reasons: string[] = [];
+        if (order === 'same') reasons.push('注文番号が同じ');
         const whenReason = dateReason(gap);
         if (whenReason) reasons.push(whenReason);
 
@@ -215,11 +246,24 @@ export function findDuplicateReceipts(receipts: Receipt[]): DuplicateReceiptPair
         if (overlap === 1) reasons.push('品目まで同じ');
         else if (overlap !== undefined) reasons.push('品目が一部同じ');
 
-        const score = dateScore(gap) + Math.round(similarity * 40) + byItems;
+        const byOrder = order === 'same' ? ORDER_NUMBER_SCORE : 0;
+        const score = dateScore(gap) + Math.round(similarity * 40) + byItems + byOrder;
         if (score >= DUPLICATE_THRESHOLD) pairs.push({ a, b, score, reasons });
       }
     }
   }
 
   return pairs.sort((x, y) => (y.score === x.score ? duplicateKey(x).localeCompare(duplicateKey(y)) : y.score - x.score));
+}
+
+/**
+ * 読み取ったばかりの下書きが、保存済みのどのレシートと同じかもしれないか。保存する前に知らせるのに使う。
+ * 判定は保存後の findDuplicateReceipts と同じものを通すので、ここで出なかった組は保存後にも出ない。
+ * 下書きと同じ ID の保存済み（開いて直しているもの）は相手にしない。組は必ず下書きを a に置く。
+ */
+export function findDuplicatesOfDraft(draft: Receipt, saved: Receipt[]): DuplicateReceiptPair[] {
+  const others = saved.filter((receipt) => receipt.id !== draft.id);
+  return findDuplicateReceipts([draft, ...others])
+    .filter((pair) => pair.a.id === draft.id || pair.b.id === draft.id)
+    .map((pair) => (pair.a.id === draft.id ? pair : { ...pair, a: pair.b, b: pair.a }));
 }

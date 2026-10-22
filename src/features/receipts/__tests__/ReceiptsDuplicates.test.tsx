@@ -114,3 +114,61 @@ describe('同じレシートかもしれない組', () => {
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('このレシートから作った明細も一緒に消えます'));
   });
 });
+
+describe('保存する前の警告', () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  /** 保存済みの r1 と同じ内容を手で入れ直す。読み取り結果と同じ下書きの欄に載る */
+  async function enterSame(orderNumber?: string) {
+    window.localStorage.setItem(
+      KEY,
+      JSON.stringify({ receipts: [{ ...receipt('r1'), orderNumber: '250-1234567-1234567' }], transactions: [created('r1')] }),
+    );
+    renderPage();
+    expect(await screen.findByText('保存済み 1 枚')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '手で入れる' }));
+    fireEvent.change(screen.getByLabelText('店名'), { target: { value: 'Amazon' } });
+    fireEvent.change(screen.getByLabelText('日付'), { target: { value: '2026-09-04' } });
+    fireEvent.change(screen.getByLabelText('合計'), { target: { value: '572' } });
+    if (orderNumber !== undefined) fireEvent.change(screen.getByLabelText(/^注文番号/), { target: { value: orderNumber } });
+  }
+
+  it('保存済みと同じかもしれない下書きには、登録する前に警告を出す', async () => {
+    await enterSame();
+    expect(screen.getByText('保存済みのレシートと同じかもしれません')).toBeInTheDocument();
+    expect(screen.getByText(/2日ずれ/)).toBeInTheDocument();
+  });
+
+  it('注文番号が同じなら、そう添える。違えば別の注文として出さない', async () => {
+    await enterSame('２５０-1234567-1234567');
+    expect(screen.getByText(/注文番号が同じ/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^注文番号/), { target: { value: '250-7654321-7654321' } });
+    expect(screen.queryByText('保存済みのレシートと同じかもしれません')).not.toBeInTheDocument();
+  });
+
+  it('別の買い物と答えると警告を消し、保存したレシートに印を残して下の組にも出さない', async () => {
+    await enterSame();
+    fireEvent.click(screen.getByRole('button', { name: '別の買い物' }));
+    expect(screen.queryByText('保存済みのレシートと同じかもしれません')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'レシートだけ保存' }));
+    expect(await screen.findByText('保存済み 2 枚')).toBeInTheDocument();
+    expect(stored().receipts.find((item) => item.id !== 'r1')?.notDuplicateOf).toEqual(['r1']);
+    expect(screen.queryByText(/同じレシートかもしれない組/)).not.toBeInTheDocument();
+  });
+
+  it('やめて保存済みを開くと、読み取った下書きは保存せずに保存済みを開く', async () => {
+    window.scrollTo = vi.fn() as typeof window.scrollTo;
+    await enterSame();
+    fireEvent.click(screen.getByRole('button', { name: 'やめて保存済みを開く' }));
+
+    expect(screen.getByText('レシートを直す')).toBeInTheDocument();
+    expect(screen.getByLabelText('日付')).toHaveValue('2026-09-02');
+    expect(screen.queryByText('保存済みのレシートと同じかもしれません')).not.toBeInTheDocument();
+    expect(stored().receipts).toHaveLength(1);
+  });
+});

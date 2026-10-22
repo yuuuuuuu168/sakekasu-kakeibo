@@ -63,6 +63,7 @@ export function buildPrompt(photos: number): string {
   "currency": "JPY" | "USD",
   "total": 合計金額 または null,
   "paymentMethod": "cash" | "paypay" | "credit" | "suica" または null,
+  "orderNumber": "注文番号" または null,
   "items": [
     { "name": "品目名", "amount": 金額 または null, "quantity": 個数 }
   ]
@@ -85,5 +86,7 @@ export function buildPrompt(photos: number): string {
 - paymentMethod は支払いの行から決める。お預り・現計は cash、PayPay は paypay、
   クレジット・カード・VISA などは credit、交通系・Suica・PASMO・ICOCA などの交通系 IC は suica。
   支払いの印字が無い、またはこの 4 つのどれでもない（他の QR 決済・電子マネー・商品券など）なら null
-- 品目名は印字の通り。略字はそのまま書く`;
+- 品目名は印字の通り。略字はそのまま書く
+- orderNumber はネット通販の注文画面・領収書にある注文番号（Amazon の「注文番号 250-1234567-1234567」など）を印字の通りに書く。
+  店頭のレシートのレジ番号・取引番号・伝票番号・会員番号は入れない。注文番号が無ければ null`;
 }

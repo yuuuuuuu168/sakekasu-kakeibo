@@ -1,4 +1,5 @@
 import { formatMoney, toMinor } from '../currency';
+import { normalizeOrderNumber } from '../duplicate';
 import { toPaymentMethod } from '../payment';
 import type { Currency, ReceiptItem, SourceKind } from '../types';
 import { classifyItem } from './items';
@@ -30,6 +31,8 @@ export type ReceiptDraft = {
   currency?: Currency;
   /** 支払いの印字から読めた支払い方法。読めなければ無い */
   paymentMethod?: SourceKind;
+  /** ネット通販の注文番号。読めなければ無い */
+  orderNumber?: string;
   /** OCR が読み切れなかった項目の説明。画面に出して直させる */
   warnings?: string[];
 };
@@ -112,6 +115,7 @@ export function normalizeDraft(text: string, today: Date = new Date()): Normaliz
   }
 
   const paymentMethod = toPaymentMethod(parsed.paymentMethod);
+  const orderNumber = typeof parsed.orderNumber === 'string' ? normalizeOrderNumber(parsed.orderNumber) : undefined;
 
   if (currency === 'USD') warnings.push('ドルのレシートとして読みました。円に直すレートを確かめてください。');
 
@@ -122,6 +126,7 @@ export function normalizeDraft(text: string, today: Date = new Date()): Normaliz
     items,
     ...(currency === 'USD' ? { currency } : {}),
     ...(paymentMethod ? { paymentMethod } : {}),
+    ...(orderNumber ? { orderNumber } : {}),
     warnings,
   };
 }

@@ -118,6 +118,19 @@ describe('レシートの組み立て', () => {
     expect(back).not.toHaveProperty('exchangeRate');
   });
 
+  it('注文番号はそろえて持たせ、空なら持たせない', () => {
+    expect(receiptFromDraft({ ...DRAFT, orderNumber: ' ２５０-1234567-1234567' }, { asPayment: false, createdAt }).orderNumber).toBe(
+      '250-1234567-1234567',
+    );
+    expect(receiptFromDraft({ ...DRAFT, orderNumber: '' }, { asPayment: false, createdAt })).not.toHaveProperty('orderNumber');
+  });
+
+  it('直したときに注文番号を消したら、開いた時点の番号を残さない', () => {
+    const opened: Receipt = { ...receiptFromDraft({ ...DRAFT, orderNumber: '250-1234567-1234567' }, { asPayment: false, createdAt }) };
+    expect(draftFromReceipt(opened).orderNumber).toBe('250-1234567-1234567');
+    expect(editedReceipt(opened, { ...draftFromReceipt(opened), orderNumber: '' })).not.toHaveProperty('orderNumber');
+  });
+
   it('保存済みのレシートは、そのまま下書きに戻せる', () => {
     const saved = receiptFromDraft(DRAFT, { asPayment: true, createdAt });
     expect(draftFromReceipt(saved)).toMatchObject({ id: 'r-1', storeName: 'ローソン', total: 300, currency: 'JPY', paidWith: 'suica' });
