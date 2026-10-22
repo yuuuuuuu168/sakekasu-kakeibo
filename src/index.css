@@ -69,26 +69,14 @@ input[type='date']::-webkit-date-and-time-value {
  * サインイン画面（AuthGate の表紙）。4 アプリ共通で、ポータルのトップ
  * （sakekasu-integrated_environment の infra/lib/portal.ts）と同じ見た目にする。
  *
- * この画面だけは OS がライトでも黒に固定する。--sk-* を .signin-cover の中だけ共通テーマのダークの値に
- * 上書きするので、サインイン後の画面には効かない。値は theme/sakekasu-theme.css のダークと同じものを
- * 書き写している（テーマのダークは :root にしか掛からず、要素の単位では借りられないため）。
- * Tailwind の色名（text-muted など）は :root で解決済みの値を引くので、ここでは使わず --sk-* を直に参照する。
+ * この画面だけは OS がライトでも黒に固定する。共通テーマの色は light-dark() で書かれていて color-scheme で
+ * 決まるので、.signin-cover と、出している間の <html>（下の html:has(.signin-cover)）を dark にする。
+ * サインイン後の画面には効かない。
  */
 .signin-cover {
   color-scheme: dark;
 
-  --sk-bg: #1a1a2e;
-  --sk-surface: #22223a;
-  --sk-border: #3a3a58;
-  --sk-ink: #f2efe8;
-  --sk-muted: #9a97ab;
-  --sk-accent: #d4af37;
-  --sk-accent-ink: #1a1a2e;
-  --sk-gold-line: #b8964f;
-  --sk-focus: #d4af37;
-  --sk-danger: #ef8a82;
-
-  /* 青海波の 1 枚。金の線は gold-line に透明度 0x40 を掛けたもの */
+  /* 青海波の 1 枚。金の線はダークの gold-line（#b8964f）に透明度 0x40 を掛けたもの */
   --signin-wave: radial-gradient(
     circle at 50% 100%,
     var(--sk-bg) 18%,
@@ -120,6 +108,17 @@ input[type='date']::-webkit-date-and-time-value {
 /* 表紙を出している間だけ、iOS の引っぱり過ぎで見える地も黒にする */
 body:has(.signin-cover) {
   background-color: #1a1a2e;
+}
+
+/*
+ * 表紙を出している間は <html> の color-scheme も dark にする。Vite 8 の CSS の圧縮（lightningcss）は
+ * light-dark() を :root の color-scheme で決まる変数に書き換えるので、.signin-cover の color-scheme だけでは
+ * 中の --sk-* がダークにならない。[data-theme] つきも並べるのは、共通テーマの :root[data-theme='light'] に
+ * 詳細度で負けないため
+ */
+html:has(.signin-cover),
+html:has(.signin-cover)[data-theme] {
+  color-scheme: dark;
 }
 
 /* 上部 42vh にだけ青海波を敷き、下へ向けて透明にする */

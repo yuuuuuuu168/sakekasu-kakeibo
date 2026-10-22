@@ -46,7 +46,7 @@ export interface DeployGuardrailProps {
   /**
    * アプリのロールに付ける Permissions Boundary の ARN（role-boundary.ts）。渡すと、
    * 接頭辞の範囲のロールを境界なしで作ったり書き換えたりするのを拒否する。
-   * 境界の条件を cdkd 用ロールの許可の側で持っているアプリ（builder、integrated）は渡さない
+   * 境界の条件を cdkd 用ロールの許可の側で持っているアプリ（builder）は渡さない
    */
   roleBoundaryArn?: string;
 }
@@ -272,7 +272,8 @@ function roleBoundaryGuardStatements(
       actions: ['iam:DeleteRolePermissionsBoundary', 'iam:UpdateAssumeRolePolicy'],
       resources: appRoles,
     }),
-    // 境界そのものは CloudFormation のスタックで入れる。cdkd 用ロールからは書き換えさせない
+    // 境界そのものは CloudFormation のスタックで入れる。cdkd 用ロールからは書き換えさせない。
+    // タグも止める。App タグはガードレールと境界の「他のアプリのリソース」の判定に使う
     new iam.PolicyStatement({
       sid: 'DenyRewritingBoundary',
       effect: iam.Effect.DENY,
@@ -281,6 +282,8 @@ function roleBoundaryGuardStatements(
         'iam:DeletePolicy',
         'iam:DeletePolicyVersion',
         'iam:SetDefaultPolicyVersion',
+        'iam:TagPolicy',
+        'iam:UntagPolicy',
       ],
       resources: [roleBoundaryArn],
     }),

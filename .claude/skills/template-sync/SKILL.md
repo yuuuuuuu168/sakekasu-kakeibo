@@ -50,13 +50,19 @@ sakekasu-template の変更を、このリポジトリに取り込む。ファ�
    テンプレートのファイルをこのリポジトリで意図的に変えていて、上書きされると困る managed が
    あれば、`.template-sync.json` の `exclude` に足してから `--apply` をやり直す。
 
+   出力に「テンプレートの一覧から外れた」が出たら、テンプレートが配るのをやめたファイル。
+   `--apply` では消さないので、このリポジトリでも要らなければ消し、使っていれば残す
+   （残したファイルは、以後はこのリポジトリのもの）。「exclude に残っているが、managed に無い」が
+   出たら、その行を `.template-sync.json` の `exclude` から外す。
+
 5. **確かめる。**
 
    ```sh
-   node --test scripts/deny-aws-writes.test.mjs scripts/template-sync.test.mjs
+   node --test scripts/deny-aws-writes.test.mjs scripts/template-sync.test.mjs scripts/pr-watch-reminder.test.mjs scripts/lib/aws-verify-common.test.mjs
+   node --test theme/sakekasu-theme.test.mjs
    python3 scripts/japanese-guard/test_japanese_guard.py
-   for f in scripts/*.sh; do bash -n "$f"; done
-   node -e "JSON.parse(require('fs').readFileSync('.claude/settings.json','utf8'))"
+   for f in scripts/*.sh scripts/lib/*.sh; do bash -n "$f"; done
+   node -e "for (const f of ['.claude/settings.json', '.mcp.json']) JSON.parse(require('fs').readFileSync(f,'utf8'))"
    ```
 
    リポジトリの lint やテストがあれば、それも通す。
