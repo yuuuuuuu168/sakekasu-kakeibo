@@ -115,7 +115,7 @@ export function sync({ repo, template, apply }) {
 
   const report = {
     head, synced, historyAvailable,
-    updated: [], added: [], unchanged: [], excluded: [], merged: [], removed: [], staleExclude: [],
+    updated: [], added: [], unchanged: [], excluded: [], merged: [], removed: [], staleExclude: [], promoted: [],
   };
 
   // 前回の同期のときの一覧と今の一覧の差。managed と merged の間で移っただけのものは数えない
@@ -126,6 +126,9 @@ export function sync({ repo, template, apply }) {
   }
   // managed に無い exclude は、もう何も止めていない
   const managedNow = new Set(templateManifest.managed);
+  // 前回は merged で、今回から managed になったファイル。--apply で上書きすると、このリポジトリで
+  // 書き足した部分が消えるので、上書きする前の差分（このリポジトリ → テンプレート）を出す
+  const mergedBefore = new Set(previous?.merged ?? []);
   for (const path of exclude) if (!managedNow.has(path)) report.staleExclude.push(path);
 
   for (const path of templateManifest.managed) {
@@ -141,6 +144,7 @@ export function sync({ repo, template, apply }) {
       continue;
     }
     (existsSync(dest) ? report.updated : report.added).push(path);
+    if (mergedBefore.has(path) && existsSync(dest)) report.promoted.push({ path, diff: diffFiles(dest, src) });
     if (apply) copyManaged(src, dest);
   }
 
@@ -150,11 +154,12 @@ export function sync({ repo, template, apply }) {
     const entry = { path, exists: existsSync(dest), diff: '' };
     if (!existsSync(src)) {
       entry.diff = '(テンプレートから消えた。このリポジトリでも要るかを判断する)';
-    } else if (historyAvailable) {
+    } else if (historyAvailable && entry.exists) {
       // 前回の同期以降にテンプレート側で変わった分だけ。リポジトリ固有の差は出さない
       entry.diff = git(template, 'diff', '--no-color', `${synced}..HEAD`, '--', path);
     } else {
-      // 初回、または履歴が足りないときは全体を突き合わせる
+      // 初回、履歴が足りないとき、このリポジトリにまだ無いときは全体を突き合わせる。
+      // 無いのに前回からの差分だけを出すと、テンプレート側が変わっていなければ何も報告されない
       entry.diff = diffFiles(entry.exists ? dest : '/dev/null', src);
     }
     if (entry.diff.trim()) report.merged.push(entry);
@@ -181,6 +186,18 @@ function printReport(report, apply) {
   for (const p of report.added) out.push(`- 追加: ${p}`);
   if (!report.updated.length && !report.added.length) out.push('- なし（すべてテンプレートと同じ）');
   for (const p of report.excluded) out.push(`- 除外（exclude）: ${p}`);
+  if (report.promoted.length) {
+    out.push('');
+    out.push(`## merged から managed に移った（--apply で${apply ? '上書きした' : '上書きする'}）`);
+    out.push('このリポジトリで書き足していた部分は、テンプレートの指定する置き場所（設定ファイルなど）に移す。');
+    out.push('差分の - の行が、上書きで消える内容。');
+    for (const entry of report.promoted) {
+      out.push(`### ${entry.path}`);
+      out.push('```diff');
+      out.push(entry.diff.trimEnd());
+      out.push('```');
+    }
+  }
   if (report.removed.length) {
     out.push('');
     out.push('## テンプレートの一覧から外れた（消すかどうかを判断する。--apply では消さない）');

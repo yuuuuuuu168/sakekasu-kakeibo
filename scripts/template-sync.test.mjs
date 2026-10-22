@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,9 +80,25 @@ test('2回目以降の merged は、前回の同期以降のテンプレート�
   assert.equal(readFileSync(join(repo, 'scripts/hook.sh'), 'utf8'), 'echo v1\n', '--apply なしでは書き換えない');
 });
 
+test('2回目以降でも、このリポジトリに無い merged は全体を出す', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  write(repo, 'CLAUDE.md', '# app\n');
+  sync({ repo, template, apply: true });
+  rmSync(join(repo, 'CLAUDE.md'));
+
+  // テンプレート側は前回の同期から変わっていない
+  const report = sync({ repo, template, apply: false });
+  assert.equal(report.merged.length, 1);
+  assert.equal(report.merged[0].exists, false);
+  assert.match(report.merged[0].diff, /\+# rules/);
+  assert.match(report.merged[0].diff, /\+- a/);
+});
+
 test('テンプレートに変更が無ければ何も出さない', () => {
   const template = makeTemplate();
   const repo = makeRepo();
+  write(repo, 'CLAUDE.md', '# app\n');
   sync({ repo, template, apply: true });
 
   const report = sync({ repo, template, apply: false });
@@ -153,6 +169,29 @@ test('前回の同期のコミットが無ければ、外れたファイルは�
   const repo = makeRepo();
   write(repo, '.template-sync.json', JSON.stringify({ template: 'owner/tpl', syncedCommit: '0'.repeat(40), exclude: [] }));
   assert.deepEqual(sync({ repo, template, apply: false }).removed, []);
+});
+
+test('merged から managed に移ったファイルは、上書きで消える差分を出す', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  write(repo, 'CLAUDE.md', '# rules\n- a\n- local rule\n');
+  sync({ repo, template, apply: true });
+
+  write(template, '.template-sync.json', JSON.stringify({
+    template: 'owner/tpl', syncedCommit: null,
+    managed: ['scripts/hook.sh', 'scripts/other.mjs', 'CLAUDE.md'], merged: [], exclude: [],
+  }));
+  git(template, 'commit', '-qam', 'promote');
+
+  const report = sync({ repo, template, apply: true });
+  assert.deepEqual(report.promoted.map((entry) => entry.path), ['CLAUDE.md']);
+  assert.match(report.promoted[0].diff, /^-- local rule$/m, '消える行が - で出る');
+  assert.deepEqual(report.removed, [], '移っただけなので外れたとは数えない');
+  assert.equal(readFileSync(join(repo, 'CLAUDE.md'), 'utf8'), '# rules\n- a\n', 'managed になったので上書きする');
+
+  // 次の同期では、もう移ったものとしては出さない
+  write(repo, 'CLAUDE.md', '# local again\n');
+  assert.deepEqual(sync({ repo, template, apply: false }).promoted, []);
 });
 
 test('managed に無い exclude を報告する', () => {
