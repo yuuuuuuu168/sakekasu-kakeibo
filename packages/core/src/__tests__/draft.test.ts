@@ -132,6 +132,21 @@ describe('normalizeDraft の支払い方法', () => {
   });
 });
 
+describe('normalizeDraft の注文番号', () => {
+  const body = (order: string) =>
+    `{"storeName":"Amazon.co.jp","date":"2026-09-08","total":150,"orderNumber":${order},"items":[{"name":"電池","amount":150}]}`;
+  const today = new Date('2026-09-08T12:00:00+09:00');
+
+  it('読めた注文番号を、比べられる形にそろえて返す', () => {
+    expect(normalizeDraft(body('"２５０-1234567-1234567"'), today).orderNumber).toBe('250-1234567-1234567');
+  });
+
+  it('読めない、または数字の無い注文番号は持たない', () => {
+    expect(normalizeDraft(body('null'), today)).not.toHaveProperty('orderNumber');
+    expect(normalizeDraft(body('"なし"'), today)).not.toHaveProperty('orderNumber');
+  });
+});
+
 describe('normalizeDraft（ドルのレシート）', () => {
   const today = new Date('2026-10-05T12:00:00+09:00');
 

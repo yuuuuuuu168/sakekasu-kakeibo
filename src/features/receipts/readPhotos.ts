@@ -78,6 +78,7 @@ export async function readPhotos(
       ...(result.currency === 'USD' ? { exchangeRate: latestUsdRate(context.receipts) } : {}),
       ...imageFields(keys),
       paidWith: result.paymentMethod ?? 'cash',
+      ...(result.orderNumber ? { orderNumber: result.orderNumber } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   } catch (cause) {

@@ -4,6 +4,7 @@ import {
   convertDisplayed,
   formatYen,
   impliedRate,
+  normalizeOrderNumber,
   receiptCurrency,
   receiptYenTotal,
   usableRate,
@@ -34,6 +35,13 @@ export type Draft = {
   imageKeys?: string[];
   /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
   paidWith: SourceKind;
+  /** ネット通販の注文番号。OCR が読めたもの、または人が入れたもの。空なら持たない */
+  orderNumber?: string;
+  /**
+   * 保存前の警告で「別の買い物」と言われた保存済みのレシート ID。保存するとレシートの印になり、
+   * 保存後の重複の組にも出なくなる（印は片側にあれば効く）
+   */
+  notDuplicateOf?: string[];
   warnings?: string[];
 };
 
@@ -72,6 +80,7 @@ export function draftFromReceipt(receipt: Receipt): Draft {
     ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
     ...(receipt.imageKeys ? { imageKeys: receipt.imageKeys } : {}),
     paidWith: receipt.paidWith ?? 'cash',
+    ...(receipt.orderNumber ? { orderNumber: receipt.orderNumber } : {}),
   };
 }
 
@@ -97,6 +106,12 @@ export function currencyFields(draft: Draft, paidYen?: number): Pick<Receipt, 'c
   if (draft.currency === 'JPY') return {};
   const rate = (paidYen !== undefined ? impliedRate(paidYen, draft.total) : undefined) ?? usableRate(draft.exchangeRate);
   return { currency: draft.currency, ...(rate !== undefined ? { exchangeRate: rate } : {}) };
+}
+
+/** 下書きの注文番号を、レシートに保存する欄にする。空や数字の無いものは持たせない */
+export function orderNumberField(draft: Draft): Pick<Receipt, 'orderNumber'> {
+  const orderNumber = draft.orderNumber ? normalizeOrderNumber(draft.orderNumber) : undefined;
+  return orderNumber ? { orderNumber } : {};
 }
 
 /** 日付が入っていない下書き（日付の欄を空にしたもの）。API は YYYY-MM-DD でない日付を受け取らない */
@@ -148,11 +163,12 @@ export function receiptFromDraft(
   draft: Draft,
   options: { asPayment: boolean; txnId?: string; paidYen?: number; createdAt: string },
 ): Receipt {
-  const { paidWith, currency: _currency, exchangeRate: _rate, ...rest } = draft;
+  const { paidWith, currency: _currency, exchangeRate: _rate, orderNumber: _order, ...rest } = draft;
   const { asPayment, txnId } = options;
   return {
     ...rest,
     ...currencyFields(draft, options.paidYen),
+    ...orderNumberField(draft),
     items: toReceiptItems(draft.items),
     status: asPayment ? 'cash' : txnId ? 'matched' : 'pending',
     ...(asPayment ? { paidWith } : {}),
@@ -167,12 +183,14 @@ export function receiptFromDraft(
  * `paidYen` は紐付けた明細の請求額（matched のときだけ渡す）
  */
 export function editedReceipt(editing: Receipt, draft: Draft, paidYen?: number): Receipt {
-  const { paidWith, warnings: _warnings, currency: _currency, exchangeRate: _rate, ...rest } = draft;
-  const { currency: _was, exchangeRate: _wasRate, ...base } = editing;
+  const { paidWith, warnings: _warnings, currency: _currency, exchangeRate: _rate, orderNumber: _order, ...rest } = draft;
+  // 注文番号も通貨と同じく、消したときに開いた時点の番号が残らないよう外してから載せ直す
+  const { currency: _was, exchangeRate: _wasRate, orderNumber: _wasOrder, ...base } = editing;
   return {
     ...base,
     ...rest,
     ...currencyFields(draft, paidYen),
+    ...orderNumberField(draft),
     items: toReceiptItems(draft.items),
     ...(editing.status === 'cash' ? { paidWith } : {}),
   };
