@@ -69,8 +69,8 @@ input[type='date']::-webkit-date-and-time-value {
  * サインイン画面（AuthGate の表紙）。4 アプリ共通で、ポータルのトップ
  * （sakekasu-integrated_environment の infra/lib/portal.ts）と同じ見た目にする。
  *
- * この画面だけは OS がライトでも黒に固定する。共通テーマの色は light-dark() で書かれていて、
- * 使う要素の color-scheme で決まるので、.signin-cover に color-scheme: dark を付ければ中だけダークの値になる。
+ * この画面だけは OS がライトでも黒に固定する。共通テーマの色は light-dark() で書かれていて color-scheme で
+ * 決まるので、.signin-cover と、出している間の <html>（下の html:has(.signin-cover)）を dark にする。
  * サインイン後の画面には効かない。
  */
 .signin-cover {
@@ -108,6 +108,17 @@ input[type='date']::-webkit-date-and-time-value {
 /* 表紙を出している間だけ、iOS の引っぱり過ぎで見える地も黒にする */
 body:has(.signin-cover) {
   background-color: #1a1a2e;
+}
+
+/*
+ * 表紙を出している間は <html> の color-scheme も dark にする。Vite 8 の CSS の圧縮（lightningcss）は
+ * light-dark() を :root の color-scheme で決まる変数に書き換えるので、.signin-cover の color-scheme だけでは
+ * 中の --sk-* がダークにならない。[data-theme] つきも並べるのは、共通テーマの :root[data-theme='light'] に
+ * 詳細度で負けないため
+ */
+html:has(.signin-cover),
+html:has(.signin-cover)[data-theme] {
+  color-scheme: dark;
 }
 
 /* 上部 42vh にだけ青海波を敷き、下へ向けて透明にする */
