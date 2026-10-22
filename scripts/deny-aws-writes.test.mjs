@@ -1,27 +1,26 @@
-// deny-aws-writes.mjs の判定のテスト。依存を増やしたくないので node:test で書く。
+// deny-aws-writes の判定のテスト。依存を増やしたくないので node:test で書く。
 // 実行は `node --test scripts/deny-aws-writes.test.mjs`。
 // CI では .github/workflows/claude-hooks.yml が走らせる。
 //
-// 関数を import せず、フックと同じように子プロセスへ JSON を流し込んでいる。
-// 「直接実行されたときだけ判定する」ガードを置くと、実行パスにシンボリックリンクが
-// 挟まったときに判定ごと素通りするため、ガードを設けずに済む形にしてある。
+// 判定は scripts/deny-aws-writes-core.mjs の関数を import して確かめる（子プロセスを 1 件ずつ起動しない）。
+// 入口の scripts/deny-aws-writes.mjs は、最後に子プロセスとして起動して、stdin から読んで判定を返すことと、
+// 常に終了コード 0 で終わることだけを確かめる。
 //
 // sakekasu-builder の PR #164 のセキュリティレビューで指摘されたバイパスの各形を、ここに固定する。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { decide, findDenied, isRead, parseInvocation, tokenize } from './deny-aws-writes-core.mjs';
 
 const HOOK = fileURLToPath(new URL('./deny-aws-writes.mjs', import.meta.url));
 
-function run(command) {
-  const result = spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ tool_input: { command } }),
-    encoding: 'utf8',
-  });
-  assert.equal(result.status, 0, `フックは常に 0 で終わる: ${result.stderr}`);
-  return result.stdout;
+/** フックの入口を子プロセスで起動する（入口の確認だけに使う） */
+function runHook(input) {
+  return spawnSync(process.execPath, [HOOK], { input, encoding: 'utf8' });
 }
+
+const run = (command) => decide(JSON.stringify({ tool_input: { command } }));
 
 const allows = (command) => assert.equal(run(command), '', `通るはず: ${command}`);
 const denies = (command) => assert.match(
@@ -102,6 +101,61 @@ test('資格情報を返す操作は接頭辞が読み取りでも止める', ()
   denies('aws eks get-token --cluster-name x');
   denies('aws codeartifact get-authorization-token --domain d');
   allows('aws sts get-caller-identity'); // 素性を見るだけ
+});
+
+test('資格情報やトークンを返す操作は止める', () => {
+  denies('aws ec2 get-password-data --instance-id i-1');
+  denies('aws redshift get-cluster-credentials --db-user x --cluster-identifier y');
+  denies('aws redshift-serverless get-credentials --workgroup-name x');
+  denies('aws redshift get-identity-center-auth-token --cluster-identifier c');
+  denies('aws redshift-serverless get-identity-center-auth-token --workgroup-names x');
+  denies('aws lightsail get-instance-access-details --instance-name x');
+  denies('aws secretsmanager get-secret-value --secret-id x');
+  denies('aws lakeformation get-temporary-glue-table-credentials --table-arn x');
+  allows('aws ec2 describe-instances');
+  allows('aws secretsmanager list-secrets');
+});
+
+test('グローバルオプションを途中までの綴りで書いても値を読み飛ばす', () => {
+  denies('aws --prof verify ec2 terminate-instances --instance-ids i-1');
+  denies('aws --prof Verify ec2 terminate-instances --instance-ids i-1');
+  denies('aws --endpoint https://ec2.ap-northeast-1.amazonaws.com ec2 terminate-instances');
+  denies('aws --reg ap-northeast-1 s3 rm s3://bucket/key');
+  denies('aws --profile=verify s3 rm s3://bucket/key');
+  allows('aws --prof verify logs tail /aws/lambda/x');
+  allows('aws --reg ap-northeast-1 --out json sts get-caller-identity');
+});
+
+test('知らないオプションの値らしき語のあとも見る', () => {
+  denies('aws --debug Verify ec2 terminate-instances --instance-ids i-1');
+  allows('aws --debug sts get-caller-identity');
+});
+
+test('シェルに文字列で渡したコマンドの中も見る', () => {
+  denies('bash -c "aws s3 rm s3://bucket/key"');
+  denies("sh -c 'aws s3 rm s3://bucket/key'");
+  denies('bash -ec "aws s3 rm s3://bucket/key"');
+  denies('bash -o pipefail -c "aws s3 rm s3://bucket/key"');
+  denies('bash --rcfile foo -c "aws s3 rm s3://bucket/key"');
+  denies('bash --init-file foo -c "aws s3 rm s3://bucket/key"');
+  denies('bash -O extglob -c "aws s3 rm s3://bucket/key"');
+  denies('zsh -f -c "aws s3 rm s3://bucket/key"');
+  denies('bash --rcfile -ce -c "aws s3 rm s3://bucket/key"');
+  denies('bash -O -c -c "aws s3 rm s3://bucket/key"');
+  denies('bash -c "echo ok" -c "aws s3 rm s3://bucket/key"');
+  denies('bash --rcfile "|" -c "aws s3 rm s3://bucket/key"');
+  denies("bash --rcfile ';' -c 'aws s3 rm s3://bucket/key'");
+  denies('bash -O "&&" -c "aws s3 rm s3://bucket/key"');
+  denies('/bin/bash -lc "echo x; aws s3 rm s3://bucket/key"');
+  denies('timeout 30 bash -c "aws s3 rm s3://bucket/key"');
+  denies('eval "aws s3 rm s3://bucket/key"');
+  denies('true && eval \'aws s3 rm\' s3://bucket/key');
+  denies('bash -c "bash -c \\"aws s3 rm s3://bucket/key\\""');
+  allows('bash -c "aws logs tail /aws/lambda/x"');
+  allows('eval "$(ssh-agent -s)"');
+  allows('bash scripts/run.sh -c config.yml');
+  allows('bash --rcfile foo -c "npm test"');
+  allows('grep -rn eval "it\'s" scripts/');
 });
 
 test('s3 の高レベルコマンドは ls だけを通す', () => {
@@ -328,6 +382,35 @@ test('変数展開でサービス名を隠しても止める', () => {
   denies('aws ${SERVICE} delete-object --bucket x --key y');
 });
 
+// bash はブレース展開とグロブを展開してから aws に渡す。`{s3,}` は s3 に、`s?` や `s[3]` は
+// カレントに s3 というファイルがあればそれに化ける（Issue sakekasu-template#36）
+test('ブレース展開やグロブでサービス名を隠しても止める', () => {
+  denies('aws {s3,} mv a s3://b');
+  denies('aws {,s3} rm s3://b');
+  denies('aws s[3] mv a s3://b');
+  denies('aws s? rm s3://b');
+  denies('aws s* rm s3://b');
+  denies('aws ?? rm s3://b');
+  // 値を取らないオプションの直後でも、知らない値として読み飛ばさない
+  denies('aws --no-paginate s? rm s3://b');
+  denies('aws --region us-east-1 s? rm s3://b');
+});
+
+test('操作名の位置のブレース展開やグロブも止める', () => {
+  denies('aws s3 r? s3://b');
+  denies('aws s3 {rm,} s3://b');
+  denies('aws s3 [r]m s3://b');
+});
+
+test('引数の中のグロブや波かっこは誤検知しない', () => {
+  allows('aws s3 ls s3://b/*');
+  allows('aws s3 ls "s3://b/{x}"');
+  allows('aws s3api get-object --bucket b --key "a*" out');
+  allows("aws logs filter-log-events --log-group-name g --filter-pattern '{ $.level = \"ERROR\" }'");
+  // 日本語の散文の記号は名前の候補にならない
+  allows('echo クラウドには aws は？ 入っていない');
+});
+
 // ここから下は誤検知側。散文やパスを呼び出しと読み違えないこと
 test('散文に混じった aws は呼び出しと見なさない', () => {
   allows('git commit -m "aws の導入手順を書き直す"');
@@ -345,11 +428,49 @@ test('aws を含む無関係なコマンドは通す', () => {
 });
 
 test('引用符で囲った引数の中の区切り文字は区切りにしない', () => {
+  denies('aws --profile ";" s3 rm s3://bucket/key');
+  denies('eval ";" aws s3 rm s3://bucket/key');
   allows('aws logs filter-log-events --filter-pattern "a;b" --log-group-name x');
 });
 
 test('壊れた入力では判定しない', () => {
-  const result = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
+  assert.equal(decide('not json'), '');
+  assert.equal(decide(''), '');
+});
+
+// 関数単位でも呼べる（バイパスの形を足すときに、どの段で落ちるかを見分けやすい）
+test('関数単位: 区切りで語を分け、aws の呼び出しからサービスと操作を取り出す', () => {
+  const tokens = tokenize('echo x && aws --profile verify s3 rm s3://b');
+  const at = tokens.indexOf('aws');
+  assert.ok(at > 0);
+  assert.deepEqual(
+    (({ service, operation }) => ({ service, operation }))(parseInvocation(tokens, at)),
+    { service: 's3', operation: 'rm' },
+  );
+  assert.equal(isRead('s3', 'ls'), true);
+  assert.equal(isRead('s3', 'rm'), false);
+  assert.equal(findDenied('aws s3 ls s3://b; aws s3 rm s3://b'), 'aws s3 rm');
+  assert.equal(findDenied('aws s3 ls s3://b'), null);
+});
+
+// ここから下は入口（scripts/deny-aws-writes.mjs）の確認。子プロセスとして起動する
+test('入口: 変更操作には deny を返し、読み取りには何も出さない。どちらも終了コード 0', () => {
+  const denied = runHook(JSON.stringify({ tool_input: { command: 'aws s3 rm s3://b/k' } }));
+  assert.equal(denied.status, 0, denied.stderr);
+  assert.match(denied.stdout, /"permissionDecision":"deny"/);
+  const allowed = runHook(JSON.stringify({ tool_input: { command: 'aws s3 ls s3://b' } }));
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(allowed.stdout, '');
+});
+
+test('入口: 読み切れないコマンドも、終了コード 0 のまま拒否する', () => {
+  const result = runHook(JSON.stringify({ tool_input: { command: 'echo $(aws s3 rm s3://b' } }));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+});
+
+test('入口: 壊れた入力では判定しない', () => {
+  const result = runHook('not json');
   assert.equal(result.status, 0);
   assert.equal(result.stdout, '');
 });

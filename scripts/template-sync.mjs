@@ -15,11 +15,15 @@
 // managed のうちこのリポジトリでは上書きしないもの（exclude）だけを持つ。
 // ファイルの一覧はテンプレート側が正で、こちらには写さない。
 //
+// テンプレートの一覧から外れたファイルは、前回の同期のコミットの .template-sync.json と
+// 突き合わせて「外れた」と報告する。消すかどうかはリポジトリごとに判断するので、--apply でも消さない。
+//
 // 依存を増やさないため node の標準モジュールと git だけで書く。
 
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const MANIFEST = '.template-sync.json';
 
@@ -34,8 +38,11 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--apply') args.apply = true;
-    else if (arg === '--template') args.template = argv[++i];
-    else if (arg === '--repo') args.repo = argv[++i];
+    else if (arg === '--template' || arg === '--repo') {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith('--')) usage(`${arg} の値が要る`);
+      args[arg.slice(2)] = value;
+    }
     else usage(`不明な引数: ${arg}`);
   }
   if (!args.template) usage('--template が要る');
@@ -78,6 +85,15 @@ function diffFiles(a, b) {
   }
 }
 
+// 前回の同期のコミットにあった .template-sync.json。読めなければ null（そのコミットに無いなど）
+function previousManifest(template, commit) {
+  try {
+    return JSON.parse(git(template, 'show', `${commit}:${MANIFEST}`));
+  } catch {
+    return null;
+  }
+}
+
 function copyManaged(src, dest) {
   mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(src, dest);
@@ -97,7 +113,20 @@ export function sync({ repo, template, apply }) {
   const synced = local.syncedCommit;
   const historyAvailable = synced ? gitOk(template, 'cat-file', '-e', `${synced}^{commit}`) : false;
 
-  const report = { head, synced, historyAvailable, updated: [], added: [], unchanged: [], excluded: [], merged: [] };
+  const report = {
+    head, synced, historyAvailable,
+    updated: [], added: [], unchanged: [], excluded: [], merged: [], removed: [], staleExclude: [],
+  };
+
+  // 前回の同期のときの一覧と今の一覧の差。managed と merged の間で移っただけのものは数えない
+  const current = new Set([...templateManifest.managed, ...templateManifest.merged]);
+  const previous = historyAvailable ? previousManifest(template, synced) : null;
+  for (const path of [...(previous?.managed ?? []), ...(previous?.merged ?? [])]) {
+    if (!current.has(path)) report.removed.push({ path, exists: existsSync(join(repo, path)) });
+  }
+  // managed に無い exclude は、もう何も止めていない
+  const managedNow = new Set(templateManifest.managed);
+  for (const path of exclude) if (!managedNow.has(path)) report.staleExclude.push(path);
 
   for (const path of templateManifest.managed) {
     const src = join(template, path);
@@ -152,6 +181,16 @@ function printReport(report, apply) {
   for (const p of report.added) out.push(`- 追加: ${p}`);
   if (!report.updated.length && !report.added.length) out.push('- なし（すべてテンプレートと同じ）');
   for (const p of report.excluded) out.push(`- 除外（exclude）: ${p}`);
+  if (report.removed.length) {
+    out.push('');
+    out.push('## テンプレートの一覧から外れた（消すかどうかを判断する。--apply では消さない）');
+    for (const { path, exists } of report.removed) out.push(`- ${path}${exists ? '' : '（このリポジトリにも無い）'}`);
+  }
+  if (report.staleExclude.length) {
+    out.push('');
+    out.push('## exclude に残っているが、managed に無い（.template-sync.json から外してよい）');
+    for (const p of report.staleExclude) out.push(`- ${p}`);
+  }
   out.push('');
   out.push('## merged（手で混ぜる）');
   if (!report.merged.length) out.push('- なし');
@@ -168,7 +207,18 @@ function printReport(report, apply) {
   console.log(out.join('\n'));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// 直接実行されたときだけ動く（テストからは import する）。import.meta.url はパーセントエンコードされ、
+// シンボリックリンクも解いた形なので、argv[1] も同じ形にそろえてから比べる
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const args = parseArgs(process.argv.slice(2));
   try {
     printReport(sync(args), args.apply);

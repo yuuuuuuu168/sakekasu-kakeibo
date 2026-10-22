@@ -2,10 +2,11 @@
 // 一時ディレクトリにテンプレート（git リポジトリ）と取り込み先を作って確かめる。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sync } from './template-sync.mjs';
 
 function write(root, path, content, mode) {
@@ -114,10 +115,89 @@ test('前回の同期のコミットが clone に無ければ、全体の突き�
   assert.match(report.merged[0].diff, /\+# rules/);
 });
 
+// Issue sakekasu-template#38。外したファイルが取り込み先に黙って残らないようにする
+test('前回の同期以降にテンプレートの一覧から外れたファイルを報告し、消さない', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  sync({ repo, template, apply: true });
+
+  write(template, '.template-sync.json', JSON.stringify({
+    template: 'owner/tpl', syncedCommit: null, managed: ['scripts/hook.sh'], merged: ['CLAUDE.md'], exclude: [],
+  }));
+  git(template, 'rm', '-q', 'scripts/other.mjs');
+  git(template, 'commit', '-qam', 'drop other');
+
+  const report = sync({ repo, template, apply: true });
+  assert.deepEqual(report.removed, [{ path: 'scripts/other.mjs', exists: true }]);
+  assert.equal(existsSync(join(repo, 'scripts/other.mjs')), true, '--apply でも消さない');
+
+  // 一度報告したら、次の同期（syncedCommit が進んだあと）では出さない
+  assert.deepEqual(sync({ repo, template, apply: false }).removed, []);
+});
+
+test('managed と merged の間で移っただけのファイルは、外れたと数えない', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  sync({ repo, template, apply: true });
+
+  write(template, '.template-sync.json', JSON.stringify({
+    template: 'owner/tpl', syncedCommit: null, managed: ['scripts/hook.sh'], merged: ['CLAUDE.md', 'scripts/other.mjs'], exclude: [],
+  }));
+  git(template, 'commit', '-qam', 'move other to merged');
+
+  assert.deepEqual(sync({ repo, template, apply: false }).removed, []);
+});
+
+test('前回の同期のコミットが無ければ、外れたファイルは判定しない', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  write(repo, '.template-sync.json', JSON.stringify({ template: 'owner/tpl', syncedCommit: '0'.repeat(40), exclude: [] }));
+  assert.deepEqual(sync({ repo, template, apply: false }).removed, []);
+});
+
+test('managed に無い exclude を報告する', () => {
+  const template = makeTemplate();
+  const repo = makeRepo();
+  write(repo, '.template-sync.json', JSON.stringify({
+    template: 'owner/tpl', syncedCommit: null, exclude: ['scripts/other.mjs', 'scripts/gone.sh'],
+  }));
+  write(repo, 'scripts/other.mjs', '// local\n');
+
+  const report = sync({ repo, template, apply: false });
+  assert.deepEqual(report.staleExclude, ['scripts/gone.sh']);
+  assert.deepEqual(report.excluded, ['scripts/other.mjs']);
+});
+
 test('テンプレートの一覧にあるファイルが無ければ止まる', () => {
   const template = makeTemplate();
   git(template, 'rm', '-q', 'scripts/other.mjs');
   git(template, 'commit', '-qm', 'rm');
   assert.throws(() => sync({ repo: makeRepo(), template, apply: false }), /scripts\/other\.mjs/);
   assert.equal(existsSync(join(template, 'scripts/other.mjs')), false);
+});
+
+// 直接実行の判定。パスに空白や日本語があるとき、シンボリックリンク経由のときも、黙って終わらずに動く
+test('空白と日本語を含むパスや、シンボリックリンク経由でも直接実行できる', () => {
+  const template = makeTemplate();
+  const dir = mkdtempSync(join(tmpdir(), 'sync dir 同期-'));
+  const script = join(dir, 'template-sync.mjs');
+  copyFileSync(fileURLToPath(new URL('./template-sync.mjs', import.meta.url)), script);
+  const link = join(mkdtempSync(join(tmpdir(), 'link-')), 'template-sync.mjs');
+  symlinkSync(script, link);
+
+  for (const path of [script, link]) {
+    const result = spawnSync(process.execPath, [path, '--template', template, '--repo', makeRepo()], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /scripts\/hook\.sh/, path);
+  }
+});
+
+test('--template や --repo の値が無ければ、使い方を出して止まる', () => {
+  const script = fileURLToPath(new URL('./template-sync.mjs', import.meta.url));
+  for (const args of [['--template'], ['--template', '--apply'], ['--template', '.', '--repo']]) {
+    const result = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 2, args.join(' '));
+    assert.match(result.stderr, /の値が要る/);
+    assert.match(result.stderr, /usage:/);
+  }
 });

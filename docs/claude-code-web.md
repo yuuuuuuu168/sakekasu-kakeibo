@@ -23,10 +23,12 @@ iPhone のブラウザ／Claude アプリからタスクを投げ、「タスク
 ## PR の watch（都度お願いしなくてよい）
 
 - PR を作ったら指示を待たずに `subscribe_pr_activity` を呼ぶ、というのが [CLAUDE.md](../CLAUDE.md) の運用。watch しているセッションには CI の結果とレビューコメントが届き、赤ければ直して push する
-- 念押しとして [scripts/pr-watch-reminder.mjs](../scripts/pr-watch-reminder.mjs)（`PostToolUse` フック）を置いている。PR 作成ツールが成功した直後に発火し、`hookSpecificOutput.additionalContext` で PR 番号つきの指示を返す。`PostToolUse` は素の標準出力が Claude に届かない（デバッグログ行き）ので、JSON で返す必要がある
+- 念押しとして [scripts/pr-watch-reminder.mjs](../scripts/pr-watch-reminder.mjs)（`PostToolUse` フック）を置いている。PR 作成ツール（GitHub の MCP の `create_pull_request`）が成功した直後と、`gh pr create` を含む Bash の直後に発火し、`hookSpecificOutput.additionalContext` で PR 番号つきの指示を返す。`PostToolUse` は素の標準出力が Claude に届かない（デバッグログ行き）ので、JSON で返す必要がある
 - 番号は MCP ツールの返り値から拾う。構造化されたオブジェクトのことも、JSON を丸ごと入れた文字列のこともあるため再帰で探し、`html_url` の `/pull/<番号>` を優先する。レビューや issue の入れ子にも `number` があるため
+- `gh pr create` は作った PR の URL を標準出力に出すので、そこから owner / repo / 番号を拾う。Bash のフックは全コマンドで発火するので、行頭か区切りの直後に `gh pr create` があり、出力に PR の URL があるときだけ念押しを出す（`gh pr view` や `--help` では黙る）
+- テストは `scripts/pr-watch-reminder.test.mjs`（`claude-hooks.yml` が走らせる）
 - 判断材料を足すだけのフックなので、入力が壊れていても異常終了させない（拾えなければ番号なしの文言を返す）
-- `.claude/settings.json` の `permissions.allow` に `mcp__github__subscribe_pr_activity` を入れてあり、watch の開始で承認プロンプトは出ない
+- `.claude/settings.json` の `permissions.allow` に `mcp__claude-code-remote__subscribe_pr_activity` と `unsubscribe_pr_activity` を入れてあり、watch の開始と終了で承認プロンプトは出ない。watch のツールは github の MCP サーバーではなく、クラウドセッションの `claude-code-remote` が持っている
 
 ## MCP サーバー（.mcp.json）
 
@@ -55,7 +57,7 @@ iPhone のブラウザ／Claude アプリからタスクを投げ、「タスク
 - 変更操作は [scripts/deny-aws-writes.sh](../scripts/deny-aws-writes.sh)（`PreToolUse` フック）が止める。読み取り操作だけを通す許可リスト方式で、`get-` / `list-` / `describe-` などの接頭辞と、`sso login` / `logs tail` / `s3 ls` のような明示リストに載るものだけが通る。明示リストに足すときは、`ecs execute-command` のように名前が読み取りっぽくても実質が違うものがあるため、一つずつ実際の権限を確かめる。`invoke` や `assume-role` のように動詞が read でも write でもない操作を数え漏らさないため、拒否リストではなく許可リストにしている
 - 名前が読み取りに見えても、資格情報を返す操作や IAM で認証されない操作は明示的に落とす。一覧は CLI 同梱の botocore モデルから機械的に出した
 - このフックはうっかり変更操作を打つのを止める関門であって、権限の境界ではない。本当の境界は `AgentVerifyAccess` の IAM 側と、Identity Center の割り当てにある
-- 判定のテストは [scripts/deny-aws-writes.test.mjs](../scripts/deny-aws-writes.test.mjs) にある。`node --test scripts/deny-aws-writes.test.mjs` で走り、CI では `.github/workflows/claude-hooks.yml` が回す
+- 判定の本体は [scripts/deny-aws-writes-core.mjs](../scripts/deny-aws-writes-core.mjs)、テストは [scripts/deny-aws-writes.test.mjs](../scripts/deny-aws-writes.test.mjs) にある。`node --test scripts/deny-aws-writes.test.mjs` で走り、CI では `.github/workflows/claude-hooks.yml` が回す
 - このフックも**クラウドでだけ判定する**。`permissions.deny` に書くとリポジトリ共有のためローカルの正当な管理作業（`sso-admin create-permission-set` など）まで止まり（sakekasu-builder で実際に一度それで詰まった）
 - Network access は `awsapps.com` と `*.amazonaws.com` への到達が必要。認証エラーに見える失敗はまずここを疑う
 - `.claude/settings.json` の `permissions.allow` には `aws sso login` / `aws sts get-caller-identity` / `bash scripts/aws-sso-login.sh` を入れてある。ログインのたびに承認プロンプトを挟まないためで、変更操作の関門は従来どおり `deny-aws-writes.sh` と IAM 側にある

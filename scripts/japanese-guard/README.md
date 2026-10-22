@@ -1,31 +1,19 @@
 # japanese-guard
 
-Claude Code の応答が英語に切り替わったら、ターンの終わりに日本語で書き直させる Stop フック。
-[minorun365/claude-code-japanese-guard](https://github.com/minorun365/claude-code-japanese-guard) をそのまま同梱している。
+応答が英語に切り替わるのを止める Stop フック。ターンの最終回答が英語主体なら、
+終了させずに日本語で書き直させる。`.claude/settings.json` の `hooks.Stop` から呼ぶ。
 
-## 出どころ
+[minorun365/claude-code-japanese-guard](https://github.com/minorun365/claude-code-japanese-guard)
+のコミット `930f056` をそのまま同梱している（Apache License 2.0、`LICENSE` と `NOTICE` は上流のもの）。
+変えたのはテストが本体を探すパスだけ。上流を取り込み直すときは `japanese-guard.py` を丸ごと差し替える。
 
-- 上流: https://github.com/minorun365/claude-code-japanese-guard
-- コミット: [`930f05687d333b310740651f022c2b531b5a0aa7`](https://github.com/minorun365/claude-code-japanese-guard/tree/930f05687d333b310740651f022c2b531b5a0aa7)（2026-09-26）
-- ライセンス: Apache License 2.0（`LICENSE` と `NOTICE` は上流のまま）
+上流の README は `~/.claude/` に置く手順だが、クラウドセッションのコンテナは使い捨てで
+ホームに置いたものが次のセッションに残らないため、リポジトリに同梱して共有設定から呼ぶ。
 
-| このディレクトリ | 上流 | 手を入れたところ |
-|---|---|---|
-| `japanese-guard.py` | `hooks/japanese-guard.py` | なし |
-| `test_japanese_guard.py` | `tests/test_japanese_guard.py` | 本体を探すパス（`HOOK`）だけ |
-| `LICENSE` / `NOTICE` | 同名 | なし |
+## 動かすのに要るもの
 
-## なぜ `~/.claude/` ではなくリポジトリに置くか
-
-上流の README は `~/.claude/hooks/` に置いて `~/.claude/settings.json` に登録する手順だが、
-クラウドのセッションはコンテナが使い捨てなので、ホームに置いたものは次のセッションで消える。
-そこでリポジトリに同梱し、`.claude/settings.json` の `hooks.Stop` から
-`python3 "$CLAUDE_PROJECT_DIR"/scripts/japanese-guard/japanese-guard.py` で呼んでいる。
-
-## 更新するとき
-
-上流の新しいコミットから `hooks/japanese-guard.py` などを写し直し、テストの `HOOK` だけ
-このディレクトリを指すように直して、上の表のコミットを書き換える。本体には手を入れない。
+Python 3（標準ライブラリだけ）。クラウドVMには入っている。ローカルで Claude Code を
+使う場合も `python3` が PATH に要る。無いとフックがエラーを出すが、終了は止めない。
 
 ## テスト
 
@@ -33,4 +21,15 @@ Claude Code の応答が英語に切り替わったら、ターンの終わり�
 python3 scripts/japanese-guard/test_japanese_guard.py
 ```
 
-閾値は環境変数 `JAPANESE_GUARD_MIN_LATIN`（既定 25）と `JAPANESE_GUARD_RATIO`（既定 3）で変えられる。
+## 閾値
+
+| 環境変数 | 既定 | 意味 |
+| --- | --- | --- |
+| `JAPANESE_GUARD_MIN_LATIN` | `25` | 英字がこれ未満の本文は判定しない |
+| `JAPANESE_GUARD_RATIO` | `3` | 英字の数が日本語の文字数のこの倍を超えたら英語主体とみなす |
+
+## ほかの Stop フックとの関係
+
+別の Stop フック（AI-DLC の `aidlc-continue-workflow.ts` など）を足すと、両方が同時に止めたときに
+差し戻しの理由が2つまとめて届く。どちらかが止めた直後の終了では `stop_hook_active` が立つため、
+このフックはその1回を検査せずに通す（差し戻しは1ターン1回）。

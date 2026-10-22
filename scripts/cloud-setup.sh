@@ -4,8 +4,11 @@
 set -euo pipefail
 
 # ローカルセッションでは何もしない（このフックはリポジトリ共有設定のため、
-# ローカルの Claude Code でも発火する。クラウドVMだけを対象にする）
-if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
+# ローカルの Claude Code でも発火する。クラウドVMだけを対象にする）。
+# 判定は AWS のスクリプトやフックと同じ関数を使い、CLAUDE_CODE_REMOTE=1 でも動かす
+# shellcheck source=lib/aws-verify-common.sh
+. "$(dirname "$0")/lib/aws-verify-common.sh"
+if ! is_remote; then
   exit 0
 fi
 
