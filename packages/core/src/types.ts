@@ -126,6 +126,11 @@ export type Receipt = {
    * imageKey はこの先頭と同じにしてあり、1 枚しか知らなかった頃の読み手もそのまま読める
    */
   imageKeys?: string[];
+  /**
+   * ネット通販の注文番号（Amazon の 250-1234567-1234567 など）。注文画面の写しから読めたときだけ入る。
+   * 同じ番号なら同じ注文と言い切れるので、重複の判定に使う（duplicate.ts）
+   */
+  orderNumber?: string;
   /** 紐付いた明細の ID */
   txnId?: string;
   /**

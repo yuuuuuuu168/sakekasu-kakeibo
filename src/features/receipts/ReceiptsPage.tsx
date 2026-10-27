@@ -8,6 +8,7 @@ import {
   autoMatch,
   findCandidates,
   findDuplicateReceipts,
+  findDuplicatesOfDraft,
   formatYen,
   hasImportableStatement,
   latestUsdRate,
@@ -30,6 +31,7 @@ import { config } from '../../config';
 import { useAction } from '../../lib/action';
 import { errorMessage } from '../../lib/errors';
 import { useNotice } from '../../lib/notice';
+import { DraftDuplicatesNotice } from './DraftDuplicatesNotice';
 import { DraftEditor } from './DraftEditor';
 import { DuplicateReceiptsCard } from './DuplicateReceiptsCard';
 import { MatchCandidates } from './MatchCandidates';
@@ -88,6 +90,16 @@ export function ReceiptsPage() {
    */
   const duplicates = useMemo(() => findDuplicateReceipts(snapshot.receipts), [snapshot.receipts]);
 
+  /**
+   * 読み取ったばかりの下書きが、保存済みのどれと同じかもしれないか。保存した後に下の組で気づくより前に、
+   * 読み取り結果の上で知らせる。判定は保存後と同じ（findDuplicateReceipts）なので、直した中身にもすぐ追従する。
+   * 保存済みを開いて直しているときは、下の組がそのまま出ているので出さない
+   */
+  const draftDuplicates = useMemo<DuplicateReceiptPair[]>(() => {
+    if (!draft || editing || draft.total <= 0 || lacksDate(draft)) return [];
+    return findDuplicatesOfDraft(receiptFromDraft(draft, { asPayment: false, createdAt: '' }), snapshot.receipts);
+  }, [draft, editing, snapshot.receipts]);
+
   const candidates = useMemo<MatchCandidate[]>(() => {
     if (!draft || draft.total <= 0) return [];
     const receipt: Receipt = { ...draft, items: draft.items, status: 'pending' };
@@ -125,6 +137,12 @@ export function ReceiptsPage() {
     const [a, b] = markNotDuplicate(pair.a, pair.b);
     await saveReceipt(a);
     await saveReceipt(b);
+  }
+
+  /** 保存前の警告で「別の買い物」と言われた。下書きに印を付けておき、保存するとレシートに残る */
+  function dismissDraftDuplicate(saved: Receipt) {
+    if (!draft) return;
+    setDraft({ ...draft, notDuplicateOf: [...(draft.notDuplicateOf ?? []), saved.id] });
   }
 
   /** 写真を読んで下書きにする。読む流れそのものは readPhotos */
@@ -334,6 +352,9 @@ export function ReceiptsPage() {
 
       {draft && (
         <Card title={editing ? 'レシートを直す' : '読み取り結果'} action={<Button size="sm" onClick={closeDraft}>やめる</Button>}>
+          {draftDuplicates.length > 0 && (
+            <DraftDuplicatesNotice pairs={draftDuplicates} onOpen={openReceipt} onDismiss={dismissDraftDuplicate} />
+          )}
           <DraftEditor draft={draft} onChange={setDraft} categories={categories} fallbackRate={latestUsdRate(snapshot.receipts)} />
 
           {editing && editing.status !== 'pending' ? (

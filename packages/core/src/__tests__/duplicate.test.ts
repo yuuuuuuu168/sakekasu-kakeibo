@@ -6,9 +6,11 @@ import {
   duplicatesInvolving,
   findDuplicateReceipts,
   findDuplicates,
+  findDuplicatesOfDraft,
   isNotDuplicate,
   itemOverlap,
   markNotDuplicate,
+  normalizeOrderNumber,
   scoreDuplicate,
 } from '../duplicate';
 import type { Receipt, Transaction } from '../types';
@@ -199,6 +201,95 @@ describe('findDuplicateReceipts', () => {
     expect(findDuplicateReceipts([a, b])).toEqual([]);
     // 片側だけ印が残っていても出さない
     expect(findDuplicateReceipts([a, second])).toEqual([]);
+  });
+});
+
+describe('注文番号', () => {
+  const order = receipt({
+    id: 'o1',
+    date: '2026-09-02',
+    total: 3480,
+    storeName: 'Amazon.co.jp',
+    orderNumber: '250-1234567-1234567',
+    items: [{ name: 'USB-C ケーブル 2本組', amount: 3480 }],
+  });
+
+  it('全角や空白を寄せて比べられる形にし、数字の無いものは番号とみなさない', () => {
+    expect(normalizeOrderNumber(' ２５０－１２３４５６７－１２３４５６７ ')).toBe('250-1234567-1234567');
+    expect(normalizeOrderNumber('d01-1234567-1234567')).toBe('D01-1234567-1234567');
+    expect(normalizeOrderNumber('なし')).toBeUndefined();
+  });
+
+  it('同じ番号なら、日付が離れていても品目の読みが違っても候補に出す', () => {
+    const later = receipt({ ...order, id: 'o2', date: '2026-09-10', items: [{ name: 'ケーブル', amount: 3480 }] });
+    const pairs = findDuplicateReceipts([order, later]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].reasons[0]).toBe('注文番号が同じ');
+  });
+
+  it('番号が違えば、同じ日・同じ店・同じ合計でも別の注文として出さない', () => {
+    const other = receipt({ ...order, id: 'o2', orderNumber: '250-7654321-7654321', items: [{ name: 'USB-C ケーブル', amount: 3480 }] });
+    expect(findDuplicateReceipts([order, { ...other, items: [{ name: 'マウス', amount: 3480 }] }])).toEqual([]);
+    // 番号が無ければ拾う「品目が一部同じ」組も、番号が違えば別の注文と言い切る
+    const two = { ...order, items: [{ name: '電池', amount: 1000 }, { name: 'マウス', amount: 2480 }] };
+    const half = { ...other, items: [{ name: '電池', amount: 1000 }, { name: 'キーボード', amount: 2480 }] };
+    expect(findDuplicateReceipts([{ ...two, orderNumber: undefined }, half])).toHaveLength(1);
+    expect(findDuplicateReceipts([two, half])).toEqual([]);
+  });
+
+  it('番号が違っても品目まで全部同じなら、番号の読み違いを疑って候補に残す', () => {
+    const misread = receipt({ ...order, id: 'o2', orderNumber: '250-1234567-1234561' });
+    const pairs = findDuplicateReceipts([order, misread]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].reasons).toContain('品目まで同じ');
+    expect(pairs[0].reasons).not.toContain('注文番号が同じ');
+  });
+
+  it('片方にしか番号が無ければ、これまでと同じ判定', () => {
+    const plain = receipt({ ...order, id: 'o2', orderNumber: undefined });
+    expect(findDuplicateReceipts([order, plain])).toHaveLength(1);
+    expect(findDuplicateReceipts([order, { ...plain, date: '2026-09-10' }])).toEqual([]);
+  });
+});
+
+describe('findDuplicatesOfDraft', () => {
+  const saved = receipt({ id: 'r1', date: '2026-09-02', total: 572, storeName: 'Amazon', items: [{ name: '単三電池', amount: 572 }] });
+  const draft = receipt({ ...saved, id: 'r-draft' });
+
+  it('下書きと同じかもしれない保存済みを、下書きを a にして返す', () => {
+    const pairs = findDuplicatesOfDraft(draft, [saved]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].a.id).toBe('r-draft');
+    expect(pairs[0].b.id).toBe('r1');
+  });
+
+  it('保存済みどうしの組は返さない', () => {
+    const other = receipt({ ...saved, id: 'r0', date: '2026-09-01' });
+    const fresh = receipt({ ...draft, total: 1000, items: [] });
+    expect(findDuplicateReceipts([other, saved])).toHaveLength(1);
+    expect(findDuplicatesOfDraft(fresh, [other, saved])).toEqual([]);
+  });
+
+  it('開いて直している保存済み（同じ ID）とは組にしない', () => {
+    expect(findDuplicatesOfDraft({ ...saved }, [saved])).toEqual([]);
+  });
+
+  it('保存後の判定と同じ組を出す。保存前に出なかったものは保存後にも出ない', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: -6, max: 6 }), fc.boolean(), fc.string({ maxLength: 8 }), (shift, sameItems, name) => {
+        const day = 10 + shift;
+        const candidate = receipt({
+          ...draft,
+          date: `2026-09-${String(day).padStart(2, '0')}`,
+          storeName: name,
+          items: sameItems ? draft.items : [{ name: 'キッチンペーパー', amount: 572 }],
+        });
+        const base = receipt({ ...saved, date: '2026-09-10' });
+        const before = findDuplicatesOfDraft(candidate, [base]).map((pair) => [pair.a.id, pair.b.id].sort().join(':'));
+        const after = findDuplicateReceipts([candidate, base]).map((pair) => [pair.a.id, pair.b.id].sort().join(':'));
+        expect(before).toEqual(after);
+      }),
+    );
   });
 });
 
