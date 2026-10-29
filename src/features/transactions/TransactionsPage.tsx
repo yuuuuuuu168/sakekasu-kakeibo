@@ -14,6 +14,7 @@ import {
   formatYen,
   isTransfer,
   learnRule,
+  markAllNotDuplicate,
   markNotDuplicate,
   rootCategoryId,
   monthOf,
@@ -83,10 +84,10 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
    */
   const duplicates = useMemo(() => {
     if (filter !== DUPLICATES_FILTER) return [];
-    return findDuplicates(snapshot.transactions).filter(
+    return findDuplicates(snapshot.transactions, snapshot.categories).filter(
       (pair) => monthOf(pair.a.date) === month || monthOf(pair.b.date) === month,
     );
-  }, [snapshot.transactions, month, filter]);
+  }, [snapshot.transactions, snapshot.categories, month, filter]);
 
   const total = rows.reduce((sum, txn) => sum + txn.amount, 0);
 
@@ -129,6 +130,12 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     const [a, b] = markNotDuplicate(pair.a, pair.b);
     await saveTransaction(a);
     await saveTransaction(b);
+  }
+
+  /** 念のための候補をまとめて「重複ではない」にする。同じ明細が何組に出ていても 1 回で保存する */
+  async function dismissDuplicates(pairs: DuplicatePair[]) {
+    const updated = markAllNotDuplicate(pairs);
+    if (updated.length > 0) await saveTransactions(updated);
   }
 
   return (
@@ -179,6 +186,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
           receipts={snapshot.receipts}
           onRemove={(id) => run(() => removeTransaction(id))}
           onDismiss={(pair) => run(() => dismissDuplicate(pair))}
+          onDismissAll={(pairs) => run(() => dismissDuplicates(pairs))}
         />
       ) : (
         <Card title={`${rows.length} 件`} action={<span className="tnum text-sm font-semibold text-ink">{formatYen(total)}</span>}>
@@ -292,67 +300,113 @@ function DuplicatesCard({
   receipts,
   onRemove,
   onDismiss,
+  onDismissAll,
 }: {
   pairs: DuplicatePair[];
   categories: Category[];
   receipts: Receipt[];
   onRemove: (id: string) => Promise<void>;
   onDismiss: (pair: DuplicatePair) => Promise<void>;
+  onDismissAll: (pairs: DuplicatePair[]) => Promise<void>;
 }) {
   const receiptById = useMemo(() => new Map(receipts.map((receipt) => [receipt.id, receipt])), [receipts]);
+  const strong = pairs.filter((pair) => pair.strength === 'strong');
+  const weak = pairs.filter((pair) => pair.strength === 'weak');
+
+  const renderPair = (pair: DuplicatePair) => (
+    <DuplicatePairItem
+      key={duplicateKey(pair)}
+      pair={pair}
+      categories={categories}
+      receiptById={receiptById}
+      onRemove={onRemove}
+      onDismiss={onDismiss}
+    />
+  );
 
   return (
-    <Card title={`重複の可能性 ${pairs.length} 組`}>
-      {pairs.length === 0 ? (
-        <EmptyState title="重複の可能性はありません">
+    <Card title={`重複の可能性 ${strong.length} 組`}>
+      {strong.length === 0 ? (
+        <EmptyState title="重複の可能性が高い組はありません">
           金額が一致して日付が 4 日以内の明細どうしを見ています。「重複ではない」と印を付けた組は出ません
         </EmptyState>
       ) : (
-        <ul className="divide-y divide-grid">
-          {pairs.map((pair) => (
-            <li key={duplicateKey(pair)} className="py-3">
-              <div className="flex items-center gap-1.5">
-                <Copy size={14} className="text-muted" aria-hidden />
-                <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
-              </div>
+        <ul className="divide-y divide-grid">{strong.map(renderPair)}</ul>
+      )}
 
-              <ul className="mt-2 grid gap-2 md:grid-cols-2">
-                {[pair.a, pair.b].map((txn) => (
-                  <li key={txn.id} className="rounded-lg bg-plane px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className="tnum text-xs text-muted">{txn.date.slice(5)}</span>
-                      <span className="min-w-0 flex-1 truncate text-sm text-ink">{txn.rawMerchant || '（店名なし）'}</span>
-                      <span className="tnum text-sm font-semibold text-ink">{formatYen(txn.amount)}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm('この明細を消しますか。内訳も一緒に消えます')) void onRemove(txn.id);
-                        }}
-                        className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
-                        aria-label={`${txn.date} の ${txn.rawMerchant || '店名なし'}（${txn.sourceLabel}）を消す`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-                    <DuplicateDetail
-                      txn={txn}
-                      categories={categories}
-                      receipt={txn.receiptId ? receiptById.get(txn.receiptId) : undefined}
-                    />
-                  </li>
-                ))}
-              </ul>
-
-              <div className="mt-2 flex justify-end">
-                <Button size="sm" onClick={() => void onDismiss(pair)}>
-                  重複ではない
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
+      {weak.length > 0 && (
+        <details className="mt-3 border-t border-grid pt-3">
+          <summary className="cursor-pointer text-sm text-ink-2">念のための候補 {weak.length} 組</summary>
+          <p className="mt-2 text-xs text-muted">
+            金額は同じで日付も近いものの、ほかの手がかりが少ない組です。別の定期支払いどうしや、別々のレシートが付いた組もここに入ります。
+          </p>
+          <div className="mt-2 flex justify-end">
+            <Button
+              size="sm"
+              onClick={() => {
+                if (window.confirm(`念のための候補 ${weak.length} 組を、すべて「重複ではない」にしますか`)) void onDismissAll(weak);
+              }}
+            >
+              まとめて重複ではない
+            </Button>
+          </div>
+          <ul className="divide-y divide-grid">{weak.map(renderPair)}</ul>
+        </details>
       )}
     </Card>
+  );
+}
+
+/** 重複候補の 1 組。両側の明細を並べ、どちらかを消すか「重複ではない」にする */
+function DuplicatePairItem({
+  pair,
+  categories,
+  receiptById,
+  onRemove,
+  onDismiss,
+}: {
+  pair: DuplicatePair;
+  categories: Category[];
+  receiptById: Map<string, Receipt>;
+  onRemove: (id: string) => Promise<void>;
+  onDismiss: (pair: DuplicatePair) => Promise<void>;
+}) {
+  return (
+    <li className="py-3">
+      <div className="flex items-center gap-1.5">
+        <Copy size={14} className="text-muted" aria-hidden />
+        <span className="text-xs text-muted">{pair.reasons.join('・')}</span>
+      </div>
+
+      <ul className="mt-2 grid gap-2 md:grid-cols-2">
+        {[pair.a, pair.b].map((txn) => (
+          <li key={txn.id} className="rounded-lg bg-plane px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="tnum text-xs text-muted">{txn.date.slice(5)}</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-ink">{txn.rawMerchant || '（店名なし）'}</span>
+              <span className="tnum text-sm font-semibold text-ink">{formatYen(txn.amount)}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('この明細を消しますか。内訳も一緒に消えます')) void onRemove(txn.id);
+                }}
+                className="rounded-md p-1.5 text-ink-2 hover:bg-surface"
+                aria-label={`${txn.date} の ${txn.rawMerchant || '店名なし'}（${txn.sourceLabel}）を消す`}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+            <DuplicateDetail txn={txn} categories={categories} receipt={txn.receiptId ? receiptById.get(txn.receiptId) : undefined} />
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-2 flex justify-end">
+        <Button size="sm" onClick={() => void onDismiss(pair)}>
+          重複ではない
+        </Button>
+      </div>
+    </li>
   );
 }
 

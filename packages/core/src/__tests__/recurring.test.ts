@@ -6,6 +6,7 @@ import {
   planRecurringPosts,
   recurringOccurrences,
   recurringTransactionId,
+  similarRecurringPayments,
   recurringStatus,
   totalCountOf,
 } from '../recurring';
@@ -321,5 +322,19 @@ describe('支払日に明細を作る', () => {
         expect(second).toEqual({ create: [], remove: [] });
       }),
     );
+  });
+});
+
+describe('二重に登録したかもしれない支払い', () => {
+  it('金額・引き落とし日・周期が同じものを返す。自分と停止したものは除く', () => {
+    const twin = { ...NETFLIX, id: 'r-twin', label: 'ネトフリ' };
+    const stopped = { ...NETFLIX, id: 'r-stopped', archived: true };
+    const yearly = { ...NETFLIX, id: 'r-yearly', intervalMonths: 12 };
+    const otherDay = { ...NETFLIX, id: 'r-day', dayOfMonth: 6 };
+    expect(similarRecurringPayments(NETFLIX, [NETFLIX, twin, stopped, yearly, otherDay]).map((p) => p.id)).toEqual(['r-twin']);
+  });
+
+  it('登録前（ID がまだ無い）でも比べられる', () => {
+    expect(similarRecurringPayments({ id: '', amount: 1590, dayOfMonth: 5 }, [NETFLIX])).toEqual([NETFLIX]);
   });
 });

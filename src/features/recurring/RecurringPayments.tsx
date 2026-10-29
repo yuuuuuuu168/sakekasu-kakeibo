@@ -6,6 +6,7 @@ import {
   categoryLabel,
   formatYen,
   recurringStatus,
+  similarRecurringPayments,
   type Category,
   type RecurringPayment,
 } from '@kakeibo/core';
@@ -26,9 +27,9 @@ const INTERVALS: { value: number; label: string }[] = [
 /**
  * 定期的な支払いの登録。サブスク、分割、奨学金のように金額と周期が分かっているもの。
  *
- * ここで登録しても明細は生えない。取り込んだ明細と必ず重なるからで、代わりに着地見込みと
- * 残り回数の材料にする。取り込んだ明細のうち店舗名と金額が合うものは「取り込み済み」として
- * 印が付き、見込みでは二重に数えない（packages/core の aggregateMonth）。
+ * 支払日が来たら明細を作る（packages/core の planRecurringPosts、保存はストア）。
+ * 同じ支払いの明細を取り込んだら、作った明細を消して取り込んだ方を残す。
+ * 着地見込みと残り回数の材料にもする（packages/core の aggregateMonth）。
  */
 export function RecurringPayments() {
   const { snapshot, saveRecurring } = useStore();
@@ -82,7 +83,7 @@ export function RecurringPayments() {
       {/* 追加ボタンはカードの上にあるので、入力欄もその直下に開く。下に出すと登録が多いときにスクロールしないと見えない */}
       {editing === 'new' && (
         <div className={rows.length > 0 ? 'mb-3 border-b border-grid pb-3' : undefined}>
-          <RecurringForm categories={categories} onCancel={() => setEditing(undefined)} onSave={save} />
+          <RecurringForm categories={categories} payments={snapshot.recurring} onCancel={() => setEditing(undefined)} onSave={save} />
         </div>
       )}
 
@@ -97,6 +98,7 @@ export function RecurringPayments() {
               {editing !== 'new' && editing?.id === payment.id ? (
                 <RecurringForm
                   categories={categories}
+                  payments={snapshot.recurring}
                   initial={payment}
                   onCancel={() => setEditing(undefined)}
                   onSave={save}
@@ -197,11 +199,14 @@ function optionalNumber(value: string): number | undefined {
 
 function RecurringForm({
   categories,
+  payments,
   initial,
   onCancel,
   onSave,
 }: {
   categories: Category[];
+  /** 二重に登録していないかを見るための、登録済みの一覧 */
+  payments: RecurringPayment[];
   initial?: RecurringPayment;
   onCancel: () => void;
   onSave: (payment: RecurringPayment) => Promise<void>;
@@ -212,6 +217,17 @@ function RecurringForm({
 
   const amount = Math.round(Number(draft.amount));
   const valid = draft.label.trim() !== '' && Number.isFinite(amount) && amount > 0 && /^\d{4}-\d{2}$/.test(draft.startMonth);
+  const similar = valid
+    ? similarRecurringPayments(
+        {
+          id: initial?.id ?? '',
+          amount,
+          dayOfMonth: Math.min(31, Math.max(1, Math.round(Number(draft.dayOfMonth)) || 1)),
+          intervalMonths: Math.max(1, Math.round(Number(draft.intervalMonths)) || 1),
+        },
+        payments,
+      )
+    : [];
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -321,6 +337,13 @@ function RecurringForm({
           />
         </Field>
       </div>
+
+      {similar.length > 0 && (
+        <p role="status" className="rounded-lg bg-warning/12 px-3 py-2 text-xs text-ink ring-1 ring-warning/30">
+          同じ金額・引き落とし日・周期の登録がほかにもあります（{similar.map((payment) => payment.label).join('、')}）。
+          二重に登録していなければ、このまま保存してかまいません。
+        </p>
+      )}
 
       <label className="flex items-center gap-2 text-sm text-ink">
         <input

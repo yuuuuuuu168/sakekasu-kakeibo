@@ -15,6 +15,7 @@ const store = vi.hoisted(() => ({
   snapshot: { categories: [], rules: [], budgets: [], transactions: [], receipts: [], mappings: [], recurring: [] } as Snapshot,
   rules: [] as CategoryRule[],
   saveTransaction: vi.fn(async (_txn: Transaction) => undefined),
+  saveTransactions: vi.fn(async (_txns: Transaction[]) => undefined),
   removeTransaction: vi.fn(async (_id: string) => undefined),
   saveRules: vi.fn(async () => undefined),
 }));
@@ -167,7 +168,39 @@ describe('TransactionsPage の重複の絞り込み', () => {
 
     load(saved);
     rerender(<TransactionsPage month="2026-09" filter="duplicates" />);
-    expect(screen.getByText('重複の可能性はありません')).toBeInTheDocument();
+    expect(screen.getByText('重複の可能性が高い組はありません')).toBeInTheDocument();
+  });
+
+  it('手がかりの少ない組は「念のための候補」に折りたたみ、まとめて重複ではないにできる', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const membership = (id: string, paymentId: string, label: string): Transaction => ({
+      id,
+      date: '2026-09-05',
+      amount: 490,
+      rawMerchant: label,
+      merchant: label,
+      source: 'manual',
+      sourceLabel: '定期支払い',
+      splits: [{ id: `${id}-1`, amount: 490, categoryId: 'food', origin: 'manual' }],
+      needsDetail: false,
+      recurring: { paymentId, month: '2026-09' },
+    });
+    load([CASH, CARD, membership('p1', 'rp-1', 'Towa Ch.'), membership('p2', 'rp-2', 'Iroha ch.')]);
+    render(<TransactionsPage month="2026-09" filter="duplicates" />);
+
+    expect(screen.getByText('重複の可能性 1 組')).toBeInTheDocument();
+    expect(screen.getByText('念のための候補 1 組')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'まとめて重複ではない' }));
+    });
+
+    const saved = store.saveTransactions.mock.calls[0][0];
+    expect(saved.map((txn) => [txn.id, txn.notDuplicateOf])).toEqual([
+      ['p1', ['p2']],
+      ['p2', ['p1']],
+    ]);
+    confirm.mockRestore();
   });
 
   it('月をまたぐ組も、どちらかがその月なら出る', () => {

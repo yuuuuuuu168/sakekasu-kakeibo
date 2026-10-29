@@ -58,6 +58,22 @@ afterEach(() => {
 });
 
 describe('RecurringPayments', () => {
+  it('同じ金額・引き落とし日・周期の登録があれば、保存の前に注意を出す', async () => {
+    snapshot.recurring = [{ ...IPHONE, id: 'rp-netflix', label: 'Netflix', amount: 1590, dayOfMonth: 5, totalCount: undefined, totalAmount: undefined }];
+    await renderPage('Netflix');
+
+    fireEvent.click(screen.getByRole('button', { name: '追加' }));
+    fireEvent.change(screen.getByLabelText('名前'), { target: { value: 'ネトフリ' } });
+    fireEvent.change(screen.getByLabelText('金額'), { target: { value: '1590' } });
+    fireEvent.change(screen.getByLabelText('引き落とし日'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('初回の月'), { target: { value: '2026-01' } });
+
+    expect(screen.getByRole('status')).toHaveTextContent('同じ金額・引き落とし日・周期の登録がほかにもあります（Netflix）');
+
+    fireEvent.change(screen.getByLabelText('引き落とし日'), { target: { value: '6' } });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('歯車から定期支払いを登録できる', async () => {
     await renderPage();
 
