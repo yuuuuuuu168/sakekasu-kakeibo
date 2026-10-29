@@ -3,7 +3,9 @@ import fc from 'fast-check';
 import {
   occurrenceIndex,
   occurrenceOfMonth,
+  planRecurringPosts,
   recurringOccurrences,
+  recurringTransactionId,
   recurringStatus,
   totalCountOf,
 } from '../recurring';
@@ -220,6 +222,103 @@ describe('不変条件', () => {
           if (occurrenceOfMonth(payment, month)) found += 1;
         }
         expect(found).toBe(totalCount);
+      }),
+    );
+  });
+});
+
+describe('支払日に明細を作る', () => {
+  it('支払日を迎えた回だけ作り、作り終えた月を覚える', () => {
+    const plan = planRecurringPosts({ payments: [NETFLIX, IPHONE], transactions: [], today: '2026-10-10' });
+
+    // Netflix は 5 日で迎えている。iPhone は 27 日でまだ
+    expect(plan.create).toEqual([
+      expect.objectContaining({
+        id: recurringTransactionId('r-netflix', '2026-10'),
+        date: '2026-10-05',
+        amount: 1590,
+        sourceLabel: '定期支払い',
+        recurring: { paymentId: 'r-netflix', month: '2026-10' },
+        splits: [expect.objectContaining({ amount: 1590, categoryId: 'fees-membership' })],
+      }),
+    ]);
+    expect(plan.remove).toEqual([]);
+    expect(plan.recurring?.find((p) => p.id === 'r-netflix')?.postedThrough).toBe('2026-10');
+    // まだの回は先月までで止めておき、迎えた日に作る
+    expect(plan.recurring?.find((p) => p.id === 'r-iphone')?.postedThrough).toBe('2026-09');
+  });
+
+  it('作り終えた月の翌月から今日までをまとめて作る', () => {
+    const payment = { ...NETFLIX, postedThrough: '2026-07' };
+    const plan = planRecurringPosts({ payments: [payment], transactions: [], today: '2026-10-04' });
+
+    expect(plan.create.map((t) => t.date)).toEqual(['2026-08-05', '2026-09-05']);
+    expect(plan.recurring?.[0]?.postedThrough).toBe('2026-09');
+  });
+
+  it('印の無い支払いは今月から作る。登録前の月まではさかのぼらない', () => {
+    const plan = planRecurringPosts({ payments: [NETFLIX], transactions: [], today: '2026-10-29' });
+    expect(plan.create.map((t) => t.date)).toEqual(['2026-10-05']);
+  });
+
+  it('作り終えた月は、明細を人が消しても作り直さない', () => {
+    const payment = { ...NETFLIX, postedThrough: '2026-10' };
+    const plan = planRecurringPosts({ payments: [payment], transactions: [], today: '2026-10-29' });
+    expect(plan).toEqual({ create: [], remove: [] });
+  });
+
+  it('その回の明細を取り込んであれば作らない', () => {
+    const imported = txn('t1', '2026-10-05', 1590, 'NETFLIX.COM');
+    const plan = planRecurringPosts({ payments: [{ ...NETFLIX, postedThrough: '2026-09' }], transactions: [imported], today: '2026-10-10' });
+
+    expect(plan.create).toEqual([]);
+    expect(plan.recurring?.[0]?.postedThrough).toBe('2026-10');
+  });
+
+  it('同じ回の明細を後から取り込んだら、作った明細を消す', () => {
+    const first = planRecurringPosts({ payments: [NETFLIX], transactions: [], today: '2026-10-10' });
+    const posted = first.create[0]!;
+    const imported = txn('t1', '2026-10-06', 1590, 'NETFLIX.COM');
+
+    const plan = planRecurringPosts({ payments: first.recurring!, transactions: [posted, imported], today: '2026-10-10' });
+    expect(plan).toEqual({ create: [], remove: [posted.id] });
+  });
+
+  it('取り込んだ明細が別の回のものなら、作った明細は残す', () => {
+    const first = planRecurringPosts({ payments: [NETFLIX], transactions: [], today: '2026-10-10' });
+    const posted = first.create[0]!;
+    const lastMonth = txn('t1', '2026-09-05', 1590, 'NETFLIX.COM');
+
+    const plan = planRecurringPosts({ payments: first.recurring!, transactions: [posted, lastMonth], today: '2026-10-10' });
+    expect(plan.remove).toEqual([]);
+  });
+
+  it('停止した支払いは作らない', () => {
+    const plan = planRecurringPosts({ payments: [{ ...NETFLIX, archived: true }], transactions: [], today: '2026-10-10' });
+    expect(plan).toEqual({ create: [], remove: [] });
+  });
+
+  it('作った明細は着地見込みで突き合った回として数え、二重に数えない', () => {
+    const posted = planRecurringPosts({ payments: [NETFLIX], transactions: [], today: '2026-10-10' }).create;
+    const occurrences = recurringOccurrences({ month: '2026-10', payments: [NETFLIX], transactions: posted });
+    expect(occurrences[0]?.transactionId).toBe(posted[0]?.id);
+  });
+
+  it('作った明細はほかの支払いには当てない', () => {
+    const posted = planRecurringPosts({ payments: [NETFLIX], transactions: [], today: '2026-10-10' }).create;
+    const twin = { ...NETFLIX, id: 'r-netflix-2' };
+    const occurrences = recurringOccurrences({ month: '2026-10', payments: [twin], transactions: posted });
+    expect(occurrences[0]?.transactionId).toBeUndefined();
+  });
+
+  it('何度立て直しても、適用したあとは何もしない', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 31 }), fc.integer({ min: 1, max: 28 }), (dayOfMonth, todayDay) => {
+        const payment = { ...NETFLIX, dayOfMonth, postedThrough: '2026-06' };
+        const today = `2026-10-${String(todayDay).padStart(2, '0')}`;
+        const first = planRecurringPosts({ payments: [payment], transactions: [], today });
+        const second = planRecurringPosts({ payments: first.recurring ?? [payment], transactions: first.create, today });
+        expect(second).toEqual({ create: [], remove: [] });
       }),
     );
   });

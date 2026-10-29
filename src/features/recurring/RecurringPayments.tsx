@@ -237,6 +237,8 @@ function RecurringForm({
         ...(draft.merchantPattern.trim() === '' ? {} : { merchantPattern: draft.merchantPattern.trim() }),
         ...(draft.variableAmount ? { variableAmount: true } : {}),
         ...(initial?.archived ? { archived: true } : {}),
+        // 明細を作り終えた月は直しても引き継ぐ。落とすと、消した明細を作り直してしまう
+        ...(initial?.postedThrough ? { postedThrough: initial.postedThrough } : {}),
       };
       await onSave(payment);
     } finally {
