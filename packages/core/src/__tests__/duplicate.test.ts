@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
+  DUPLICATE_STRONG_THRESHOLD,
   DUPLICATE_THRESHOLD,
+  DUPLICATE_WEAK_THRESHOLD,
   duplicateKey,
   duplicatesInvolving,
   findDuplicateReceipts,
@@ -9,10 +11,13 @@ import {
   findDuplicatesOfDraft,
   isNotDuplicate,
   itemOverlap,
+  markAllNotDuplicate,
   markNotDuplicate,
   normalizeOrderNumber,
   scoreDuplicate,
+  strongDuplicates,
 } from '../duplicate';
+import { SEED_CATEGORIES } from '../categories';
 import type { Receipt, Transaction } from '../types';
 
 function txn(partial: Partial<Transaction> & { id: string; date: string; amount: number; rawMerchant: string }): Transaction {
@@ -64,10 +69,23 @@ describe('findDuplicates', () => {
     expect(findDuplicates([CASH, { ...CARD, date: '2026-09-06' }])).toEqual([]);
   });
 
-  it('同じ日でも店が全く違えば候補に出ない', () => {
+  it('店が全く違う同額の組は、消さずに念のための候補へ下げる', () => {
     const other = txn({ id: 'other1', date: '2026-09-03', amount: 1200, rawMerchant: 'ドン・キホーテ' });
     const gasStation = txn({ id: 'other2', date: '2026-09-04', amount: 1200, rawMerchant: 'エネオス環七' });
-    expect(findDuplicates([other, gasStation])).toEqual([]);
+    const pairs = findDuplicates([other, gasStation]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].strength).toBe('weak');
+    expect(strongDuplicates(pairs)).toEqual([]);
+  });
+
+  it('現金レシートの明細とカード明細の組は強い候補', () => {
+    expect(findDuplicates([CASH, CARD])[0].strength).toBe('strong');
+  });
+
+  it('手がかりが日付しか無く、4 日ずれた組は出さない', () => {
+    const a = txn({ id: 'a', date: '2026-09-01', amount: 1200, rawMerchant: 'ドン・キホーテ' });
+    const b = txn({ id: 'b', date: '2026-09-05', amount: 1200, rawMerchant: 'エネオス環七', splits: [{ id: 'b-1', amount: 1200, categoryId: 'transport', origin: 'rule' }] });
+    expect(findDuplicates([a, b], SEED_CATEGORIES)).toEqual([]);
   });
 
   it('「重複ではない」と印を付けた組は次から出ない', () => {
@@ -103,13 +121,110 @@ describe('scoreDuplicate', () => {
     const a = txn({ id: 'a', date: '2026-09-01', amount: 800, rawMerchant: 'ローソン五反田' });
     const b = txn({ id: 'b', date: '2026-09-01', amount: 800, rawMerchant: 'ローソン五反田', source: 'paypay', sourceLabel: 'PayPay' });
     const pair = scoreDuplicate(a, b);
-    expect(pair.score).toBe(100);
-    expect(pair.reasons).toEqual(['同じ日', '店名が同じ', '取り込み元が違う']);
+    expect(pair.score).toBe(110);
+    expect(pair.reasons).toEqual(['同じ日', '店名が同じ', '取り込み元が違う', 'カテゴリが同じ']);
+    expect(pair.strength).toBe('strong');
   });
 
   it('金額の一致は必須なので点には入れない', () => {
     const a = txn({ id: 'a', date: '2026-09-01', amount: 800, rawMerchant: 'ローソン' });
     expect(scoreDuplicate(a, { ...a, id: 'b' }).score).toBe(scoreDuplicate({ ...a, amount: 99 }, { ...a, id: 'b', amount: 99 }).score);
+  });
+});
+
+/** 定期支払いから支払日に作った明細 */
+function posted(id: string, paymentId: string, date: string, amount: number, rawMerchant: string, categoryId = 'oshi'): Transaction {
+  return txn({
+    id,
+    date,
+    amount,
+    rawMerchant,
+    source: 'manual',
+    sourceLabel: '定期支払い',
+    splits: [{ id: `${id}-1`, amount, categoryId, origin: 'manual' }],
+    recurring: { paymentId, month: date.slice(0, 7) },
+  });
+}
+
+describe('定期支払いとレシートの手がかり', () => {
+  it('別の定期支払いから作った同日・同額の明細は、消さずに念のための候補にする', () => {
+    const towa = posted('p1', 'rp-towa', '2026-10-05', 490, 'Towa Ch. 常闇トワ');
+    const iroha = posted('p2', 'rp-iroha', '2026-10-05', 490, 'Iroha ch. 風真いろは');
+    const pairs = findDuplicates([towa, iroha]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].score).toBe(30);
+    expect(pairs[0].strength).toBe('weak');
+    expect(pairs[0].reasons).toEqual(['同じ日', 'カテゴリが同じ', '別の定期支払い']);
+  });
+
+  it('作った明細には、取り込み元の違いとレシートの有無で点を足さない', () => {
+    const ramen = txn({
+      id: 'ramen',
+      date: '2026-09-30',
+      amount: 1000,
+      rawMerchant: '焼きあご塩らー麺たかはし',
+      source: 'cash',
+      sourceLabel: '現金',
+      receiptId: 'r-ramen',
+      splits: [{ id: 'ramen-1', amount: 1000, categoryId: 'food', origin: 'receipt' }],
+    });
+    const support = posted('p1', 'rp-pixiv', '2026-10-01', 1000, 'ふみひこさんへの支援');
+    const [pair] = findDuplicates([ramen, support]);
+    expect(pair.score).toBe(30);
+    expect(pair.strength).toBe('weak');
+    expect(pair.reasons).not.toContain('取り込み元が違う');
+    expect(pair.reasons).not.toContain('レシートが片方だけ');
+  });
+
+  it('作った明細と、店名の書き方が違うカード明細は強い候補', () => {
+    const netflix = posted('p1', 'rp-netflix', '2026-10-05', 1590, 'Netflix', 'fees');
+    const card = txn({
+      id: 'card',
+      date: '2026-10-05',
+      amount: 1590,
+      rawMerchant: 'ＮＦ＊ＭＥＭＢＥＲＳＨＩＰ',
+      splits: [{ id: 'card-1', amount: 1590, categoryId: 'fees', origin: 'rule' }],
+    });
+    const [pair] = findDuplicates([netflix, card]);
+    expect(pair.score).toBe(70);
+    expect(pair.strength).toBe('strong');
+    expect(pair.reasons).toContain('定期支払いと利用明細');
+  });
+
+  it('別々のレシートが両方に付いた組は下げる', () => {
+    const a = { ...CASH, id: 'a', receiptId: 'r1' };
+    const b = { ...CASH, id: 'b', receiptId: 'r2' };
+    const [pair] = findDuplicates([a, b]);
+    expect(pair.reasons).toContain('別々のレシート');
+    expect(pair.score).toBe(scoreDuplicate(a, { ...b, receiptId: 'r1' }).score - 20);
+  });
+
+  it('カテゴリは小カテゴリを親に寄せて比べ、未分類どうしは数えない', () => {
+    const child = SEED_CATEGORIES.find((category) => category.parentId !== undefined)!;
+    const a = txn({ id: 'a', date: '2026-09-01', amount: 500, rawMerchant: 'A', splits: [{ id: 'a-1', amount: 500, categoryId: child.id, origin: 'rule' }] });
+    const b = txn({ id: 'b', date: '2026-09-01', amount: 500, rawMerchant: 'B', splits: [{ id: 'b-1', amount: 500, categoryId: child.parentId!, origin: 'rule' }] });
+    expect(scoreDuplicate(a, b, SEED_CATEGORIES).reasons).toContain('カテゴリが同じ');
+    expect(scoreDuplicate(a, b).reasons).not.toContain('カテゴリが同じ');
+
+    const blank = (id: string) => txn({ id, date: '2026-09-01', amount: 500, rawMerchant: id, splits: [{ id: `${id}-1`, amount: 500, categoryId: 'uncategorized', origin: 'fallback' }] });
+    expect(scoreDuplicate(blank('x'), blank('y')).reasons).not.toContain('カテゴリが同じ');
+  });
+
+  it('しきい値は念のため < レシートの下限 < 強い候補', () => {
+    expect(DUPLICATE_WEAK_THRESHOLD).toBeLessThan(DUPLICATE_THRESHOLD);
+    expect(DUPLICATE_THRESHOLD).toBeLessThan(DUPLICATE_STRONG_THRESHOLD);
+  });
+});
+
+describe('markAllNotDuplicate', () => {
+  it('同じ明細が何組に出ていても、印を全部残して 1 件にまとめる', () => {
+    const a = txn({ id: 'a', date: '2026-09-01', amount: 500, rawMerchant: 'A' });
+    const b = txn({ id: 'b', date: '2026-09-01', amount: 500, rawMerchant: 'B' });
+    const c = txn({ id: 'c', date: '2026-09-02', amount: 500, rawMerchant: 'C' });
+    const updated = markAllNotDuplicate(findDuplicates([a, b, c]));
+    expect(updated).toHaveLength(3);
+    expect(findDuplicates(updated)).toEqual([]);
+    expect(updated.find((t) => t.id === 'a')?.notDuplicateOf?.sort()).toEqual(['b', 'c']);
   });
 });
 

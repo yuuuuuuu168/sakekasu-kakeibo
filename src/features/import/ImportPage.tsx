@@ -8,6 +8,7 @@ import {
   detectDelimiter,
   duplicatesInvolving,
   findDuplicates,
+  strongDuplicates,
   formatYen,
   isMappingComplete,
   mergeImported,
@@ -138,7 +139,10 @@ export function ImportPage() {
        * ID が一致する分は mergeImported が弾いた。残るのは ID が別なのに同じ支払い、
        * つまり現金として保存したレシートや、取り込み元を選び違えた分。ここで気づける口を作る。
        */
-      const suspects = duplicatesInvolving(findDuplicates(merge.merged), fresh.map((txn) => txn.id));
+      const involved = duplicatesInvolving(findDuplicates(merge.merged, snapshot.categories), fresh.map((txn) => txn.id));
+      // 案内して一覧へ送るのは強い候補だけ。念のための候補は件数だけ伝える
+      const suspects = strongDuplicates(involved);
+      const maybe = involved.length - suspects.length;
 
       info(
         `${merge.added} 件を取り込みました。` +
@@ -146,7 +150,8 @@ export function ImportPage() {
           (judged.judged > 0 ? `初めての店 ${judged.judged} 件にカテゴリを当てました` : '') +
           (judged.learned.length > 0 ? `（${judged.learned.length} 件はルールとして覚えました）` : '') +
           (judged.judged > 0 ? '。' : '') +
-          (suspects.length > 0 ? `重複の可能性が ${suspects.length} 組あります。` : ''),
+          (suspects.length > 0 ? `重複の可能性が ${suspects.length} 組あります。` : '') +
+          (maybe > 0 ? `念のための候補が ${maybe} 組あります（明細の「重複の可能性だけ」で見られます）。` : ''),
       );
       setLoaded(undefined);
       setMapping(undefined);

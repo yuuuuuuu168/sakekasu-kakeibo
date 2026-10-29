@@ -36,7 +36,7 @@ export type RecurringOccurrence = {
 };
 
 /** 何か月おきか。壊れた値でも 1 以上にする */
-export function intervalMonthsOf(payment: RecurringPayment): number {
+export function intervalMonthsOf(payment: Pick<RecurringPayment, 'intervalMonths'>): number {
   const interval = Math.trunc(payment.intervalMonths ?? 1);
   return Number.isFinite(interval) && interval >= 1 ? interval : 1;
 }
@@ -257,6 +257,26 @@ function countPaid(payment: RecurringPayment, today: string, interval: number): 
   const thisMonth = addMonths(payment.startMonth, done * interval);
   const paid = dateInMonth(thisMonth, payment.dayOfMonth) < today ? done + 1 : done;
   return Math.max(0, paid);
+}
+
+/**
+ * 金額・引き落とし日・周期が同じで、二重に登録したかもしれない支払い。自分と停止したものは除く。
+ * 登録の画面で 1 回だけ注意を出すのに使う。同じ値段のサブスクを別々に契約していることもあるので、止めはしない
+ */
+export function similarRecurringPayments(
+  target: Pick<RecurringPayment, 'id' | 'amount' | 'dayOfMonth' | 'intervalMonths'>,
+  payments: RecurringPayment[],
+): RecurringPayment[] {
+  const amount = Math.round(target.amount);
+  const interval = intervalMonthsOf(target);
+  return payments.filter(
+    (payment) =>
+      payment.id !== target.id &&
+      !payment.archived &&
+      Math.round(payment.amount) === amount &&
+      payment.dayOfMonth === target.dayOfMonth &&
+      intervalMonthsOf(payment) === interval,
+  );
 }
 
 /** 定期支払いから作る明細の ID。支払いと月で決まるので、何度作っても同じ 1 件になる */

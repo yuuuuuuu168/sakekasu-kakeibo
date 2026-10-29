@@ -1,7 +1,8 @@
+import { UNCATEGORIZED_ID, rootCategoryId } from './categories';
 import { diffDays } from './date';
 import { merchantSimilarity, normalizeMerchant } from './merchant';
 import { MAX_DATE_GAP, dateScore } from './receipt/match';
-import type { Receipt, Transaction } from './types';
+import type { Category, Receipt, SourceKind, Transaction } from './types';
 
 /**
  * 同じ支払いが二重に計上されている組を探す。明細 ID は source を混ぜたハッシュなので、
@@ -19,7 +20,11 @@ export type DuplicatePair = {
   b: Transaction;
   score: number;
   reasons: string[];
+  /** 強い候補は目立たせ、念のための候補は折りたたんで出す（DUPLICATE_STRONG_THRESHOLD） */
+  strength: DuplicateStrength;
 };
+
+export type DuplicateStrength = 'strong' | 'weak';
 
 export type DuplicateReceiptPair = {
   a: Receipt;
@@ -32,11 +37,26 @@ export type DuplicateReceiptPair = {
 export const MAX_DUPLICATE_DATE_GAP = MAX_DATE_GAP;
 
 /**
- * 候補に出す下限。同じ日・同じ金額だけで 40 点入るので、そこを境目にする。
- * 正規化すると店舗名が空になる明細（数字だけの店名など）でも同日・同額なら拾いたいので、
+ * レシートどうしの重複を候補に出す下限。同じ日・同じ金額だけで 40 点入るので、そこを境目にする。
+ * 正規化すると店舗名が空になるもの（数字だけの店名など）でも同日・同額なら拾いたいので、
  * これ以上は上げない。
  */
 export const DUPLICATE_THRESHOLD = 40;
+
+/**
+ * 明細の重複を「強い候補」として目立たせる下限。
+ * 同日・同額（40 点）に、店名の近さ・取り込み元の違い・カテゴリの一致などがもう一つ重なると届く。
+ */
+export const DUPLICATE_STRONG_THRESHOLD = 60;
+
+/**
+ * 明細の重複を「念のため」として出す下限。どの組も消しはせず、強さで見せ方を分ける。
+ * 別の定期支払いから作った明細どうしでも、同日・同額なら念のためには残る。登録の誤りもあるため
+ */
+export const DUPLICATE_WEAK_THRESHOLD = 20;
+
+/** 利用明細を取り込める払い方。定期支払いの引き落とし先になりうるもの */
+const STATEMENT_SOURCES: ReadonlySet<SourceKind> = new Set(['credit', 'paypay', 'suica']);
 
 /** ペアの並びを内容だけで決める。同じ 2 件なら、どちらを先に渡しても同じ組になる */
 function orderPair<T extends { id: string; date: string }>(x: T, y: T): [T, T] {
@@ -61,8 +81,12 @@ function dateReason(gap: number): string | undefined {
 /**
  * 2 件の明細の近さを点数にする。点の付け方は receipt/match.ts に倣う。
  * 金額の一致は候補に入る条件（必須）なので点には含めない。
+ *
+ * どの手がかりも単独では決め手にしない。店名は手入力とカード明細で書き方が揃わないので、
+ * 違っても減点はしない。別の定期支払いや別々のレシートは減点するが、候補からは消さない。
+ * categories を渡すと、小カテゴリを親に寄せてからカテゴリを比べる。
  */
-export function scoreDuplicate(a: Transaction, b: Transaction): DuplicatePair {
+export function scoreDuplicate(a: Transaction, b: Transaction, categories: Category[] = []): DuplicatePair {
   const reasons: string[] = [];
   const gap = diffDays(a.date, b.date);
 
@@ -75,15 +99,52 @@ export function scoreDuplicate(a: Transaction, b: Transaction): DuplicatePair {
   const whoReason = merchantReason(similarity);
   if (whoReason) reasons.push(whoReason);
 
+  // 定期支払いから作った明細は、取り込み元もレシートの有無も作るときに決めた仮のもの。比べる材料にしない
+  const posted = a.recurring !== undefined || b.recurring !== undefined;
+
   // 現金として保存したレシートと、後から取り込んだカード明細。重複の典型がここに入る
-  const bySource = a.source !== b.source ? 20 : 0;
+  const bySource = !posted && a.source !== b.source ? 20 : 0;
   if (bySource > 0) reasons.push('取り込み元が違う');
 
   // 片方にだけレシートが付いているなら、付いていない側が二重に増えた分でありうる
-  const byReceipt = (a.receiptId === undefined) !== (b.receiptId === undefined) ? 10 : 0;
+  const byReceipt = !posted && (a.receiptId === undefined) !== (b.receiptId === undefined) ? 10 : 0;
   if (byReceipt > 0) reasons.push('レシートが片方だけ');
 
-  return { a, b, score: byDate + byMerchant + bySource + byReceipt, reasons };
+  // 定期支払いから作った明細と、利用明細から取り込んだ明細。店名のずれで自動の差し替えが漏れた形
+  const byStatement = isPostedWithStatement(a, b) || isPostedWithStatement(b, a) ? 20 : 0;
+  if (byStatement > 0) reasons.push('定期支払いと利用明細');
+
+  // 店名の書き方が違っても、カテゴリは揃いやすい
+  const byCategory = sharesCategory(a, b, categories) ? 10 : 0;
+  if (byCategory > 0) reasons.push('カテゴリが同じ');
+
+  // レシートが 2 枚あるなら 2 回の買い物でありうる
+  const byReceipts = a.receiptId !== undefined && b.receiptId !== undefined && a.receiptId !== b.receiptId ? -20 : 0;
+  if (byReceipts < 0) reasons.push('別々のレシート');
+
+  // 別々に登録した定期支払い。登録の誤りもあるので消しはしない
+  const byPayments =
+    a.recurring !== undefined && b.recurring !== undefined && a.recurring.paymentId !== b.recurring.paymentId ? -20 : 0;
+  if (byPayments < 0) reasons.push('別の定期支払い');
+
+  const score = byDate + byMerchant + bySource + byReceipt + byStatement + byCategory + byReceipts + byPayments;
+  return { a, b, score, reasons, strength: score >= DUPLICATE_STRONG_THRESHOLD ? 'strong' : 'weak' };
+}
+
+function isPostedWithStatement(posted: Transaction, other: Transaction): boolean {
+  return posted.recurring !== undefined && other.recurring === undefined && STATEMENT_SOURCES.has(other.source);
+}
+
+/** 内訳のカテゴリ（大カテゴリに寄せたもの）が 1 つでも重なるか。未分類どうしは数えない */
+function sharesCategory(a: Transaction, b: Transaction, categories: Category[]): boolean {
+  const rootsOf = (txn: Transaction) =>
+    new Set(
+      txn.splits
+        .map((split) => (categories.length > 0 ? rootCategoryId(categories, split.categoryId) : split.categoryId))
+        .filter((id) => id !== UNCATEGORIZED_ID),
+    );
+  const left = rootsOf(a);
+  return [...rootsOf(b)].some((id) => left.has(id));
 }
 
 /** 「重複ではない」の印を持てるもの。明細とレシートの両方 */
@@ -111,13 +172,13 @@ export function duplicateKey(pair: DuplicatePair | DuplicateReceiptPair): string
 }
 
 /**
- * 保存済みの明細から重複候補を探す。金額の完全一致を必須にしているのは match.ts と同じ理由で、
+ * 保存済みの明細から重複候補を探す。点数で強い候補と念のための候補に分ける（strength）。金額の完全一致を必須にしているのは match.ts と同じ理由で、
  * 家計簿で一番信用できる手がかりだから。符号もそのまま見るので、支払いと同額の返金は組にならない。
  *
  * 取り込みのときだけでなく画面を開くたびに全件見る。金額でバケツに分けてから中だけを突き合わせるので、
  * 明細が増えても総当たりの二乗にはならない。
  */
-export function findDuplicates(transactions: Transaction[]): DuplicatePair[] {
+export function findDuplicates(transactions: Transaction[], categories: Category[] = []): DuplicatePair[] {
   const byAmount = new Map<number, Transaction[]>();
   for (const txn of transactions) {
     const bucket = byAmount.get(txn.amount);
@@ -132,13 +193,32 @@ export function findDuplicates(transactions: Transaction[]): DuplicatePair[] {
         const [a, b] = orderPair(bucket[left], bucket[right]);
         if (isNotDuplicate(a, b)) continue;
         if (Math.abs(diffDays(a.date, b.date)) > MAX_DUPLICATE_DATE_GAP) continue;
-        const pair = scoreDuplicate(a, b);
-        if (pair.score >= DUPLICATE_THRESHOLD) pairs.push(pair);
+        const pair = scoreDuplicate(a, b, categories);
+        if (pair.score >= DUPLICATE_WEAK_THRESHOLD) pairs.push(pair);
       }
     }
   }
 
   return pairs.sort((x, y) => (y.score === x.score ? duplicateKey(x).localeCompare(duplicateKey(y)) : y.score - x.score));
+}
+
+/** 強い候補だけを残す。目立たせる件数（ダッシュボードの注意、取り込み後の案内）に使う */
+export function strongDuplicates(pairs: DuplicatePair[]): DuplicatePair[] {
+  return pairs.filter((pair) => pair.strength === 'strong');
+}
+
+/**
+ * いくつかの組をまとめて「重複ではない」にした明細を返す。1 件の明細が複数の組に出ていても、印は全部残す。
+ * 保存は呼ぶ側で
+ */
+export function markAllNotDuplicate(pairs: DuplicatePair[]): Transaction[] {
+  const updated = new Map<string, Transaction>();
+  for (const pair of pairs) {
+    const [a, b] = markNotDuplicate(updated.get(pair.a.id) ?? pair.a, updated.get(pair.b.id) ?? pair.b);
+    updated.set(a.id, a);
+    updated.set(b.id, b);
+  }
+  return [...updated.values()];
 }
 
 /** 新しく取り込んだ明細が絡む組だけを残す。取り込み直後に出す件数に使う */

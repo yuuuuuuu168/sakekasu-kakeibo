@@ -5,6 +5,7 @@ import {
   UNCATEGORIZED_ID,
   aggregateMonth,
   findDuplicates,
+  strongDuplicates,
   findMisfiledTransfers,
   formatYen,
   monthOf,
@@ -49,10 +50,11 @@ export function DashboardPage() {
   // 重複は月をまたぐので探すのは全件から。出すのはこの月に掛かる組だけ
   const duplicates = useMemo(
     () =>
-      findDuplicates(snapshot.transactions).filter(
+      // 目立たせるのは強い候補だけ。念のための候補は明細の重複の絞り込みで見る
+      strongDuplicates(findDuplicates(snapshot.transactions, snapshot.categories)).filter(
         (pair) => monthOf(pair.a.date) === month || monthOf(pair.b.date) === month,
       ),
-    [month, snapshot.transactions],
+    [month, snapshot.transactions, snapshot.categories],
   );
   const rows = summary.categories.filter((row) => row.actual !== 0 || row.limit > 0);
   const overTotal = summary.categories.reduce((sum, row) => sum + row.over, 0);
