@@ -1,14 +1,18 @@
 /**
  * 先に登録しておく定期的な支払い。
  *
- * ここから明細は作らない。作ると取り込んだ明細と必ず重なり、重複の判定を通す羽目になる。
- * 代わりに「その月に発生するはずの支払い」を数えて、着地見込みと残り回数に使う。
- * 口座引き落としのように明細を取り込まない支払いは、この見込みの中にだけ現れる。
+ * 「その月に発生するはずの支払い」を数えて、着地見込みと残り回数に使う。
+ * 支払日が来た回は明細も作る（planRecurringPosts）。月末の取り込みを待たずに実績へ入れるため。
+ * 同じ支払いの明細を後から取り込んだら、作った方を消して取り込んだ方を残す。
+ * 口座引き落としのように明細を取り込まない支払いは、作った明細がそのまま実績になる。
  */
 
-import { addMonths, dateInMonth, monthDiff, monthOf } from './date';
+import { addMonths, dateInMonth, monthDiff, monthOf, previousMonth } from './date';
 import { normalizeMerchant } from './merchant';
 import type { RecurringPayment, Transaction } from './types';
+
+/** 定期支払いから作った明細の取り込み元の表示名 */
+export const RECURRING_SOURCE_LABEL = '定期支払い';
 
 /** 固定額として登録したものの、突き合わせで許す金額のずれ。増税や値上げで数 % は動く */
 const AMOUNT_TOLERANCE_RATE = 0.1;
@@ -119,7 +123,10 @@ export function recurringOccurrences(input: RecurringMonthInput): RecurringOccur
   return matched;
 }
 
-/** 店舗名で絞り、金額の近い 1 件を取る。同じ明細を 2 つの支払いに割り当てない */
+/**
+ * 店舗名で絞り、金額の近い 1 件を取る。同じ明細を 2 つの支払いに割り当てない。
+ * 取り込んだ明細を先に見て、無ければその回のために作った明細を当てる
+ */
 function pickTransaction(
   payment: RecurringPayment,
   occurrence: RecurringOccurrence,
@@ -127,19 +134,21 @@ function pickTransaction(
   used: Set<string>,
 ): Transaction | undefined {
   const pattern = normalizeMerchant(payment.merchantPattern || payment.label);
-  if (pattern === '') return undefined;
 
   const tolerance = Math.max(AMOUNT_TOLERANCE_MIN, Math.round(occurrence.plannedAmount * AMOUNT_TOLERANCE_RATE));
 
-  const hits = candidates.filter((txn) => {
-    if (used.has(txn.id)) return false;
+  const own = (txn: Transaction) => txn.recurring?.paymentId === payment.id && txn.recurring.month === monthOf(occurrence.date);
+  const imported = candidates.filter((txn) => {
+    if (used.has(txn.id) || txn.recurring !== undefined || pattern === '') return false;
     if (!normalizeMerchant(txn.rawMerchant || txn.merchant).includes(pattern)) return false;
     // 金額が動くものは額で絞れない。店舗名だけで当てる
     if (payment.variableAmount) return true;
     return Math.abs(txn.amount - occurrence.plannedAmount) <= tolerance;
   });
+  // 取り込んだ明細が無ければ、この回のために作った明細を当てる。ほかの支払いの分は見ない
+  if (imported.length === 0) return candidates.find((txn) => !used.has(txn.id) && own(txn));
 
-  return hits.sort((a, b) => {
+  return imported.sort((a, b) => {
     const byAmount = Math.abs(a.amount - occurrence.plannedAmount) - Math.abs(b.amount - occurrence.plannedAmount);
     if (byAmount !== 0) return byAmount;
     return Math.abs(dayOf(a.date) - dayOf(occurrence.date)) - Math.abs(dayOf(b.date) - dayOf(occurrence.date));
@@ -248,4 +257,102 @@ function countPaid(payment: RecurringPayment, today: string, interval: number): 
   const thisMonth = addMonths(payment.startMonth, done * interval);
   const paid = dateInMonth(thisMonth, payment.dayOfMonth) < today ? done + 1 : done;
   return Math.max(0, paid);
+}
+
+/** 定期支払いから作る明細の ID。支払いと月で決まるので、何度作っても同じ 1 件になる */
+export function recurringTransactionId(paymentId: string, month: string): string {
+  return `recurring-${paymentId}-${month}`;
+}
+
+export type RecurringPostInput = {
+  payments: RecurringPayment[];
+  transactions: Transaction[];
+  /** YYYY-MM-DD。この日までに支払日を迎えた回を明細にする */
+  today: string;
+};
+
+export type RecurringPostPlan = {
+  /** 支払日を迎えたので作る明細 */
+  create: Transaction[];
+  /** 同じ支払いの明細を取り込んだので消す、作った明細の ID */
+  remove: string[];
+  /** postedThrough を進めた支払いの一覧（全件）。どれも変わらなければ undefined */
+  recurring?: RecurringPayment[];
+};
+
+/**
+ * 支払日を迎えた回の明細を作り、取り込んだ明細と重なった分を消す計画を立てる。保存は呼び出し側。
+ *
+ * - 作るのは postedThrough の翌月から今月まで。postedThrough が無い支払いは今月から作る。
+ *   登録より前の月までさかのぼって作ると、取り込み済みの月に重ねてしまうため
+ * - その回の明細をもう取り込んであれば作らない
+ * - 作った明細と同じ回の明細を取り込んだら、作った方を消す
+ *
+ * 作った回は postedThrough に覚えておく。人が明細を消しても作り直さない。
+ */
+export function planRecurringPosts(input: RecurringPostInput): RecurringPostPlan {
+  const { payments, transactions, today } = input;
+  const thisMonth = monthOf(today);
+  const existing = new Set(transactions.map((txn) => txn.id));
+  const imported = transactions.filter((txn) => txn.recurring === undefined);
+
+  // 突き合わせは月ごとに 1 回。同じ明細を 2 つの支払いに当てない規則を、支払いをまたいで効かせる
+  const matchedOf = new Map<string, Map<string, string | undefined>>();
+  const importedMatch = (month: string, paymentId: string): string | undefined => {
+    let byPayment = matchedOf.get(month);
+    if (!byPayment) {
+      // 停止した支払いも突き合わせには入れる。停止前に作った明細を、取り込んだ明細に差し替えられるように
+      const all = payments.map((payment) => ({ ...payment, archived: false }));
+      byPayment = new Map(
+        recurringOccurrences({ month, payments: all, transactions: imported }).map((occurrence) => [occurrence.paymentId, occurrence.transactionId]),
+      );
+      matchedOf.set(month, byPayment);
+    }
+    return byPayment.get(paymentId);
+  };
+
+  const remove = transactions
+    .filter((txn) => txn.recurring !== undefined && importedMatch(txn.recurring.month, txn.recurring.paymentId) !== undefined)
+    .map((txn) => txn.id);
+
+  const create: Transaction[] = [];
+  let changed = false;
+  const recurring = payments.map((payment) => {
+    if (payment.archived) return payment;
+
+    let through = payment.postedThrough ?? previousMonth(thisMonth);
+    for (let month = addMonths(through, 1); month <= thisMonth; month = addMonths(month, 1)) {
+      const occurrence = occurrenceOfMonth(payment, month);
+      if (occurrence && occurrence.date > today) break;
+      if (occurrence) {
+        const id = recurringTransactionId(payment.id, month);
+        if (occurrence.amount > 0 && !existing.has(id) && importedMatch(month, payment.id) === undefined) {
+          create.push(postedTransaction(payment, occurrence, id));
+        }
+      }
+      through = month;
+    }
+
+    if (through === payment.postedThrough) return payment;
+    changed = true;
+    return { ...payment, postedThrough: through };
+  });
+
+  return { create, remove, ...(changed ? { recurring } : {}) };
+}
+
+function postedTransaction(payment: RecurringPayment, occurrence: RecurringOccurrence, id: string): Transaction {
+  const rawMerchant = payment.merchantPattern?.trim() || payment.label;
+  return {
+    id,
+    date: occurrence.date,
+    amount: occurrence.amount,
+    rawMerchant,
+    merchant: payment.label,
+    source: 'manual',
+    sourceLabel: RECURRING_SOURCE_LABEL,
+    splits: [{ id: `${id}-1`, amount: occurrence.amount, categoryId: payment.categoryId, origin: 'manual' }],
+    needsDetail: false,
+    recurring: { paymentId: payment.id, month: monthOf(occurrence.date) },
+  };
 }

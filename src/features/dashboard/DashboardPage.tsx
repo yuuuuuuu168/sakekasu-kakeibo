@@ -205,10 +205,12 @@ export function DashboardPage() {
             {summary.recurringOccurrences.map((occurrence) => {
               const payment = snapshot.recurring.find((item) => item.id === occurrence.paymentId);
               const status = payment ? recurringStatus(payment, todayIso()) : undefined;
+              const posted = snapshot.transactions.find((txn) => txn.id === occurrence.transactionId)?.recurring !== undefined;
+              const state = !occurrence.transactionId ? '見込み' : posted ? '支払日に計上' : '取り込み済み';
               return (
                 <li key={occurrence.paymentId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                   {occurrence.transactionId ? (
-                    <Check size={16} className="text-success-text" aria-label="取り込み済み" />
+                    <Check size={16} className="text-success-text" aria-label={state} />
                   ) : (
                     <CalendarClock size={16} className="text-ink-2" aria-label="これから" />
                   )}
@@ -222,13 +224,13 @@ export function DashboardPage() {
                   )}
                   <span className="flex-1" />
                   <span className="tnum text-sm font-medium text-ink">{formatYen(occurrence.amount)}</span>
-                  <span className="text-xs text-muted">{occurrence.transactionId ? '取り込み済み' : '見込み'}</span>
+                  <span className="text-xs text-muted">{state}</span>
                 </li>
               );
             })}
           </ul>
           <p className="mt-3 text-xs text-muted">
-            取り込み済みの分は実績に入っています。着地見込みでは二重に数えず、見込みの分だけを足しています。
+            支払日を迎えた分は明細を作って実績に入れ、同じ支払いの明細を取り込むとそちらに差し替えます。着地見込みでは二重に数えず、見込みの分だけを足しています。
           </p>
         </Card>
       )}

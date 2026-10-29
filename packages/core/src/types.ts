@@ -70,6 +70,18 @@ export type Transaction = {
   confirmed?: boolean;
   /** ドルで払ったもの。amount は円に直した額で、こちらはレシートに印字されていた額の控え */
   foreign?: ForeignAmount;
+  /**
+   * 登録した定期支払いから、支払日に作った明細の印（recurring.ts の planRecurringPosts）。
+   * 同じ支払いの明細を後から取り込んだら、こちらは消して取り込んだ方を残す
+   */
+  recurring?: RecurringPost;
+};
+
+/** 定期支払いから作った明細が、どの支払いの何月分か */
+export type RecurringPost = {
+  paymentId: string;
+  /** YYYY-MM */
+  month: string;
 };
 
 export type MatchType = 'contains' | 'equals' | 'startsWith' | 'regex';
@@ -154,7 +166,8 @@ export type Budget = {
 
 /**
  * 先に分かっている定期的な支払い。サブスク、分割、奨学金。
- * ここから明細は作らない（取り込んだ明細と必ず重なるため）。着地見込みと残り回数の材料。
+ * 支払日が来たら明細を作る。同じ支払いの明細を取り込んだら、そちらに差し替える（recurring.ts）。
+ * 着地見込みと残り回数の材料にもする。
  */
 export type RecurringPayment = {
   id: string;
@@ -180,6 +193,11 @@ export type RecurringPayment = {
   variableAmount?: boolean;
   /** 停止したもの。見込みからは外すが、過去の月を再現できるよう残す */
   archived?: boolean;
+  /**
+   * この月の分まで明細を作り終えた。YYYY-MM。
+   * 作った明細を人が消しても、ここより前の月は作り直さない
+   */
+  postedThrough?: string;
 };
 
 /** CSV の列とその意味の対応 */
