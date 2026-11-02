@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { Camera, ImageIcon } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { Camera, ClipboardPaste, ImageIcon } from 'lucide-react';
 import {
   MAX_RECEIPT_PHOTOS,
   SOURCE_LABELS,
@@ -51,6 +51,7 @@ import {
   type Draft,
   type DraftItem,
 } from './draft';
+import { clipboardImages, pastedImages } from './pasteImages';
 import { ReadPhotosError, readPhotos } from './readPhotos';
 import { shrinkPhoto } from './shrinkPhoto';
 
@@ -293,6 +294,45 @@ export function ReceiptsPage() {
     event.target.value = '';
   }
 
+  /** 貼り付けた画像（PC でスクリーンショットや画像をコピーしてきたとき）を、選んだ写真と同じく読む */
+  function onPastedImages(files: File[]) {
+    if (busy) return;
+    if (config.mode === 'local') {
+      info('ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。');
+      return;
+    }
+    void onImages(files);
+  }
+
+  // 画面のどこで Ctrl+V / ⌘V を押しても拾う。リスナーは一度だけ付け、最新の処理を ref から呼ぶ
+  const onPastedRef = useRef(onPastedImages);
+  onPastedRef.current = onPastedImages;
+  useEffect(() => {
+    function onPaste(event: ClipboardEvent) {
+      const files = pastedImages(event.clipboardData);
+      // 画像が無ければ文字の貼り付けなので、欄への貼り付けをそのまま通す
+      if (files.length === 0) return;
+      event.preventDefault();
+      onPastedRef.current(files);
+    }
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []);
+
+  async function pasteFromClipboard() {
+    try {
+      const files = await clipboardImages();
+      if (files.length === 0) {
+        info('クリップボードに画像がありません。画像をコピーしてから押してください。');
+        return;
+      }
+      onPastedImages(files);
+    } catch {
+      // 読み取りの許可を断られた、またはブラウザが対応していない
+      info('クリップボードを読めませんでした。画面の上で Ctrl+V（Mac は ⌘V）を押して貼り付けてください。');
+    }
+  }
+
   function setPaidWith(paidWith: SourceKind) {
     if (draft) setDraft({ ...draft, paidWith });
   }
@@ -310,6 +350,10 @@ export function ReceiptsPage() {
           <Button onClick={() => libraryRef.current?.click()} disabled={busy || config.mode === 'local'}>
             <ImageIcon size={15} />
             カメラロールから
+          </Button>
+          <Button onClick={() => void pasteFromClipboard()} disabled={busy || config.mode === 'local'}>
+            <ClipboardPaste size={15} />
+            貼り付け
           </Button>
           <Button
             onClick={() => {
@@ -340,7 +384,7 @@ export function ReceiptsPage() {
         <p className="mt-2 text-xs text-muted">
           {config.mode === 'local'
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
-            : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。`}
+            : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。PC では、コピーした画像をこの画面で Ctrl+V（Mac は ⌘V）で貼り付けても読めます。`}
         </p>
         {reading && <ReadingProgress reading={reading} />}
         {notice && (
