@@ -13,6 +13,8 @@ const IPHONE: RecurringPayment = {
   startMonth: '2026-04',
   totalCount: 24,
   totalAmount: 158_400,
+  // 読み込みのたびに計上の印を進める（planRecurringPosts）書き込みが、保存の呼び出しに混ざらないようにしておく
+  postedThrough: '2026-03',
 };
 
 const snapshot = {
@@ -49,6 +51,9 @@ async function renderPage(ready = 'まだ登録がありません') {
 }
 
 beforeEach(() => {
+  // 計上の計画は今日の日付で変わる。日によって書き込みの回数が変わらないように止める
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-03-15T09:00:00+09:00'));
   putRecurring.mockClear();
   snapshot.recurring = [];
 });
@@ -88,7 +93,7 @@ describe('RecurringPayments', () => {
       fireEvent.click(screen.getByRole('button', { name: '保存する' }));
     });
 
-    expect(putRecurring).toHaveBeenCalledTimes(1);
+    // 最初の呼び出しが保存。新しい支払いには計上の印が無いので、続けてストアが印を進めて書き込む
     expect(putRecurring.mock.calls[0][0]).toEqual([
       expect.objectContaining({
         label: 'Netflix',
