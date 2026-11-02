@@ -70,6 +70,25 @@ describe('クリップボードの画像を貼り付けて読む', () => {
     expect(api.analyzeReceipt).toHaveBeenCalledWith({ key: 'receipts/a.png' });
   });
 
+  it('読み取りの途中に貼り付けたら、黙らずに終わってからと伝える', async () => {
+    let finish!: () => void;
+    vi.mocked(api.analyzeReceipt).mockReturnValue(
+      new Promise((resolve) => {
+        finish = () => resolve({ storeName: 'ローソン', date: '2026-10-01', total: 300, items: [{ name: 'おにぎり', amount: 300 }] });
+      }),
+    );
+    renderPage();
+    paste(document.body, [{ kind: 'file', type: 'image/png', file: image() }]);
+    await vi.waitFor(() => expect(api.analyzeReceipt).toHaveBeenCalledTimes(1));
+
+    paste(document.body, [{ kind: 'file', type: 'image/png', file: image() }]);
+    expect(screen.getByText(/読み取りや保存の途中です/)).toBeInTheDocument();
+    expect(api.requestUpload).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+    expect(await screen.findByDisplayValue('ローソン')).toBeInTheDocument();
+  });
+
   it('文字だけの貼り付けは邪魔しない', () => {
     renderPage();
     const event = paste(document.body, [{ kind: 'string', type: 'text/plain' }]);

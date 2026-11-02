@@ -296,7 +296,11 @@ export function ReceiptsPage() {
 
   /** 貼り付けた画像（PC でスクリーンショットや画像をコピーしてきたとき）を、選んだ写真と同じく読む */
   function onPastedImages(files: File[]) {
-    if (busy) return;
+    if (busy) {
+      // 貼り付けは画面のどこでも効くので、ボタンのように押せない見た目にならない。黙らずに伝える
+      info('いまは読み取りや保存の途中です。終わってから貼り付けてください。');
+      return;
+    }
     if (config.mode === 'local') {
       info('ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。');
       return;
