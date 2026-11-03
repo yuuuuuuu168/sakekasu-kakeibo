@@ -50,6 +50,17 @@ describe('parseRequest', () => {
     expect(parseRequest({ task: 'classify', model: 'gpt-x' })).toHaveProperty('error');
   });
 
+  it('textract は OCR の組だけに付けられ、名前に +textract が付く', () => {
+    expect(parseRequest({ task: 'ocr', model: 'claude-sonnet-5-5', textract: true })).toMatchObject({
+      textract: true,
+      label: 'ocr:claude-sonnet-5-5:low+textract',
+    });
+    expect(parseRequest({ task: 'ocr', model: 'claude-sonnet-5-5', textract: false })).not.toHaveProperty('textract');
+    expect(parseRequest({ task: 'classify', model: 'jev', textract: false })).not.toHaveProperty('error');
+    expect(parseRequest({ task: 'classify', model: 'jev', textract: true })).toHaveProperty('error');
+    expect(parseRequest({ task: 'ocr', model: 'claude-sonnet-5-5', textract: 'yes' })).toHaveProperty('error');
+  });
+
   it('知らない effort と仕事は弾く', () => {
     expect(parseRequest({ task: 'ocr', model: 'claude-opus-5-5', effort: 'ultra' })).toHaveProperty('error');
     expect(parseRequest({ task: 'summary', model: 'claude-opus-5-5' })).toHaveProperty('error');
@@ -130,5 +141,18 @@ describe('summarize', () => {
       { receiptId: 'd', status: 'skipped', reason: 'image_expired' },
     ]);
     expect(summary).toMatchObject({ ok: 2, errors: 1, skipped: 1, usd: 0.12, msMean: 2000, ocr: { total: 0.5, date: 0, itemF1Mean: 1 } });
+  });
+
+  it('Textract を足した組は、その分だけの内訳も出す（合計の usd と ms には含めたまま）', () => {
+    const ocrScore = {
+      total: true, date: true, store: true, currency: true, truthItems: 1, draftItems: 1, exactItems: 1, amountItems: 1,
+      itemF1: 1, amountF1: 1, balanced: true, warnings: 0,
+    };
+    const summary = summarize([
+      { receiptId: 'a', status: 'ok', ms: 3000, usd: 0.0165, textract: { ms: 1000, usd: 0.0015, lines: 20 }, ocr: ocrScore },
+      { receiptId: 'b', status: 'ok', ms: 5000, usd: 0.018, textract: { ms: 2000, usd: 0.003, lines: 31 }, ocr: ocrScore },
+    ]);
+    expect(summary).toMatchObject({ usd: 0.0345, msMean: 4000, textract: { usd: 0.0045, msMean: 1500, linesMean: 25.5 } });
+    expect(summarize([{ receiptId: 'a', status: 'ok', ms: 1, usd: 0, ocr: ocrScore }])).not.toHaveProperty('textract');
   });
 });

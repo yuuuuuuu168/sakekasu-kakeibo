@@ -2,7 +2,10 @@
 # モデルの評価（infra/lambda/model-bench）を、比べたい組の一式ぶん非同期で積む。
 # 手順と結果の読み方は docs/operations.md の「モデルを比べる」にある。
 #
-#   bash infra/scripts/model-bench.sh [env] [OCR の枚数] [判定の枚数]
+#   bash infra/scripts/model-bench.sh [env] [OCR の枚数] [判定の枚数] [一式]
+#
+# 一式は省略すると all（下の plan）。textract を渡すと、本番の OCR（Sonnet 5.5 / low）を
+# Textract の文字を足した組と足さない組の 2 つだけ、同じレシートで積む（判定の枚数は使わない）。
 #
 # プロファイルは AWS_PROFILE（既定 sakekasu-builder）。SSO の認証が切れていれば、
 # 先に aws sso login を打ってブラウザでの承認を待つ。関数がまだ無ければ（デプロイ前）、何も積まずに止まる。
@@ -17,6 +20,7 @@ set -euo pipefail
 env_name="${1:-dev}"
 ocr_limit="${2:-60}"
 classify_limit="${3:-100}"
+plan_name="${4:-all}"
 function_name="sakekasu-kakeibo-${env_name}-model-bench"
 export AWS_PROFILE="${AWS_PROFILE:-sakekasu-builder}"
 export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
@@ -32,27 +36,38 @@ if ! aws lambda get-function --function-name "$function_name" --query Configurat
   exit 1
 fi
 
-# 仕事 モデル effort 予算（ドル）
-plan=(
-  "ocr claude-sonnet-5-5 low 3"
-  "ocr claude-haiku-5-5 low 1"
-  "ocr claude-opus-5-5 low 5"
-  "ocr claude-opus-5-5 medium 6"
-  "ocr claude-fable-5-1 low 10"
-  "ocr claude-fable-5-1 medium 12"
-  "classify keywords low 0"
-  "classify jev low 0"
-  "classify claude-haiku-5-5 low 1"
-  "classify claude-sonnet-5-5 low 2"
-  "classify claude-opus-5-5 low 3"
-  "classify claude-fable-5-1 low 5"
-)
+# 仕事 モデル effort 予算（ドル） [textract]
+if [ "$plan_name" = textract ]; then
+  plan=(
+    "ocr claude-sonnet-5-5 low 3"
+    "ocr claude-sonnet-5-5 low 3 textract"
+  )
+elif [ "$plan_name" = all ]; then
+  plan=(
+    "ocr claude-sonnet-5-5 low 3"
+    "ocr claude-haiku-5-5 low 1"
+    "ocr claude-opus-5-5 low 5"
+    "ocr claude-opus-5-5 medium 6"
+    "ocr claude-fable-5-1 low 10"
+    "ocr claude-fable-5-1 medium 12"
+    "classify keywords low 0"
+    "classify jev low 0"
+    "classify claude-haiku-5-5 low 1"
+    "classify claude-sonnet-5-5 low 2"
+    "classify claude-opus-5-5 low 3"
+    "classify claude-fable-5-1 low 5"
+  )
+else
+  echo "一式は all か textract: ${plan_name}" >&2
+  exit 1
+fi
 
 for entry in "${plan[@]}"; do
-  read -r task model effort max_usd <<<"$entry"
+  read -r task model effort max_usd extra <<<"$entry"
   limit=$([ "$task" = ocr ] && echo "$ocr_limit" || echo "$classify_limit")
-  payload=$(printf '{"task":"%s","model":"%s","effort":"%s","limit":%d,"maxUsd":%s}' \
-    "$task" "$model" "$effort" "$limit" "$max_usd")
+  textract=$([ "${extra:-}" = textract ] && echo true || echo false)
+  payload=$(printf '{"task":"%s","model":"%s","effort":"%s","limit":%d,"maxUsd":%s,"textract":%s}' \
+    "$task" "$model" "$effort" "$limit" "$max_usd" "$textract")
   echo "積む: $payload"
   aws lambda invoke --function-name "$function_name" --invocation-type Event \
     --cli-binary-format raw-in-base64-out --payload "$payload" /dev/null >/dev/null

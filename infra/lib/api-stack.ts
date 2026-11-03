@@ -462,6 +462,10 @@ export class ApiStack extends cdk.Stack {
       }),
     );
 
+    // Textract の文字を手がかりに足す組（textract: true）だけが使う。写真はバイト列で渡すので、
+    // Textract に S3 を読ませる権限は要らない。DetectDocumentText はリソースで絞れない
+    fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['textract:DetectDocumentText'], resources: ['*'] }));
+
     new cdk.CfnOutput(this, 'ModelBenchFunctionName', { value: fn.functionName });
   }
 }
