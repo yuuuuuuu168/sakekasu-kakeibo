@@ -64,6 +64,10 @@ CloudWatch で追うためで、利用者が出してよいと決めた。Cognit
 ほかのレシートの中身を足さないこと。Claude API で失敗したときは Bedrock で読み直す。
 Claude API には API キーではなく Workload Identity Federation で入り、鍵をどこにも置かないこと。
 
+モデルの評価（`infra/lambda/model-bench/`）の `textract: true` の組だけは、写真を同じアカウントの
+Amazon Textract（DetectDocumentText）にも渡し、起こした文字を Claude への指示文に足す。AWS の外には出さず、
+起こした文字はログに出さない。本番の OCR では Textract を使っていない。
+
 カテゴリ判定（`infra/lambda/classify/`）が TypeSafe に送るのは、レシートの品目名と明細の店舗名、
 そしてカテゴリの一覧（ID と名前）だけ。レシート画像、金額、日付、明細の件数や合計、
 Cognito の `sub` を送らないこと。1 回の呼び出しで見る対象の上限（`MAX_SUBJECTS`）を

@@ -987,6 +987,24 @@ aws lambda invoke --function-name sakekasu-kakeibo-dev-model-bench --invocation-
 | `maxUsd` | 5（天井 50） | この組の予算。使った額がこれに届いたら、新しいレシートを始めない（並列ぶん少し超えうる） |
 | `parallel` | 3（天井 8） | 同時に読むレシートの数 |
 | `price` | 表の値 | 100 万トークンあたりのドル（`{"input":10,"output":50}`）。`pricing.ts` の表に無いモデルは、これが無いと走らせない |
+| `textract` | `false` | OCR だけ。`true` なら Textract（DetectDocumentText）で起こした文字を指示文の後ろに足してから Claude に読ませる（`model-bench/textract.ts`）。本番の OCR は足していない |
+
+### Textract の文字を足すと良くなるかを測る
+
+Textract の文字検出のモデルが新しくなった（2026-11）のを受けて足した組。写真に加えて、Textract が起こした
+行を「参考。写真と食い違えば写真を正とする」と添えて Claude に渡す。本番（Sonnet 5.5 / low）を足す組と
+足さない組で、同じレシートに並べる。
+
+```sh
+bash infra/scripts/model-bench.sh dev 120 0 textract
+```
+
+- `[bench] summary` の `usd` と `msMean` には Textract の分（1 枚 0.0015 ドルの見積もりと、呼び出しの時間）を
+  含めてある。内訳は `textract.usd` / `textract.msMean` / `textract.linesMean`
+- Textract の同期の API は JPEG と PNG しか読まない。それ以外の写真のレシートは `textract_unsupported_format` で
+  飛ばす（画面が JPEG に直してから上げるので、ふつうは出ない）
+- 写真は同じアカウントの Textract に渡すだけで、AWS の外には出ない。起こした文字はログに出さない（行の数だけ）
+- 切り替えの基準は下の OCR と同じ。足す組が `ocr.perfect` で上回り、`ocr.total` が下がらないときだけ本番に入れるかを考える
 
 止まる条件は 4 つで、`[bench] summary` の `stopped` に出る。`budget`（予算に届いた）、`spend_limit`
 （クレジットの残高切れかワークスペースの利用上限）、`errors`（続けて 3 回落ちた）、`time`（Lambda の 15 分の手前）。

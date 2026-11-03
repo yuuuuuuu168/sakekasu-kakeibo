@@ -23,6 +23,7 @@ import { buildPrompt, normalizeDraft, toOcrImage } from '../ocr-receipt/draft';
 import { createAnthropicClient, readFederation } from '../shared/anthropic-client';
 import { requireEnv } from '../shared/env';
 import { costUsd, priceOf, type Price } from './pricing';
+import { TEXTRACT_USD_PER_PAGE, detectLines, textractHint, textractSupports } from './textract';
 import { f1, scoreClassify, scoreOcr, type ClassifyCase, type ClassifyScore, type OcrScore } from './score';
 
 /**
@@ -75,6 +76,11 @@ export type BenchRequest = {
   maxUsd: number;
   parallel: number;
   price?: Price;
+  /**
+   * OCR で、Textract（DetectDocumentText）で起こした文字を指示文の後ろに足す（textract.ts）。
+   * 本番は足していない。足して良くなるかを、足さない組と同じレシートで比べる
+   */
+  textract?: true;
   /** ログで組を見分けるための名前 */
   label: string;
 };
@@ -101,6 +107,10 @@ export function parseRequest(event: Record<string, unknown>): BenchRequest | { e
     return { error: `${model} の料金が分からない。price で渡す（100 万トークンあたりのドル）` };
   }
 
+  if (event.textract !== undefined && typeof event.textract !== 'boolean') return { error: 'textract は true か false' };
+  const textract = event.textract === true;
+  if (textract && task !== 'ocr') return { error: 'textract は ocr だけ' };
+
   return {
     task,
     model,
@@ -110,7 +120,11 @@ export function parseRequest(event: Record<string, unknown>): BenchRequest | { e
     maxUsd: clampNumber(event.maxUsd, DEFAULT_MAX_USD, 0, MAX_USD_CEILING),
     parallel: clampInt(event.parallel, DEFAULT_PARALLEL, 1, MAX_PARALLEL),
     ...(price ? { price } : {}),
-    label: typeof event.label === 'string' && event.label !== '' ? event.label.slice(0, 60) : `${task}:${model}:${effort}`,
+    ...(textract ? { textract: true as const } : {}),
+    label:
+      typeof event.label === 'string' && event.label !== ''
+        ? event.label.slice(0, 60)
+        : `${task}:${model}:${effort}${textract ? '+textract' : ''}`,
   };
 }
 
@@ -140,7 +154,11 @@ type Measured = {
   usage?: ClaudeUsage;
   servedModel?: string;
   stopReason?: string | null;
+  /** Textract を足した組だけ。ms と usd は Measured の ms・usd に含めてある */
+  textract?: TextractMeasured;
 };
+
+type TextractMeasured = { ms: number; usd: number; lines: number };
 
 type Outcome =
   | ({ receiptId: string; status: 'ok'; photos?: number } & Measured & ({ ocr: OcrScore } | { classify: ClassifyScore }))
@@ -303,6 +321,21 @@ async function runOcr(request: BenchRequest, sample: Sample, anthropic: Anthropi
   const keys = photoKeys(sample.receipt);
   const images = await Promise.all(keys.map(loadImage));
 
+  // Textract は Claude の前に順に呼ぶ（手がかりを指示文に入れるため）。所要時間と費用は両方の合計で比べる
+  let hint = '';
+  let textract: TextractMeasured | undefined;
+  if (request.textract) {
+    if (!images.every((image) => textractSupports(image.mediaType))) throw new Skip('textract_unsupported_format');
+    const textractStarted = Date.now();
+    const pages = await Promise.all(images.map((image) => detectLines(image.bytes)));
+    textract = {
+      ms: Date.now() - textractStarted,
+      usd: images.length * TEXTRACT_USD_PER_PAGE,
+      lines: pages.reduce((sum, lines) => sum + lines.length, 0),
+    };
+    hint = textractHint(pages);
+  }
+
   const started = Date.now();
   const message = await anthropic.messages.create({
     model: request.model,
@@ -320,14 +353,14 @@ async function runOcr(request: BenchRequest, sample: Sample, anthropic: Anthropi
               data: image.base64,
             },
           })),
-          { type: 'text' as const, text: buildPrompt(images.length) },
+          { type: 'text' as const, text: buildPrompt(images.length) + hint },
         ],
       },
     ],
   });
-  const ms = Date.now() - started;
+  const ms = Date.now() - started + (textract?.ms ?? 0);
   const usage = usageOf(message.usage);
-  const usd = costUsd(usage, priceOf(request.model, request.price)!);
+  const usd = costUsd(usage, priceOf(request.model, request.price)!) + (textract?.usd ?? 0);
 
   if (message.stop_reason === 'refusal') throw new Spent(usd, new Error('refusal'));
   const text = message.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
@@ -342,6 +375,7 @@ async function runOcr(request: BenchRequest, sample: Sample, anthropic: Anthropi
     usage,
     servedModel: message.model,
     stopReason: message.stop_reason,
+    ...(textract ? { textract } : {}),
     ocr: scoreOcr(sample.receipt, draft),
   };
 }
@@ -418,11 +452,12 @@ async function runClassify(request: BenchRequest, sample: Sample, anthropic: Ant
   };
 }
 
-async function loadImage(key: string): Promise<{ base64: string; mediaType: string }> {
+async function loadImage(key: string): Promise<{ base64: string; mediaType: string; bytes: Uint8Array }> {
   try {
     const object = await s3.send(new GetObjectCommand({ Bucket: RECEIPT_BUCKET, Key: key }));
     if (!object.Body) throw new Skip('image_missing');
-    return toOcrImage(await object.Body.transformToByteArray());
+    const bytes = await object.Body.transformToByteArray();
+    return { ...toOcrImage(bytes), bytes };
   } catch (cause) {
     // 写真は 90 日で消える（data-stack の lifecycle）。消えていたレシートは測らずに飛ばす
     if (cause instanceof NoSuchKey) throw new Skip('image_expired');
@@ -489,6 +524,7 @@ export function summarize(outcomes: Outcome[]): Record<string, unknown> {
     { input: 0, output: 0, thinking: 0, cacheRead: 0, cacheWrite: 0 } as ClaudeUsage,
   );
   const servedModels = [...new Set(ok.flatMap((outcome) => (outcome.servedModel ? [outcome.servedModel] : [])))];
+  const textract = ok.flatMap((outcome) => (outcome.textract ? [outcome.textract] : []));
 
   const base = {
     ok: ok.length,
@@ -501,6 +537,16 @@ export function summarize(outcomes: Outcome[]): Record<string, unknown> {
     msP90: percentile(ms, 0.9),
     tokens,
     servedModels,
+    ...(textract.length > 0
+      ? {
+          // Textract の分だけの内訳（usd と ms の合計には含めてある）
+          textract: {
+            usd: round(textract.reduce((sum, t) => sum + t.usd, 0), 4),
+            msMean: Math.round(textract.reduce((sum, t) => sum + t.ms, 0) / textract.length),
+            linesMean: round(textract.reduce((sum, t) => sum + t.lines, 0) / textract.length, 1),
+          },
+        }
+      : {}),
   };
 
   const ocr = ok.flatMap((outcome) => ('ocr' in outcome ? [outcome.ocr] : []));
