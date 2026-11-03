@@ -337,27 +337,30 @@ async function runOcr(request: BenchRequest, sample: Sample, anthropic: Anthropi
   }
 
   const started = Date.now();
-  const message = await anthropic.messages.create({
-    model: request.model,
-    max_tokens: OCR_MAX_TOKENS,
-    output_config: { effort: request.effort },
-    messages: [
-      {
-        role: 'user',
-        content: [
-          ...images.map((image) => ({
-            type: 'image' as const,
-            source: {
-              type: 'base64' as const,
-              media_type: image.mediaType as 'image/jpeg' | 'image/png' | 'image/webp',
-              data: image.base64,
-            },
-          })),
-          { type: 'text' as const, text: buildPrompt(images.length) + hint },
-        ],
-      },
-    ],
-  });
+  // Textract の分は Claude が落ちても掛かっている。予算に数えるため Spent で包む（runClassify と同じ）
+  const message = await spentOnFailure(textract?.usd ?? 0, () =>
+    anthropic.messages.create({
+      model: request.model,
+      max_tokens: OCR_MAX_TOKENS,
+      output_config: { effort: request.effort },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            ...images.map((image) => ({
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: image.mediaType as 'image/jpeg' | 'image/png' | 'image/webp',
+                data: image.base64,
+              },
+            })),
+            { type: 'text' as const, text: buildPrompt(images.length) + hint },
+          ],
+        },
+      ],
+    }),
+  );
   const ms = Date.now() - started + (textract?.ms ?? 0);
   const usage = usageOf(message.usage);
   const usd = costUsd(usage, priceOf(request.model, request.price)!) + (textract?.usd ?? 0);
@@ -378,6 +381,15 @@ async function runOcr(request: BenchRequest, sample: Sample, anthropic: Anthropi
     ...(textract ? { textract } : {}),
     ocr: scoreOcr(sample.receipt, draft),
   };
+}
+
+/** 先に費用の掛かった呼び出しが落ちたら、掛かった分を持たせて投げ直す */
+async function spentOnFailure<T>(spentBefore: number, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (cause) {
+    throw spentBefore > 0 ? new Spent(spentBefore, cause) : cause;
+  }
 }
 
 async function runClassify(request: BenchRequest, sample: Sample, anthropic: Anthropic | undefined): Promise<Outcome> {
