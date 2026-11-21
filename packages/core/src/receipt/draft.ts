@@ -74,12 +74,12 @@ export function normalizeDraft(text: string, today: Date = new Date()): Normaliz
   const toAmount = (value: number) => toMinor(value, currency);
   const money = (value: number) => formatMoney(value, currency);
 
-  let unreadable = 0;
+  const unpriced: string[] = [];
   const items = (Array.isArray(parsed.items) ? (parsed.items as RawItem[]) : [])
     .map((item) => {
       const name = typeof item.name === 'string' ? item.name.trim() : '';
       const amount = toNumber(item.amount);
-      if (name !== '' && amount === undefined) unreadable += 1;
+      if (name !== '' && amount === undefined) unpriced.push(name);
       if (name === '' || amount === undefined) return undefined;
       return {
         name,
@@ -89,13 +89,24 @@ export function normalizeDraft(text: string, today: Date = new Date()): Normaliz
       };
     })
     .filter((item): item is DraftItem => item !== undefined);
-  if (unreadable > 0) warnings.push(`金額を読めなかった品目が ${unreadable} 件あります。手で足してください。`);
 
   const rawTotal = toNumber(parsed.total);
   const total = rawTotal === undefined ? undefined : toAmount(rawTotal);
 
   const flipped = total === undefined ? undefined : flipDiscount(items, total);
   if (flipped) warnings.push(`「${flipped.name}」を値引き（${money(flipped.amount)}）として入れました。違っていたら直してください。`);
+
+  const filled = total === undefined ? undefined : fillUnpriced(items, unpriced, total);
+  if (filled) {
+    items.push(filled);
+    warnings.push(
+      unpriced.length === 1
+        ? `「${filled.name}」は金額が無かったので、合計から他の品目を引いた ${money(filled.amount)} にしました。`
+        : `金額の無い品目 ${unpriced.length} 件を 1 行にまとめ、合計から他の品目を引いた ${money(filled.amount)} にしました。分けるなら手で直してください。`,
+    );
+  } else if (unpriced.length > 0) {
+    warnings.push(`金額を読めなかった品目が ${unpriced.length} 件あります。手で足してください。`);
+  }
 
   const itemsTotal = items.reduce((sum, item) => sum + item.amount, 0);
   if (total === undefined) warnings.push('合計を読み取れませんでした。入れ直してください。');
@@ -147,6 +158,27 @@ function flipDiscount(items: DraftItem[], total: number): DraftItem | undefined 
   // 正の金額で付けたカテゴリ（食費など）のままだと、値引きが品目の側に混ざる
   target.categoryId = classifyItem(target.name, undefined, target.amount);
   return target;
+}
+
+/** まとめた行の名前に並べる品目名の数。多いと品目名の欄に収まらない */
+const UNPRICED_NAMES = 3;
+
+/**
+ * 金額の無い品目に、合計から他の品目を引いた残りを当てる。
+ * Amazon の注文履歴の一覧のように、品目名は並ぶのに品目ごとの値段が出ない画面がある。
+ * 捨てると品目が空のレシートになり、明細が「レシートあり」なのに何を買ったか分からなくなる。
+ * 1 件ならその品目に、複数なら按分の根拠が無いので 1 行にまとめて品目名を並べる。
+ * 残りが 0 以下なら、どこかの読み違いなので当てずに知らせるだけにする。
+ */
+function fillUnpriced(items: DraftItem[], names: string[], total: number): DraftItem | undefined {
+  if (names.length === 0) return undefined;
+  const rest = total - items.reduce((sum, item) => sum + item.amount, 0);
+  if (rest <= 0) return undefined;
+  const name =
+    names.length <= UNPRICED_NAMES
+      ? names.join('・')
+      : `${names.slice(0, UNPRICED_NAMES).join('・')} ほか ${names.length - UNPRICED_NAMES} 点`;
+  return { name, amount: rest, categoryId: classifyItem(names[0], undefined, rest) };
 }
 
 /** 日本時間の今日から見て、レシートの日付として不自然なら理由を返す */

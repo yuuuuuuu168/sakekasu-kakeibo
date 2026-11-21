@@ -107,6 +107,39 @@ describe('normalizeDraft', () => {
     expect(warnings).toContain('合計を読み取れませんでした');
   });
 
+  it('金額の無い品目が 1 件なら、合計から他の品目を引いた額を当てる', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"Amazon","date":"2026-11-19","total":946,"items":[{"name":"送料","amount":0},{"name":"USB-C ケーブル","amount":null}]}',
+      new Date('2026-11-21T12:00:00+09:00'),
+    );
+    expect(draft.items.map((item) => [item.name, item.amount])).toEqual([
+      ['送料', 0],
+      ['USB-C ケーブル', 946],
+    ]);
+    expect(draft.warnings.join('')).toContain('「USB-C ケーブル」は金額が無かったので');
+    expect(draft.warnings.join('')).not.toContain('品目を読み取れませんでした');
+  });
+
+  it('金額の無い品目が複数なら、1 行にまとめて品目名を並べる（注文履歴の一覧）', () => {
+    const names = ['ケーブル', '電池', 'ノート', '洗剤'];
+    const draft = normalizeDraft(
+      JSON.stringify({ storeName: 'Amazon', date: '2026-11-16', total: 3380, items: names.map((name) => ({ name, amount: null })) }),
+      new Date('2026-11-21T12:00:00+09:00'),
+    );
+    expect(draft.items).toHaveLength(1);
+    expect(draft.items[0]).toMatchObject({ name: 'ケーブル・電池・ノート ほか 1 点', amount: 3380 });
+    expect(draft.warnings.join('')).toContain('金額の無い品目 4 件を 1 行にまとめ');
+  });
+
+  it('他の品目だけで合計に届いているなら、金額の無い品目には当てずに知らせる', () => {
+    const draft = normalizeDraft(
+      '{"storeName":"店","date":"2026-11-19","total":150,"items":[{"name":"おにぎり","amount":150},{"name":"お茶","amount":null}]}',
+      new Date('2026-11-21T12:00:00+09:00'),
+    );
+    expect(draft.items).toHaveLength(1);
+    expect(draft.warnings.join('')).toContain('金額を読めなかった品目が 1 件');
+  });
+
   it('先の日付や 1 年以上前の日付は読み違いを疑う', () => {
     const today = new Date('2026-09-08T12:00:00+09:00');
     const body = (date: string) => `{"storeName":"店","date":"${date}","total":150,"items":[{"name":"おにぎり","amount":150}]}`;
