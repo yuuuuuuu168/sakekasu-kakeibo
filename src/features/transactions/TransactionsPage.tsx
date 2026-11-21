@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeftRight, Copy, Scissors, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, Copy, Receipt as ReceiptIcon, Scissors, Tag, Trash2 } from 'lucide-react';
 import {
   TRANSFER_ID,
   UNCATEGORIZED_ID,
@@ -33,7 +33,7 @@ import { MonthPicker } from '../../components/ui/MonthPicker';
 import { SplitDialog } from './SplitDialog';
 import { useAction } from '../../lib/action';
 import { currentMonth } from '../../lib/month';
-import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER } from '../../lib/router';
+import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER, receiptPath } from '../../lib/router';
 
 export function TransactionsPage({ month: initialMonth, filter: initialFilter }: { month?: string; filter?: string }) {
   const { snapshot, rules, saveTransaction, saveTransactions, saveReceipt, removeTransaction, saveRules } = useStore();
@@ -90,6 +90,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
   }, [snapshot.transactions, snapshot.categories, month, filter]);
 
   const total = rows.reduce((sum, txn) => sum + txn.amount, 0);
+  const receiptById = useMemo(() => new Map(snapshot.receipts.map((receipt) => [receipt.id, receipt])), [snapshot.receipts]);
 
   /**
    * カテゴリを直したら、同じ店は今後も同じカテゴリになるようルールを増やす。
@@ -207,7 +208,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                         <span className="truncate text-sm font-medium text-ink">{txn.rawMerchant || '（店名なし）'}</span>
                         <span className="text-xs text-muted">{txn.sourceLabel}</span>
                         {txn.needsDetail && <Badge tone="accent">内訳待ち</Badge>}
-                        {txn.receiptId && <Badge tone="good">レシートあり</Badge>}
+                        {txn.receiptId && <ReceiptLink txn={txn} receipt={receiptById.get(txn.receiptId)} />}
                         {isTransfer(txn) && <Badge tone="neutral">振替・集計外</Badge>}
                         {misfiled.some((item) => item.id === txn.id) && <Badge tone="warning">チャージらしい</Badge>}
                       </div>
@@ -224,7 +225,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                           ))}
                         </ul>
                       ) : (
-                        <div className="mt-1.5">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
                           <Select
                             value={txn.splits[0]?.categoryId ?? UNCATEGORIZED_ID}
                             onChange={(event) => {
@@ -236,6 +237,8 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                           >
                             <CategoryOptions categories={categories} />
                           </Select>
+                          {/* 品目が 1 つのレシートでも、何を買ったかが見えないとカテゴリを選べない */}
+                          {txn.splits[0]?.name && <span className="min-w-0 truncate text-xs text-muted">{txn.splits[0].name}</span>}
                         </div>
                       )}
                     </div>
@@ -285,6 +288,27 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 「レシートあり」は、そのレシートを開いた状態のレシート画面へのリンクにする。
+ * Amazon のように店名だけではカテゴリが決まらない明細は、品目を見て直すしかないため。
+ * レシート側で品目のカテゴリを直すと、紐付けた明細の内訳も合わせ直される。
+ * レシートが消えて ID だけ残っている明細は、飛び先がないのでバッジだけ出す
+ */
+function ReceiptLink({ txn, receipt }: { txn: Transaction; receipt?: Receipt }) {
+  if (!receipt) return <Badge tone="good">レシートあり</Badge>;
+  return (
+    <a
+      href={receiptPath(receipt.id)}
+      className="inline-flex items-center gap-1 rounded-md bg-good/12 px-1.5 py-0.5 text-xs font-medium text-success-text underline-offset-2 hover:underline"
+      aria-label={`${txn.rawMerchant || '店名なし'} のレシートを開く（${receipt.items.length} 品）`}
+      title="レシートを開いて品目とカテゴリを見る"
+    >
+      <ReceiptIcon size={12} aria-hidden />
+      レシートあり・{receipt.items.length} 品
+    </a>
   );
 }
 

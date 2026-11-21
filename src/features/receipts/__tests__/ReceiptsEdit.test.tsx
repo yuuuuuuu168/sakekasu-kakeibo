@@ -117,3 +117,25 @@ describe('保存済みのレシートを開いて直す', () => {
     expect(screen.getByText('レシートを直す')).toBeInTheDocument();
   });
 });
+
+describe('明細の「レシートあり」から開く', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.scrollTo = vi.fn() as typeof window.scrollTo;
+    load([TULLYS], [MADE]);
+    window.history.replaceState(null, '', '/#/?receipt=r-1');
+  });
+
+  it('ID のレシートを開いた状態で始まり、ハッシュから ID を外す', () => {
+    render(<ReceiptsPage receiptId="r-1" />);
+    expect(screen.getByText('レシートを直す')).toBeInTheDocument();
+    expect(screen.getByLabelText('店名')).toHaveValue('タリーズコーヒー 横浜コネクトスクエア店');
+    expect(window.location.hash).toBe('#/');
+  });
+
+  it('見つからない ID なら、開かずにそう伝える', () => {
+    render(<ReceiptsPage receiptId="r-missing" />);
+    expect(screen.queryByText('レシートを直す')).not.toBeInTheDocument();
+    expect(screen.getByText(/開こうとしたレシートが見つかりませんでした/)).toBeInTheDocument();
+  });
+});

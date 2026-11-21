@@ -118,6 +118,6 @@ function Page() {
     case 'settings':
       return <SettingsPage />;
     default:
-      return <ReceiptsPage />;
+      return <ReceiptsPage receiptId={route.name === 'receipts' ? route.receipt : undefined} />;
   }
 }

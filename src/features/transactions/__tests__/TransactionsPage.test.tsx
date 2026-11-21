@@ -334,3 +334,46 @@ describe('TransactionsPage のカテゴリの絞り込み', () => {
     expect(screen.queryByText('AMAZON.CO.JP')).not.toBeInTheDocument();
   });
 });
+
+describe('TransactionsPage のレシートあり', () => {
+  const RECEIPT: Receipt = {
+    id: 'r-amazon',
+    storeName: 'Amazon',
+    date: '2026-11-19',
+    total: 640,
+    items: [{ name: 'USB-C ケーブル', amount: 640 }],
+    status: 'matched',
+    txnId: 'amz1',
+    createdAt: '2026-11-20T00:00:00.000Z',
+  };
+  const LINKED: Transaction = {
+    id: 'amz1',
+    date: '2026-11-19',
+    amount: 640,
+    rawMerchant: 'Amazon',
+    merchant: 'Amazon',
+    source: 'credit',
+    sourceLabel: 'クレジットカード',
+    splits: [{ id: 'split-1', name: 'USB-C ケーブル', amount: 640, categoryId: 'uncategorized', origin: 'receipt' }],
+    needsDetail: false,
+    receiptId: 'r-amazon',
+  };
+
+  it('紐付いたレシートを開くリンクになり、品目名も見える', () => {
+    store.snapshot = { ...store.snapshot, categories: SEED_CATEGORIES, transactions: [LINKED], receipts: [RECEIPT] };
+    store.rules = allRules([]);
+    render(<TransactionsPage month="2026-11" filter="all" />);
+
+    const link = screen.getByRole('link', { name: 'Amazon のレシートを開く（1 品）' });
+    expect(link).toHaveAttribute('href', '#/?receipt=r-amazon');
+    expect(screen.getByText('USB-C ケーブル')).toBeInTheDocument();
+  });
+
+  it('レシートが消えて ID だけ残っているなら、リンクにせずバッジだけ出す', () => {
+    store.snapshot = { ...store.snapshot, categories: SEED_CATEGORIES, transactions: [LINKED], receipts: [] };
+    render(<TransactionsPage month="2026-11" filter="all" />);
+
+    expect(screen.getByText('レシートあり')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /レシートを開く/ })).not.toBeInTheDocument();
+  });
+});

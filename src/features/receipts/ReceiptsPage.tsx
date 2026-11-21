@@ -62,7 +62,7 @@ import { shrinkPhoto } from './shrinkPhoto';
  * ここに置くのは画面の状態と保存の流れだけ。下書きの扱いは draft.ts、写真を読む流れは readPhotos.ts、
  * 欄や一覧は DraftEditor などの部品にある。
  */
-export function ReceiptsPage() {
+export function ReceiptsPage({ receiptId }: { receiptId?: string } = {}) {
   const { snapshot, saveReceipt, removeReceipt, saveTransaction, saveTransactions, removeTransaction, saveRules } = useStore();
   const cameraRef = useRef<HTMLInputElement>(null);
   // 撮るのとは別の入力にする。capture を付けるとスマホはカメラしか開かず、撮り溜めた写真を選べない
@@ -249,6 +249,22 @@ export function ReceiptsPage() {
     clear();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  /**
+   * 明細の「レシートあり」から来たとき（`#/?receipt=…`）は、そのレシートを開いた状態で始める。
+   * 開いたらハッシュから ID を外しておく。残すと、閉じたあとに読み込み直したとき勝手にまた開く
+   */
+  const openedFromLink = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!receiptId || openedFromLink.current === receiptId) return;
+    openedFromLink.current = receiptId;
+    const receipt = snapshot.receipts.find((item) => item.id === receiptId);
+    if (receipt) openReceipt(receipt);
+    else info('開こうとしたレシートが見つかりませんでした。消されたのかもしれません。');
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/`);
+    // 開くのはリンクで来たときの 1 回だけ。保存のたびに snapshot が変わっても開き直さない
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptId]);
 
   function closeDraft() {
     setDraft(undefined);
