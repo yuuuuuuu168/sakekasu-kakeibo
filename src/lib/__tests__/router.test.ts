@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER, ROUTES, parseHash } from '../router';
+import { DUPLICATES_FILTER, NEEDS_DETAIL_FILTER, ROUTES, parseHash, receiptPath } from '../router';
 
 describe('ROUTES', () => {
   it('タブは使う順に並び、設定は含まない', () => {
@@ -25,6 +25,10 @@ describe('parseHash', () => {
     expect(parseHash('')).toEqual({ name: 'receipts' });
     expect(parseHash('#/')).toEqual({ name: 'receipts' });
     expect(parseHash('#/knowhere')).toEqual({ name: 'receipts' });
+  });
+
+  it('レシートの ID を付けると、そのレシートを開いたレシート画面になる', () => {
+    expect(parseHash(receiptPath('r-1 2'))).toEqual({ name: 'receipts', receipt: 'r-1 2' });
   });
 
   it('ダッシュボードは自分のパスを持つ', () => {

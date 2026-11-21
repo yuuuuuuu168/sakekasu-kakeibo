@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
  * タブに出すのは 5 枚で、設定（カテゴリと上限）は歯車から開く。
  */
 export type Route =
-  | { name: 'receipts' }
+  | { name: 'receipts'; receipt?: string }
   | { name: 'transactions'; month?: string; filter?: string }
   | { name: 'import' }
   | { name: 'dashboard' }
@@ -31,6 +31,11 @@ export const SETTINGS_PATH = '#/settings';
 export const NEEDS_DETAIL_FILTER = 'needsDetail';
 export const DUPLICATES_FILTER = 'duplicates';
 
+/** 保存済みのレシートを開いた状態のレシート画面。明細の「レシートあり」から飛ぶ */
+export function receiptPath(receiptId: string): string {
+  return `#/?receipt=${encodeURIComponent(receiptId)}`;
+}
+
 export function parseHash(hash: string): Route {
   const [path, query] = hash.replace(/^#\/?/, '').split('?');
   const params = new URLSearchParams(query ?? '');
@@ -54,7 +59,7 @@ export function parseHash(hash: string): Route {
     case 'categories':
       return { name: 'settings' };
     default:
-      return { name: 'receipts' };
+      return { name: 'receipts', ...(params.get('receipt') ? { receipt: params.get('receipt') as string } : {}) };
   }
 }
 
