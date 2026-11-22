@@ -15,6 +15,7 @@ import {
 } from '@kakeibo/core';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState } from '../../components/ui/primitives';
+import { Callout } from '../../components/ui/Callout';
 import { Meter } from '../../components/ui/Meter';
 import { StatTile } from '../../components/ui/StatTile';
 import { MonthPicker } from '../../components/ui/MonthPicker';
@@ -62,7 +63,7 @@ export function DashboardPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold text-ink">今月の様子</h1>
+        <h1 className="text-lg font-semibold text-ink">ダッシュボード</h1>
         <MonthPicker month={month} onChange={setMonth} />
       </div>
 
@@ -83,80 +84,88 @@ export function DashboardPage() {
         <StatTile
           label="超過している額"
           value={<span className="tnum">{formatYen(overTotal)}</span>}
-          note={overTotal > 0 ? '上限を超えたカテゴリの合計' : '超過なし'}
           tone={overTotal > 0 ? 'critical' : 'good'}
         />
         <StatTile
           label="内訳待ち"
           value={<span className="tnum">{summary.needsDetailCount} 件</span>}
-          note="レシートを当てれば確定する"
           tone={summary.needsDetailCount > 0 ? 'accent' : 'neutral'}
         />
       </div>
 
       {summary.needsDetailCount > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-accent/8 px-4 py-3 ring-1 ring-accent/20">
-          <ReceiptText size={18} className="text-accent" aria-hidden />
-          <p className="flex-1 text-sm text-ink">
-            内訳が未確定の明細が {summary.needsDetailCount} 件。この分のカテゴリ別の数字は当てになりません。
-          </p>
-          <Button variant="primary" size="sm" onClick={() => navigate('#/receipts')}>
-            レシートを当てる
-          </Button>
-          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${NEEDS_DETAIL_FILTER}`)}>
-            明細を見る
-          </Button>
-        </div>
+        <Callout
+          icon={ReceiptText}
+          tone="accent"
+          actions={
+            <>
+              <Button variant="primary" size="sm" onClick={() => navigate('#/receipts')}>
+                レシートを当てる
+              </Button>
+              <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${NEEDS_DETAIL_FILTER}`)}>
+                明細を見る
+              </Button>
+            </>
+          }
+        >
+          内訳が未確定の明細が {summary.needsDetailCount} 件。この分のカテゴリ別の数字は当てになりません。
+        </Callout>
       )}
 
       {duplicates.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
-          <Copy size={18} aria-hidden className="text-ink" />
-          <p className="flex-1 text-sm text-ink">
-            同じ支払いが二重に入っている可能性が {duplicates.length} 組。放っておくとカテゴリ別の実績が水増しされます。
-          </p>
-          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${DUPLICATES_FILTER}`)}>
-            確かめる
-          </Button>
-        </div>
+        <Callout
+          icon={Copy}
+          tone="warning"
+          actions={
+            <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${DUPLICATES_FILTER}`)}>
+              確かめる
+            </Button>
+          }
+        >
+          同じ支払いが二重に入っている可能性が {duplicates.length} 組。放っておくとカテゴリ別の実績が水増しされます。
+        </Callout>
       )}
 
       {misfiled.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
-          <ArrowLeftRight size={18} aria-hidden className="text-ink" />
-          <p className="flex-1 text-sm text-ink">
-            チャージらしい明細が {misfiled.length} 件、支出として計上されたままです。カードから残高へ移しただけの分なので、
-            このままだとカテゴリ別の実績が水増しされます。
-          </p>
-          <Button variant="primary" size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
-            振替にする
-          </Button>
-        </div>
+        <Callout
+          icon={ArrowLeftRight}
+          tone="warning"
+          actions={
+            <Button variant="primary" size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
+              振替にする
+            </Button>
+          }
+        >
+          チャージらしい明細が {misfiled.length} 件、支出として計上されたままです。カードから残高へ移しただけの分なので、このままだとカテゴリ別の実績が水増しされます。
+        </Callout>
       )}
 
       {summary.transferCount > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-plane px-4 py-3 ring-1 ring-grid">
-          <ArrowLeftRight size={18} aria-hidden className="text-ink-2" />
-          <p className="flex-1 text-sm text-ink-2">
-            残高へのチャージ {summary.transferCount} 件・{formatYen(summary.transferTotal)} は支出から外しています。使った分は
-            PayPay や Suica の利用明細のほうで数えます。
-          </p>
-          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
-            内訳を見る
-          </Button>
-        </div>
+        <Callout
+          icon={ArrowLeftRight}
+          actions={
+            <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${TRANSFER_ID}`)}>
+              内訳を見る
+            </Button>
+          }
+        >
+          残高へのチャージ {summary.transferCount} 件・{formatYen(summary.transferTotal)} は支出から外しています。使った分は
+          PayPay や Suica の利用明細のほうで数えます。
+        </Callout>
       )}
 
       {summary.uncategorizedTotal > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
-          <TriangleAlert size={18} aria-hidden className="text-ink" />
-          <p className="flex-1 text-sm text-ink">
-            未分類が {formatYen(summary.uncategorizedTotal)}。カテゴリを付けると、以降その店は自動で同じカテゴリになります。
-          </p>
-          <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${UNCATEGORIZED_ID}`)}>
-            片付ける
-          </Button>
-        </div>
+        <Callout
+          icon={TriangleAlert}
+          tone="warning"
+          actions={
+            <Button size="sm" onClick={() => navigate(`#/transactions?month=${month}&filter=${UNCATEGORIZED_ID}`)}>
+              片付ける
+            </Button>
+          }
+        >
+          未分類が {formatYen(summary.uncategorizedTotal)}。カテゴリを付けると、以降その店は自動で同じカテゴリになります。
+        </Callout>
       )}
 
       <Card title="カテゴリ別" action={<a href="#/settings" className="text-xs text-accent">上限を決める</a>}>
@@ -241,10 +250,10 @@ export function DashboardPage() {
         <Card title="よく使った店">
           <ul className="divide-y divide-grid">
             {merchants.map((merchant) => (
-              <li key={merchant.merchant} className="flex items-baseline justify-between gap-3 py-2">
-                <span className="truncate text-sm text-ink">{merchant.rawMerchant || merchant.merchant}</span>
-                <span className="shrink-0 text-xs text-muted">{merchant.count} 回</span>
-                <span className="tnum shrink-0 text-sm font-medium text-ink">{formatYen(merchant.amount)}</span>
+              <li key={merchant.merchant} className="flex items-baseline gap-3 py-2">
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">{merchant.rawMerchant || merchant.merchant}</span>
+                <span className="tnum w-10 shrink-0 text-right text-xs text-muted">{merchant.count} 回</span>
+                <span className="tnum w-20 shrink-0 text-right text-sm font-medium text-ink">{formatYen(merchant.amount)}</span>
               </li>
             ))}
           </ul>

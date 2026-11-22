@@ -132,7 +132,8 @@ export function AuthGate({ children }: { children: (signOutFn: () => Promise<voi
   return (
     <main className="signin-cover">
       <div className="signin-mark" aria-hidden="true">
-        💰
+        {/* 4 アプリ共通の表紙で、ポータルのアプリ一覧のタイルと同じ印。外すならポータルと全アプリで一緒に */}
+        💰 {/* check-ui-ignore */}
       </div>
       <h1 className="signin-title">家計簿</h1>
       <div className="signin-rule" aria-hidden="true">

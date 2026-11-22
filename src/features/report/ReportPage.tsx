@@ -120,7 +120,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
             <StatTile
               label="上限総額"
               value={<span className="tnum">{report.hasLimits ? formatYen(report.limitTotal) : '—'}</span>}
-              note={report.hasLimits ? undefined : 'カテゴリ設定から決める'}
+              note={report.hasLimits ? undefined : '設定で決める'}
             />
             <StatTile
               label="超過"
@@ -137,7 +137,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
                 </span>
               }
               note={report.previousTotal === undefined ? '前月の明細なし' : `前月 ${formatYen(report.previousTotal)}`}
-              tone={report.deltaFromPrevious !== undefined && report.deltaFromPrevious > 0 ? 'critical' : 'good'}
+              tone={report.deltaFromPrevious === undefined ? 'neutral' : report.deltaFromPrevious > 0 ? 'critical' : 'good'}
             />
           </div>
 
@@ -170,7 +170,7 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
 
           <Card title="カテゴリ別">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-md text-sm">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-grid text-left text-xs text-muted">
                     <th className="py-1.5 pr-2 font-medium">カテゴリ</th>
@@ -206,10 +206,10 @@ export function ReportPage({ month: initialMonth }: { month?: string }) {
             <Card title="使った額の多い店">
               <ul className="divide-y divide-grid">
                 {report.topMerchants.map((merchant) => (
-                  <li key={merchant.merchant} className="flex items-baseline justify-between gap-3 py-2">
-                    <span className="truncate text-sm text-ink">{merchant.rawMerchant || merchant.merchant}</span>
-                    <span className="shrink-0 text-xs text-muted">{merchant.count} 回</span>
-                    <span className="tnum shrink-0 text-sm font-medium text-ink">{formatYen(merchant.amount)}</span>
+                  <li key={merchant.merchant} className="flex items-baseline gap-3 py-2">
+                    <span className="min-w-0 flex-1 truncate text-sm text-ink">{merchant.rawMerchant || merchant.merchant}</span>
+                    <span className="tnum w-10 shrink-0 text-right text-xs text-muted">{merchant.count} 回</span>
+                    <span className="tnum w-20 shrink-0 text-right text-sm font-medium text-ink">{formatYen(merchant.amount)}</span>
                   </li>
                 ))}
               </ul>

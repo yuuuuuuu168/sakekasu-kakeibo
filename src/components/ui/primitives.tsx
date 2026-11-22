@@ -39,13 +39,22 @@ export function Button({ variant = 'ghost', size = 'md', className, ...rest }: B
 /** 幅を className で指定したときは、既定の w-full を付けない。両方あると w-full が勝ち、金額欄が横に伸びる */
 const WIDTH_CLASS = /(^|\s)w-/;
 
+/**
+ * 入力欄の文字は、狭い画面では 16px にする。iOS Safari は 16px 未満の欄にフォーカスすると画面を拡大し、
+ * そのまま戻らない。PC（sm 以上）では詰めた 14px。className で文字の大きさを渡したときはそちらに任せる
+ * （cn は同じ性質のクラスを片方に寄せないので、両方あるとどちらが勝つかが CSS の並び順しだいになる）
+ */
+const SIZE_CLASS = /(^|\s)text-(xs|sm|base|lg)(\s|$)/;
+const FIELD_TEXT = 'text-base sm:text-sm';
+
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...rest}
       className={cn(
         !WIDTH_CLASS.test(className ?? '') && 'w-full',
-        'rounded-lg bg-plane px-2.5 py-1.5 text-sm text-ink ring-1 ring-black/10 placeholder:text-muted dark:ring-white/10',
+        !SIZE_CLASS.test(className ?? '') && FIELD_TEXT,
+        'rounded-lg bg-plane px-2.5 py-1.5 text-ink ring-1 ring-black/10 placeholder:text-muted dark:ring-white/10',
         className,
       )}
     />
@@ -56,7 +65,11 @@ export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectEl
   return (
     <select
       {...rest}
-      className={cn('rounded-lg bg-plane px-2 py-1.5 text-sm text-ink ring-1 ring-black/10 dark:ring-white/10', className)}
+      className={cn(
+        !SIZE_CLASS.test(className ?? '') && FIELD_TEXT,
+        'rounded-lg bg-plane px-2 py-1.5 text-ink ring-1 ring-black/10 dark:ring-white/10',
+        className,
+      )}
     />
   );
 }
