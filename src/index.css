@@ -6,8 +6,9 @@
  * 色とフォントは共通テーマ（theme/sakekasu-theme.css、sakekasu-template から同期）の
  * --sk-* を、このアプリの色名に割り当てて使う。ライト/ダークの切り替えも共通テーマが持つ。
  * 上限の達成状況は status の 4 色（good / warning / serious / critical）で表し、
- * 色だけで意味を持たせないようにアイコンと文字を必ず添える。status は家計簿の判定の色なので、
- * 共通テーマに寄せずここで持つ。
+ * 色だけで意味を持たせないようにアイコンと文字を必ず添える。good と critical は共通テーマの
+ * success / danger をそのまま使い、ライトとダークで読める濃さをテーマに任せる。
+ * 黄と橙はテーマに当てはまる色が無い（--sk-warning は文字用の濃い茶）ので、ここで持つ。
  * 金額の棒は単一色相（アクセント）の magnitude 表現で、系列の色分けはしない。
  */
 @theme {
@@ -26,10 +27,10 @@
   --color-accent-weak: var(--sk-accent-weak);
   --color-accent-mid: color-mix(in srgb, var(--sk-accent) 55%, var(--sk-surface));
 
-  --color-good: #0ca30c;
+  --color-good: var(--sk-success);
   --color-warning: #fab219;
   --color-serious: #ec835a;
-  --color-critical: #d03b3b;
+  --color-critical: var(--sk-danger);
   --color-success-text: var(--sk-success);
 }
 

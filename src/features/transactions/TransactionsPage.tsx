@@ -29,6 +29,7 @@ import {
 import { CategoryOptions } from '../../components/CategoryOptions';
 import { useStore } from '../../api/store';
 import { Badge, Button, Card, EmptyState, Select } from '../../components/ui/primitives';
+import { Callout } from '../../components/ui/Callout';
 import { MonthPicker } from '../../components/ui/MonthPicker';
 import { SplitDialog } from './SplitDialog';
 import { useAction } from '../../lib/action';
@@ -143,8 +144,8 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold text-ink">明細</h1>
-        <div className="flex items-center gap-2">
-          <Select value={filter} onChange={(event) => setFilter(event.target.value)}>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          <Select value={filter} onChange={(event) => setFilter(event.target.value)} className="min-w-0 flex-1 sm:flex-none" aria-label="絞り込み">
             <option value="all">すべて</option>
             <option value={NEEDS_DETAIL_FILTER}>内訳待ちだけ</option>
             <option value={DUPLICATES_FILTER}>重複の可能性だけ</option>
@@ -156,28 +157,31 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
       </div>
 
       {misfiled.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
-          <ArrowLeftRight size={18} aria-hidden className="text-ink" />
-          <p className="flex-1 text-sm text-ink">
-            チャージらしい明細が {misfiled.length} 件、まだ支出として計上されています。振替にすると、この分がカテゴリ別の実績から外れます。
-          </p>
-          <Button variant="primary" size="sm" onClick={() => void run(markAllAsTransfer)}>
-            まとめて振替にする
-          </Button>
-        </div>
+        <Callout
+          icon={ArrowLeftRight}
+          tone="warning"
+          actions={
+            <Button variant="primary" size="sm" onClick={() => void run(markAllAsTransfer)}>
+              まとめて振替にする
+            </Button>
+          }
+        >
+          チャージらしい明細が {misfiled.length} 件、まだ支出として計上されています。振替にすると、この分がカテゴリ別の実績から外れます。
+        </Callout>
       )}
 
       {(discounts.transactions.length > 0 || discounts.receipts.length > 0) && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl bg-warning/12 px-4 py-3 ring-1 ring-warning/30">
-          <Tag size={18} aria-hidden className="text-ink" />
-          <p className="flex-1 text-sm text-ink">
-            値引きのカテゴリを作る前に入れた値引きが、明細 {discounts.transactions.length} 件・レシート {discounts.receipts.length} 枚に残っています
-            （全期間）。付け替えると、品目は値引き前の額になり、値引きは「値引き」の行に出ます。
-          </p>
-          <Button variant="primary" size="sm" onClick={() => void run(refileAllDiscounts)} disabled={refiling}>
-            値引きに付け替える
-          </Button>
-        </div>
+        <Callout
+          icon={Tag}
+          tone="warning"
+          actions={
+            <Button variant="primary" size="sm" onClick={() => void run(refileAllDiscounts)} disabled={refiling}>
+              値引きに付け替える
+            </Button>
+          }
+        >
+          値引きのカテゴリを作る前に入れた値引きが、明細 {discounts.transactions.length} 件・レシート {discounts.receipts.length} 枚に残っています（全期間）。付け替えると、品目は値引き前の額になり、値引きは「値引き」の行に出ます。
+        </Callout>
       )}
 
       {filter === DUPLICATES_FILTER ? (
@@ -232,7 +236,7 @@ export function TransactionsPage({ month: initialMonth, filter: initialFilter }:
                               const categoryId = event.target.value;
                               void run(() => recategorize(txn, categoryId));
                             }}
-                            className="text-xs"
+                            className="text-base sm:text-xs"
                             aria-label="カテゴリ"
                           >
                             <CategoryOptions categories={categories} />

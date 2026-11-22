@@ -69,7 +69,7 @@ export function DraftEditor({
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
-        <Field label="注文番号" hint="ネット通販の注文画面なら。同じ注文の二重登録に気づけます">
+        <Field label="注文番号" hint="ネット通販なら。同じ注文の二重登録に気づけます">
           <Input
             value={draft.orderNumber ?? ''}
             onChange={(event) => onChange({ ...draft, orderNumber: event.target.value })}

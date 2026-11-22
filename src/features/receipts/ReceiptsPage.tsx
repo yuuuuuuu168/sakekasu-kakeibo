@@ -404,7 +404,7 @@ export function ReceiptsPage({ receiptId }: { receiptId?: string } = {}) {
         <p className="mt-2 text-xs text-muted">
           {config.mode === 'local'
             ? 'ローカルモードでは OCR が使えません。品目を手で入れるか、AWS 側をデプロイしてください。'
-            : `写真を撮るか、カメラロールから選ぶと Claude が品目と金額を読み、金額と日付の近い明細に自動で当てます。1 枚に収まらない長いレシートは、分けて撮った写真をカメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。PC では、コピーした画像をこの画面で Ctrl+V（Mac は ⌘V）で貼り付けても読めます。`}
+            : `撮るか選ぶと品目と金額を読み、金額と日付の近い明細に当てます。長いレシートは分けて撮り、カメラロールから ${MAX_RECEIPT_PHOTOS} 枚までまとめて選ぶと 1 枚として読みます。PC では Ctrl+V（Mac は ⌘V）で画像を貼り付けても読めます。`}
         </p>
         {reading && <ReadingProgress reading={reading} />}
         {notice && (
