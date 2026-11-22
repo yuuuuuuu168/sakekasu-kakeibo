@@ -72,6 +72,14 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
         ],
       },
     },
+    "HttpApiPOSTdraftentriesMailInboxIntegrationPermission3D154838": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "MailInboxFunction8CD16E45",
+          "Arn",
+        ],
+      },
+    },
     "HttpApiPOSTproxyApiIntegrationPermissionF19E857A": {
       "FunctionName": {
         "Fn::GetAtt": [
@@ -95,6 +103,37 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
           "Arn",
         ],
       },
+    },
+    "MailInboxAuthFailureFilterD660C35D": {
+      "LogGroupName": {
+        "Ref": "MailInboxLogsDE5C568A",
+      },
+    },
+    "MailInboxAuthFailuresAlarmEC041FE0": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-inbox-auth-failures",
+    },
+    "MailInboxErrorsAlarm606ECBF6": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-inbox-errors",
+    },
+    "MailInboxFunction8CD16E45": {
+      "FunctionName": "sakekasu-kakeibo-dev-mail-inbox",
+    },
+    "MailInboxKeyExpiringAlarmEBBE0896": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-inbox-key-expiring",
+    },
+    "MailInboxKeyExpiringFilterA13AE40C": {
+      "LogGroupName": {
+        "Ref": "MailInboxLogsDE5C568A",
+      },
+    },
+    "MailInboxKeys1B8DB9A0": {
+      "Name": "sakekasu-kakeibo-dev-mail-inbox-keys",
+    },
+    "MailInboxLogsDE5C568A": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-mail-inbox",
+    },
+    "MailInboxThrottlesAlarmAA3047C0": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-inbox-throttles",
     },
     "ModelBenchFunction8F19D965": {
       "FunctionName": "sakekasu-kakeibo-dev-model-bench",
@@ -218,6 +257,9 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     "HttpApiPOSTclassifyC5D5A800": "AWS::ApiGatewayV2::Route",
     "HttpApiPOSTclassifyClassifyIntegration26F44F24": "AWS::ApiGatewayV2::Integration",
     "HttpApiPOSTclassifyClassifyIntegrationPermissionBBF02334": "AWS::Lambda::Permission",
+    "HttpApiPOSTdraftentriesCFA2DAA2": "AWS::ApiGatewayV2::Route",
+    "HttpApiPOSTdraftentriesMailInboxIntegrationA61707FE": "AWS::ApiGatewayV2::Integration",
+    "HttpApiPOSTdraftentriesMailInboxIntegrationPermission3D154838": "AWS::Lambda::Permission",
     "HttpApiPOSTproxyApiIntegrationPermissionF19E857A": "AWS::Lambda::Permission",
     "HttpApiPOSTproxyCBD28088": "AWS::ApiGatewayV2::Route",
     "HttpApiPOSTreceiptsanalyze05F0F112": "AWS::ApiGatewayV2::Route",
@@ -225,6 +267,17 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     "HttpApiPOSTreceiptsanalyzeApiIntegrationPermission1B047D96": "AWS::Lambda::Permission",
     "HttpApiPUTproxy52C9B2AF": "AWS::ApiGatewayV2::Route",
     "HttpApiPUTproxyApiIntegrationPermission3E835C00": "AWS::Lambda::Permission",
+    "MailInboxAuthFailureFilterD660C35D": "AWS::Logs::MetricFilter",
+    "MailInboxAuthFailuresAlarmEC041FE0": "AWS::CloudWatch::Alarm",
+    "MailInboxErrorsAlarm606ECBF6": "AWS::CloudWatch::Alarm",
+    "MailInboxFunction8CD16E45": "AWS::Lambda::Function",
+    "MailInboxFunctionServiceRole42B97254": "AWS::IAM::Role",
+    "MailInboxFunctionServiceRoleDefaultPolicyF51DFD2A": "AWS::IAM::Policy",
+    "MailInboxKeyExpiringAlarmEBBE0896": "AWS::CloudWatch::Alarm",
+    "MailInboxKeyExpiringFilterA13AE40C": "AWS::Logs::MetricFilter",
+    "MailInboxKeys1B8DB9A0": "AWS::SecretsManager::Secret",
+    "MailInboxLogsDE5C568A": "AWS::Logs::LogGroup",
+    "MailInboxThrottlesAlarmAA3047C0": "AWS::CloudWatch::Alarm",
     "ModelBenchFunction8F19D965": "AWS::Lambda::Function",
     "ModelBenchFunctionEventInvokeConfig48F4B62F": "AWS::Lambda::EventInvokeConfig",
     "ModelBenchFunctionRole81616D8D": "AWS::IAM::Role",
@@ -264,6 +317,14 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     },
     "ClassifyAvailabilitySlo": {},
     "ClassifyLogs38813EB7": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MailInboxKeys1B8DB9A0": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MailInboxLogsDE5C568A": {
       "DeletionPolicy": "Delete",
       "UpdateReplacePolicy": "Delete",
     },
@@ -331,6 +392,49 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     },
     "ClassifyFunctionServiceRole0927E4BC": {
       "cdkdName": "sakekasu-kakeibo-dev-api-ClassifyFunctionServiceRole0927E4BC",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+      },
+    },
+    "MailInboxFunctionServiceRole42B97254": {
+      "cdkdName": "sakekasu-kakeibo-dev-api-MailInboxFunctionServiceRole42B97254",
       "properties": {
         "AssumeRolePolicyDocument": {
           "Statement": [

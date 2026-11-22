@@ -10,3 +10,9 @@ export const userPk = (sub: string) => `${USER_PARTITION_PREFIX}${sub}`;
 
 export const isUserPartition = (pk: unknown): pk is string =>
   typeof pk === 'string' && pk.startsWith(USER_PARTITION_PREFIX);
+
+/**
+ * 下書き登録（Muse、infra/lambda/mail-inbox）の重複の印と 1 日の呼び出しの数を置くパーティション（`MAILINBOX#{sub}`）。
+ * 画面が読む保存データには混ぜない
+ */
+export const MAIL_INBOX_PARTITION_PREFIX = 'MAILINBOX#';

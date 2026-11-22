@@ -131,6 +131,17 @@ describe('レシートの組み立て', () => {
     expect(editedReceipt(opened, { ...draftFromReceipt(opened), orderNumber: '' })).not.toHaveProperty('orderNumber');
   });
 
+  it('メールから来たレシートは、開くとカード払いから始まり、直しても印が残る', () => {
+    const mail: Receipt = { ...receiptFromDraft(DRAFT, { asPayment: false, createdAt }), source: 'mail', messageId: '<m@x>' };
+    expect(draftFromReceipt(mail).paidWith).toBe('credit');
+    expect(editedReceipt(mail, { ...draftFromReceipt(mail), storeName: 'Amazon.co.jp' })).toMatchObject({
+      source: 'mail',
+      messageId: '<m@x>',
+      storeName: 'Amazon.co.jp',
+    });
+    expect(draftFromReceipt({ ...mail, source: undefined }).paidWith).toBe('cash');
+  });
+
   it('保存済みのレシートは、そのまま下書きに戻せる', () => {
     const saved = receiptFromDraft(DRAFT, { asPayment: true, createdAt });
     expect(draftFromReceipt(saved)).toMatchObject({ id: 'r-1', storeName: 'ローソン', total: 300, currency: 'JPY', paidWith: 'suica' });

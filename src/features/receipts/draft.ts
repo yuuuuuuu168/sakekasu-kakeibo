@@ -79,7 +79,8 @@ export function draftFromReceipt(receipt: Receipt): Draft {
     ...(receipt.exchangeRate !== undefined ? { exchangeRate: receipt.exchangeRate } : {}),
     ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
     ...(receipt.imageKeys ? { imageKeys: receipt.imageKeys } : {}),
-    paidWith: receipt.paidWith ?? 'cash',
+    // メールから来たもの（Muse）は通販のカード払いが前提。現金のまま登録すると、カードの明細と二重に数える
+    paidWith: receipt.paidWith ?? (receipt.source === 'mail' ? 'credit' : 'cash'),
     ...(receipt.orderNumber ? { orderNumber: receipt.orderNumber } : {}),
   };
 }

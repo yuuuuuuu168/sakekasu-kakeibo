@@ -5,6 +5,8 @@ import {
   ApiStack,
   CLASSIFY_BURST_LIMIT,
   CLASSIFY_RATE_LIMIT,
+  MAIL_INBOX_BURST_LIMIT,
+  MAIL_INBOX_RATE_LIMIT,
   OCR_START_BURST_LIMIT,
   OCR_START_RATE_LIMIT,
   OCR_TIMEOUT_SECONDS,
@@ -98,14 +100,51 @@ describe('DataStack', () => {
 });
 
 describe('ApiStack', () => {
-  it('すべての経路に Cognito の認可を付ける', () => {
+  /*
+   * 例外は下書き登録（Muse から呼ぶ POST /draft-entries）だけ。Muse はブラウザでログインできないので、
+   * 関数の中で HMAC の署名を確かめる（infra/lambda/mail-inbox）。ほかの経路が外れたら落とす。
+   */
+  it('下書き登録の経路を除き、すべての経路に Cognito の認可を付ける', () => {
     const template = Template.fromStack(stacks().api);
     template.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', { AuthorizerType: 'JWT' });
-    const routes = template.findResources('AWS::ApiGatewayV2::Route');
-    expect(Object.keys(routes).length).toBeGreaterThan(0);
-    for (const route of Object.values(routes)) {
-      expect(route.Properties.AuthorizationType).toBe('JWT');
-    }
+    const routes = Object.values(template.findResources('AWS::ApiGatewayV2::Route'));
+    expect(routes.length).toBeGreaterThan(0);
+    const open = routes.filter((route) => route.Properties.AuthorizationType !== 'JWT');
+    expect(open.map((route) => [route.Properties.RouteKey, route.Properties.AuthorizationType])).toEqual([
+      ['POST /draft-entries', 'NONE'],
+    ]);
+  });
+
+  it('下書き登録の経路は、署名を確かめる関数に向け、流量を絞る', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-mail-inbox',
+      ReservedConcurrentExecutions: 2,
+      Environment: { Variables: Match.objectLike({ MAIL_INBOX_SECRET_ID: Match.anyValue(), CLASSIFY_FUNCTION_NAME: Match.anyValue() }) },
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      RouteSettings: Match.objectLike({
+        'POST /draft-entries': { ThrottlingRateLimit: MAIL_INBOX_RATE_LIMIT, ThrottlingBurstLimit: MAIL_INBOX_BURST_LIMIT },
+      }),
+    });
+  });
+
+  /*
+   * 下書き登録の関数が触れるのは、利用者のパーティション（レシート）と重複の印のパーティションだけ。
+   * 消す権限は持たせない（鍵でできるのはレシートを 1 枚足すことだけ）。
+   */
+  it('下書き登録の関数はテーブルを 2 つのパーティションに絞り、消す権限を持たない', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes('MailInboxFunction'),
+    );
+    const statements = policies.flatMap((policy) => policy.Properties.PolicyDocument.Statement as Record<string, unknown>[]);
+    const actions = statements.flatMap((statement) => [statement.Action].flat()) as string[];
+    expect(actions.some((action) => action.startsWith('dynamodb:Delete') || action === 'dynamodb:*')).toBe(false);
+    const table = statements.find((statement) => [statement.Action].flat().includes('dynamodb:PutItem'));
+    expect(table?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*', 'MAILINBOX#*'] },
+    });
   });
 
   /*
@@ -263,12 +302,14 @@ describe('ApiStack', () => {
     });
   });
 
-  it('カテゴリ判定の API キーは値を持たないシークレットとして作る', () => {
+  it('API キーと下書き登録の鍵は、値を持たないシークレットとして作る', () => {
     const template = Template.fromStack(stacks().api);
     const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret'));
-    expect(secrets).toHaveLength(1);
-    expect(secrets[0].Properties.SecretString).toBeUndefined();
-    expect(secrets[0].Properties.Name).toBe('sakekasu-kakeibo-test-typesafe-api-key');
+    expect(secrets.map((secret) => secret.Properties.Name).sort()).toEqual([
+      'sakekasu-kakeibo-test-mail-inbox-keys',
+      'sakekasu-kakeibo-test-typesafe-api-key',
+    ]);
+    for (const secret of secrets) expect(secret.Properties.SecretString).toBeUndefined();
   });
 
   /*
@@ -352,8 +393,8 @@ describe('ApiStack', () => {
   it('カスタムリソースを作らない（ロググループは明示して作る）', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
-    // api / ocr-receipt / classify / monthly-report / model-bench
-    template.resourceCountIs('AWS::Logs::LogGroup', 5);
+    // api / ocr-receipt / classify / monthly-report / model-bench / mail-inbox
+    template.resourceCountIs('AWS::Logs::LogGroup', 6);
   });
 
   /*

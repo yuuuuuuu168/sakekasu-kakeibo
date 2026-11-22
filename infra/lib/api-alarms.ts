@@ -25,6 +25,8 @@ function logLineAlarm(
     /** 指標の名前とアラームの名前 */
     name: string;
     description: string;
+    /** 5 分に何回出たら鳴らすか。無ければ 1 回 */
+    threshold?: number;
   },
 ): void {
   const filter = new logs.MetricFilter(scope, props.filterId, {
@@ -39,7 +41,7 @@ function logLineAlarm(
     alarmName: props.name,
     description: props.description,
     metric: filter.metric({ period: FIVE_MINUTES, statistic: 'Sum' }),
-    threshold: 1,
+    threshold: props.threshold ?? 1,
   });
 }
 
@@ -61,6 +63,7 @@ export function addApiAlarms(
     functions: { key: string; fn: IFunction; what: string }[];
     reportLogGroup: logs.ILogGroup;
     ocrLogGroup: logs.ILogGroup;
+    mailInboxLogGroup: logs.ILogGroup;
     /** OCR が Claude API から Bedrock に読み直した回数を見るか（ID 連携があるときだけ） */
     watchFallback: boolean;
     /** 月次レポートを呼ぶ EventBridge のルール名（説明文と次元に使う。トークンにしないため文字列で渡す） */
@@ -139,6 +142,42 @@ export function addApiAlarms(
         '（docs/operations.md の「Claude API の ID 連携」）を疑う。',
     });
   }
+
+  /*
+   * 下書き登録（Muse）の認証失敗。1 回なら時計のずれや Muse 側の書き損じもありうるので、
+   * 5 分に 3 回で鳴らす。鍵の総当たりか、鍵の差し替え漏れ（期限切れ・失効）を疑う。
+   * シークレットが読めないときも全部 401 になるので、ここで拾える。
+   */
+  logLineAlarm(scope, alarms, {
+    filterId: 'MailInboxAuthFailureFilter',
+    alarmId: 'MailInboxAuthFailuresAlarm',
+    logGroup: props.mailInboxLogGroup,
+    // infra/lambda/mail-inbox/index.ts の console.warn の文言と合わせる
+    literal: '[mail-inbox] auth-failed',
+    name: `${prefix}-mail-inbox-auth-failures`,
+    threshold: 3,
+    description:
+      '下書き登録 API（Muse）の認証失敗が続いています。' +
+      `まず CloudWatch Logs の /aws/lambda/${prefix}-mail-inbox で「認証失敗」の行の「理由」を見る。` +
+      '鍵の期限切れなら差し替え、身に覚えのない呼び出しなら鍵を失効させる（docs/operations.md の「下書き登録の鍵」）。',
+  });
+
+  /*
+   * 下書き登録の鍵の期限が 14 日を切った。Muse が呼ぶたびに 1 行出るので、そのたびに鳴る。
+   * 呼ばれない日は鳴らない（期限は鍵を発行したときに手元にも控えておく）。
+   */
+  logLineAlarm(scope, alarms, {
+    filterId: 'MailInboxKeyExpiringFilter',
+    alarmId: 'MailInboxKeyExpiringAlarm',
+    logGroup: props.mailInboxLogGroup,
+    // infra/lambda/mail-inbox/index.ts の console.warn の文言と合わせる
+    literal: '[mail-inbox] key-expiring',
+    name: `${prefix}-mail-inbox-key-expiring`,
+    description:
+      '下書き登録 API（Muse）の鍵の期限が 14 日を切りました。' +
+      `まず CloudWatch Logs の /aws/lambda/${prefix}-mail-inbox で「key-expiring」の行の鍵の ID と残り日数を見る。` +
+      '新しい鍵を発行して Muse の入力フォームから差し替え、古い鍵を一覧から消す（docs/operations.md の「下書き登録の鍵」）。',
+  });
 
   /*
    * 月次レポートの失敗は 2 通り拾う。

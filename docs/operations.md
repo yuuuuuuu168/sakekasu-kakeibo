@@ -327,6 +327,46 @@ fields @timestamp, @message
 | stats count() as n, avg(input) as avgInput, avg(output) as avgOutput by provider
 ```
 
+### 6.6 下書き登録の鍵（Muse）
+
+通販のメールから下書きを置く API（[mail-inbox.md](mail-inbox.md)）の署名の鍵。使わないなら入れなくてよい
+（入れ物は CDK が乱数で作るので、そのままでは全部の呼び出しが 401 になる）。
+鍵の値は Secrets Manager の `sakekasu-kakeibo-<env>-mail-inbox-keys` に、`{ "keys": [...] }` の形で入れる。
+1 件は `{ "id", "secret", "sub", "expiresAt" }` で、`sub` は下書きを入れる利用者（上の「共通ログインへの切り替え」の
+コマンドで調べる）。値の読み書きは管理者のプロファイルで行う（読み取り専用の `verify` では読めない）。
+
+発行する（初回と、90 日ごとの差し替え）。
+
+```sh
+cd infra
+# 初回は current.json を作らず、--current を外す
+aws secretsmanager get-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --query SecretString --output text > current.json
+npx tsx scripts/mail-inbox-key.ts issue --sub <sub> --current current.json > next.json
+aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --secret-string file://next.json
+rm current.json next.json
+```
+
+標準エラーに出た「鍵の ID」と「秘密の鍵」を、Muse の安全な入力フォームに入れる。チャットには貼らない。
+差し替えの間は新旧の鍵が両方効く。Muse が新しい鍵で呼べたのを CloudWatch Logs の `[mail-inbox]` の行
+（`鍵` の欄）で確かめてから、古い鍵を失効させる。期限の切れた鍵は、次に発行したときに一覧から落ちる。
+
+失効させる（漏れた疑いがあるとき）。
+
+```sh
+aws secretsmanager get-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --query SecretString --output text > current.json
+npx tsx scripts/mail-inbox-key.ts revoke --id <鍵の ID> --current current.json > next.json
+aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --secret-string file://next.json
+rm current.json next.json
+```
+
+関数は呼ばれるたびに鍵を読み直すので、入れた直後から効く（TypeSafe の鍵と違い、関数を入れ替えなくてよい）。
+
+Muse に渡す URL は API のスタックの出力 `MailInboxUrl`。
+
 ### 7. フロントを置く
 
 ふだんは deploy ワークフローが行う。手で置くときは次のとおり。ログインの値（共通ログイン）は
@@ -829,11 +869,14 @@ SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolli
 | `sakekasu-kakeibo-<env>-ocr-receipt-errors` | api | OCR の Lambda の Errors |
 | `sakekasu-kakeibo-<env>-classify-errors` | api | カテゴリ判定の Lambda の Errors |
 | `sakekasu-kakeibo-<env>-monthly-report-errors` | api | 月次レポートの Lambda の Errors |
-| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report}-throttles` | api | 上の 4 本の Throttles（4 個） |
+| `sakekasu-kakeibo-<env>-mail-inbox-errors` | api | 下書き登録（Muse）の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report,mail-inbox}-throttles` | api | 上の 5 本の Throttles（5 個） |
 | `sakekasu-kakeibo-<env>-api-5xx` | api | HTTP API の `5xx`（次元 `ApiId`） |
 | `sakekasu-kakeibo-<env>-ocr-receipt-failures` | api | OCR のログの `[ocr] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-ocr-receipt-fallbacks` | api | OCR のログの `[ocr] fallback`（Claude API で失敗し Bedrock で読み直した回数。ID 連携があるときだけ作る） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
+| `sakekasu-kakeibo-<env>-mail-inbox-auth-failures` | api | 下書き登録のログの `[mail-inbox] auth-failed`。5 分に 3 回で鳴る |
+| `sakekasu-kakeibo-<env>-mail-inbox-key-expiring` | api | 下書き登録のログの `[mail-inbox] key-expiring`（鍵の期限が 14 日を切った） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
 | `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify}-slo-availability` | api | 下の SLO の達成率（`AWS/ApplicationSignals` の `AttainmentRate`、次元 `SloName`）が 1 時間平均で 90 を割った（3 個） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
@@ -856,6 +899,10 @@ SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolli
   `api-stack.ts` のフィルタも合わせる
 - 月 1 回の呼び出しが「来なかった」ことは見ていない。月に 1 点しか出ない指標を欠損で鳴らすと、
   残りの期間ずっと鳴り続けるため
+- `mail-inbox-auth-failures` は、鍵の期限切れ・失効のまま Muse が呼び続けたとき、鍵の総当たり、
+  シークレットが読めないとき（全部 401 になる）に鳴る。ログの「理由」で見分ける。`mail-inbox-key-expiring` は
+  Muse が呼ぶたびに鳴り、呼ばれない日は鳴らない。どちらも「下書き登録の鍵（Muse）」の手順で直す。
+  ログの文言（`infra/lambda/mail-inbox/index.ts`）を変えるときは、`api-alarms.ts` のフィルタも合わせる
 - DynamoDB はオンデマンドなので容量の設定は無いが、急な増加では弾かれる。`ThrottledRequests` は
   操作ごとの次元しか持たないので、テーブル単位の Read/WriteThrottleEvents を見ている
 

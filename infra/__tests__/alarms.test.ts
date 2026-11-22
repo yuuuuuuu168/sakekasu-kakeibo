@@ -168,7 +168,7 @@ describe('共通基盤へ送るアラーム', () => {
   });
 
   it('アラームの数（足したら docs/operations.md の一覧も直す）', () => {
-    expect(alarmsOf(api)).toHaveLength(16);
+    expect(alarmsOf(api)).toHaveLength(20);
     expect(alarmsOf(data)).toHaveLength(2);
   });
 });

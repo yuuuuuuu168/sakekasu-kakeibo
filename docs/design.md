@@ -65,6 +65,10 @@ DynamoDB のシングルテーブル。`pk` はユーザー固定、`sk` で種�
 | 予算 | `USER#<sub>` | `BUDGET#<YYYY-MM>` | `limits`（カテゴリ ID → 上限額） |
 | 列マッピング | `USER#<sub>` | `MAPPING#<sourceId>` | `mapping`, `label`, `source` |
 | レポート | `USER#<sub>` | `REPORT#<YYYY-MM>` | 生成済みの月次レポート本体 |
+| 下書き登録の印 | `MAILINBOX#<sub>` | `ORDER#<sha256>` / `MESSAGE#<sha256>` | `receiptId`（[mail-inbox.md](mail-inbox.md) の「重複」） |
+| 下書き登録の 1 日の数 | `MAILINBOX#<sub>` | `DAY#<YYYY-MM-DD>` | `calls`、`expiresAt`（TTL で 3 日後に消える） |
+
+Muse がメールから置いたレシートは `source: 'mail'` と元のメールの `messageId` を持つ。
 
 読み出しは `GET /snapshot` が 1 回のクエリでこの partition を全部返し、画面はそれをメモリに置いて
 月やカテゴリで絞る。利用者 1 人で明細は年に千件ほど、JSON にして数百 KB なので、月ごとに
@@ -97,7 +101,7 @@ DynamoDB のシングルテーブル。`pk` はユーザー固定、`sk` で種�
 
 ## API
 
-HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライザを通る。
+HTTP API の経路は次のとおり。`POST /draft-entries` を除き、すべて Cognito の JWT オーソライザを通る。
 
 | 経路 | すること |
 | --- | --- |
@@ -114,6 +118,7 @@ HTTP API の経路は次のとおり。すべて Cognito の JWT オーソライ
 | `POST /classify` | 品目名や店舗名のカテゴリを判定して返す（別の Lambda） |
 | `PUT /receipts/{id}` `DELETE /receipts/{id}` | レシートを保存・削除する |
 | `GET /reports/{month}` | 作っておいた月次レポートを返す |
+| `POST /draft-entries` | 通販のメールからレシートの下書きを 1 件置く（Muse から呼ぶ。JWT ではなく HMAC の署名。別の Lambda）。[mail-inbox.md](mail-inbox.md) |
 
 レシートの読み取りを非同期にしているのは、API Gateway（HTTP API）の統合タイムアウトが 30 秒で、
 引き上げられないため。1 枚の読み取りは 2〜13 秒（2026-10 の実測）だが、長いレシートを複数枚で読む、

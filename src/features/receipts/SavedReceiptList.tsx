@@ -38,7 +38,10 @@ export function SavedReceiptList({
                   {/* 狭い画面では店名が削られないよう、カテゴリは店名の下へ回す */}
                   <span className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-baseline sm:gap-2">
                     <span className="min-w-0 truncate text-sm text-ink sm:flex-1">{receipt.storeName || '（店名なし）'}</span>
-                    <span className="truncate text-xs text-muted sm:shrink-0">{receiptCategorySummary(receipt, categories)}</span>
+                    <span className="truncate text-xs text-muted sm:shrink-0">
+                      {/* Muse が通販のメールから置いた下書き。写真が無いので、どこから来たかだけ添える */}
+                      {receipt.source === 'mail' ? `メールから・${receiptCategorySummary(receipt, categories)}` : receiptCategorySummary(receipt, categories)}
+                    </span>
                   </span>
                 </button>
                 <ReceiptStatusBadge receipt={receipt} />

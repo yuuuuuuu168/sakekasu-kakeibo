@@ -143,6 +143,13 @@ export type Receipt = {
    * 同じ番号なら同じ注文と言い切れるので、重複の判定に使う（duplicate.ts）
    */
   orderNumber?: string;
+  /**
+   * どこから来たか。`mail` は通販のメールを読んだ Muse が下書き登録 API（infra/lambda/mail-inbox）で
+   * 置いたもの。無ければ画面で作ったもの（写真・手入力）
+   */
+  source?: 'mail';
+  /** source が mail のときの、元のメールの Message-ID。同じメールが二度届いても 1 枚にするために持つ */
+  messageId?: string;
   /** 紐付いた明細の ID */
   txnId?: string;
   /**

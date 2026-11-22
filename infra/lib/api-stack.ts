@@ -7,7 +7,10 @@ import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import type * as lambda from 'aws-cdk-lib/aws-lambda';
+import type * as logs from 'aws-cdk-lib/aws-logs';
 import { OCR_JOB_PARTITION_PREFIX, OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
+import { MAIL_INBOX_PARTITION_PREFIX, USER_PARTITION_PREFIX } from '../lambda/shared/user-partition';
 import {
   DEFAULT_ANTHROPIC_MODEL_OCR,
   IDENTITY_TOKEN_AUDIENCE,
@@ -70,6 +73,13 @@ export const CLASSIFY_BURST_LIMIT = 5;
  */
 export const OCR_START_RATE_LIMIT = 1;
 export const OCR_START_BURST_LIMIT = 5;
+
+/**
+ * 下書き登録（Muse から呼ぶ POST /draft-entries）の流量の上限。1 日の件数（20 件）は関数の中で数える。
+ * こちらは鍵を持たない呼び手が叩き続けたときに、関数とシークレットの読み出しまで届く数を抑える
+ */
+export const MAIL_INBOX_RATE_LIMIT = 1;
+export const MAIL_INBOX_BURST_LIMIT = 3;
 
 /**
  * 読み取りの Lambda のタイムアウト。API Gateway の 30 秒には縛られない。
@@ -248,6 +258,8 @@ export class ApiStack extends cdk.Stack {
 
     typesafeApiKey.grantRead(classifyFunction);
 
+    const mailInbox = this.addMailInbox(prefix, props, classifyFunction);
+
     if (props.anthropicFederation) {
       this.addModelBench(prefix, props, props.anthropicFederation, typesafeApiKey);
     }
@@ -340,10 +352,23 @@ export class ApiStack extends cdk.Stack {
      * CfnStage の routeSettings は型が any で、CDK が中のキーを CloudFormation の綴りに
      * 直さない。camelCase で書くとそのままテンプレートに出て、黙って効かなくなる。
      */
+    /*
+     * 下書き登録（Muse から呼ぶ）。この経路だけ JWT の検証を外す。Muse はブラウザでログインできないため。
+     * 呼び手の確認は関数の中で、本文に掛けた HMAC-SHA256 の署名で行う（infra/lambda/mail-inbox/signature.ts）。
+     * API Gateway の Lambda オーソライザーには本文が渡らないので、署名はオーソライザーでは確かめられない。
+     */
+    this.httpApi.addRoutes({
+      path: '/draft-entries',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: new HttpLambdaIntegration('MailInboxIntegration', mailInbox.fn),
+      authorizer: new apigwv2.HttpNoneAuthorizer(),
+    });
+
     const stage = this.httpApi.defaultStage!.node.defaultChild as apigwv2.CfnStage;
     stage.routeSettings = {
       'POST /classify': { ThrottlingRateLimit: CLASSIFY_RATE_LIMIT, ThrottlingBurstLimit: CLASSIFY_BURST_LIMIT },
       'POST /receipts/analyze': { ThrottlingRateLimit: OCR_START_RATE_LIMIT, ThrottlingBurstLimit: OCR_START_BURST_LIMIT },
+      'POST /draft-entries': { ThrottlingRateLimit: MAIL_INBOX_RATE_LIMIT, ThrottlingBurstLimit: MAIL_INBOX_BURST_LIMIT },
     };
 
     /*
@@ -376,7 +401,9 @@ export class ApiStack extends cdk.Stack {
         { key: 'ocr-receipt', fn: ocrFunction, what: 'レシートの OCR' },
         { key: 'classify', fn: classifyFunction, what: 'カテゴリ判定（Jev）' },
         { key: 'monthly-report', fn: reportFunction, what: '月次レポート' },
+        { key: 'mail-inbox', fn: mailInbox.fn, what: '下書き登録（Muse からのメール）' },
       ],
+      mailInboxLogGroup: mailInbox.logGroup,
       reportLogGroup,
       reportScheduleName,
       ocrLogGroup,
@@ -384,6 +411,8 @@ export class ApiStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: this.httpApi.apiEndpoint });
+    // Muse に渡す下書き登録の URL
+    new cdk.CfnOutput(this, 'MailInboxUrl', { value: `${this.httpApi.apiEndpoint}/draft-entries` });
     new cdk.CfnOutput(this, 'MonthlyReportFunctionName', { value: reportFunction.functionName });
 
     /*
@@ -394,6 +423,59 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AuthUserPoolId', { value: props.sharedAuth.userPoolId });
     new cdk.CfnOutput(this, 'AuthClientId', { value: props.sharedAuth.clientId });
     new cdk.CfnOutput(this, 'AuthDomain', { value: props.sharedAuth.domain });
+  }
+
+  /**
+   * 下書き登録の関数と、その鍵の置き場所。経路（POST /draft-entries）は呼び出し側で足す。
+   *
+   * 鍵の値は CDK に書かない。入れ物だけ作り、発行した鍵を人が入れる（docs/operations.md の「下書き登録の鍵」）。
+   * 中身は `{ "keys": [{ id, secret, sub, expiresAt }] }`。消えても発行し直せるので、TypeSafe の鍵と同じく消す方は止めない。
+   *
+   * 権限は、この鍵の読み取り、classify の関数の呼び出し（品目のカテゴリ判定）、テーブルの読み書き。
+   * テーブルは利用者のパーティション（レシートを置く）と、重複の印のパーティションだけに絞る。
+   * 同時実行を 2 に絞るのは、鍵が漏れたときに classify（有料のモデル）まで届く数を抑えるため。
+   */
+  private addMailInbox(
+    prefix: string,
+    props: ApiStackProps,
+    classifyFunction: lambda.IFunction,
+  ): { fn: lambda.IFunction; logGroup: logs.ILogGroup } {
+    const keys = new secretsmanager.Secret(this, 'MailInboxKeys', {
+      secretName: `${prefix}-mail-inbox-keys`,
+      description: '下書き登録 API（Muse）の署名の鍵。値は手で入れる',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const logGroup = lambdaLogGroup(this, 'MailInboxLogs', `${prefix}-mail-inbox`);
+    const { fn } = appFunction(this, 'MailInboxFunction', {
+      prefix,
+      key: 'mail-inbox',
+      logGroup,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(25),
+      reservedConcurrentExecutions: 2,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        MAIL_INBOX_SECRET_ID: keys.secretArn,
+        CLASSIFY_FUNCTION_NAME: classifyFunction.functionName,
+      },
+    });
+
+    keys.grantRead(fn);
+    classifyFunction.grantInvoke(fn);
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        resources: [props.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${USER_PARTITION_PREFIX}*`, `${MAIL_INBOX_PARTITION_PREFIX}*`],
+          },
+        },
+      }),
+    );
+
+    return { fn, logGroup };
   }
 
   /**
