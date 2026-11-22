@@ -3,17 +3,19 @@ import { ChevronDown } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { CategoriesPage } from '../categories/CategoriesPage';
 import { LearnedRules } from '../rules/LearnedRules';
+import { MailRelayFilterSettings } from '../mail-relay/MailRelayFilterSettings';
 import { RecurringPayments } from '../recurring/RecurringPayments';
 
 /** 開いている節は覚えておく。次に設定を開いたとき、いつも触る節だけが開いた状態で始まる */
 const OPEN_KEY = 'sakekasu-kakeibo:settings-open';
 
-type SectionId = 'categories' | 'recurring' | 'rules';
+type SectionId = 'categories' | 'recurring' | 'rules' | 'mail';
 
 const SECTIONS: { id: SectionId; title: string; description: string; render: () => ReactNode }[] = [
   { id: 'categories', title: 'カテゴリと上限', description: '月ごとの上限、カテゴリの追加・並べ替え', render: () => <CategoriesPage /> },
   { id: 'recurring', title: '定期的な支払い', description: 'サブスクや分割払いの登録', render: () => <RecurringPayments /> },
   { id: 'rules', title: '覚えたカテゴリ', description: '品目名・店名から自動で当てるカテゴリ', render: () => <LearnedRules /> },
+  { id: 'mail', title: 'メールの転送', description: 'Yahoo!メールから Muse へ送るメールの条件', render: () => <MailRelayFilterSettings /> },
 ];
 
 function loadOpen(): SectionId[] {
@@ -38,7 +40,8 @@ function storeOpen(open: SectionId[]) {
  * 設定。タブからは外して、ヘッダの歯車から開く。
  * 項目が増えてスクロールが長くなったので、節ごとに見出しを押して開閉する。最初は全部閉じている。
  * 中身は既存の画面をそのまま入れているだけで、カテゴリと上限の操作は CategoriesPage が、
- * 定期的な支払いは RecurringPayments が、覚えたカテゴリ（品目・店名のルール）は LearnedRules が持つ。
+ * 定期的な支払いは RecurringPayments が、覚えたカテゴリ（品目・店名のルール）は LearnedRules が、
+ * メールの転送の条件は MailRelayFilterSettings が持つ。
  * 閉じた節も描画は残し（hidden で隠すだけ）、書きかけの入力が開閉で消えないようにしている。
  * サインアウトはヘッダの右上（SignOutButton）にある。
  */

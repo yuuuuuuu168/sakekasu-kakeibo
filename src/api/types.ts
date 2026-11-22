@@ -3,6 +3,7 @@ import type {
   Category,
   CategoryRule,
   ClassifyTarget,
+  MailRelayFilter,
   MonthlyReport,
   Receipt,
   ReceiptDraft,
@@ -33,6 +34,8 @@ export interface KakeiboApi {
   putCategories(categories: Category[]): Promise<void>;
   putRules(rules: CategoryRule[]): Promise<void>;
   putRecurring(recurring: RecurringPayment[]): Promise<void>;
+  /** Yahoo!メールの中継が Muse へ転送するメールの条件。ローカルモードでは保存するだけ（中継が無い） */
+  putMailRelayFilter(filter: MailRelayFilter): Promise<void>;
   putBudget(budget: Budget): Promise<void>;
   putMapping(mapping: SavedMapping): Promise<void>;
   putReceipt(receipt: Receipt): Promise<void>;

@@ -7,7 +7,8 @@
 ## 流れ
 
 1. 家計簿の中継（`infra/lambda/mail-relay/`）が 5 分ごとに Yahoo!メールを IMAP で見に行き、新着を全件 Muse Mail へコピーする
-   （Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないため。手順は [operations.md](operations.md) の「Yahoo!メールの中継（Muse）」）
+   （Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないため。手順は [operations.md](operations.md) の「Yahoo!メールの中継（Muse）」）。
+   設定画面の「メールの転送」で、差出人か件名のどちらかに当たるメールだけに絞れる（空なら全部を送る）
 2. Muse が領収書のメールを選び、店名・品目・金額・注文番号を抜き出して利用者に知らせる
 3. 利用者が「登録する」と答えたら、Muse がこの API を呼ぶ
 4. 家計簿には **未紐付けのレシート**（`status: pending`、`source: mail`）として入る。明細はまだ作らない

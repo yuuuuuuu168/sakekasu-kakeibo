@@ -26,3 +26,4 @@ export * from './payment';
 export * from './unverified';
 export * from './snapshot';
 export * from './limits';
+export * from './mail-filter';

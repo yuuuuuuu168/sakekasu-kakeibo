@@ -508,7 +508,7 @@ export class ApiStack extends cdk.Stack {
    *   パスワードは ID そのものの鍵なので、読めるのはこの関数だけにする
    * - 同時実行は 1。5 分ごとの呼び出しが重なって、同じメールを 2 回送らないため。再試行も 0
    *   （1 通ごとに進み具合を書くので、落ちても次の回が続きから送る）
-   * - テーブルは進み具合の 1 行（MAILRELAY#）だけ。利用者のデータには触らない
+   * - テーブルは進み具合の 1 行（MAILRELAY#）の読み書きと、利用者の転送の条件の行の読み取りだけ
    */
   private addMailRelay(
     prefix: string,
@@ -550,6 +550,14 @@ export class ApiStack extends cdk.Stack {
         actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
         resources: [props.table.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${MAIL_RELAY_PARTITION_PREFIX}*`] } },
+      }),
+    );
+    // 設定画面で決めた転送の条件（利用者のパーティションの CONFIG#mailRelayFilter）を読むだけ。書き込みは持たせない
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [props.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${USER_PARTITION_PREFIX}*`] } },
       }),
     );
 

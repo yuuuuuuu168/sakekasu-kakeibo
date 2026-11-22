@@ -54,8 +54,11 @@ export function shouldTryLogin(state: RelayState, now: Date): boolean {
   return now.getTime() - Date.parse(state.lastAuthFailureAt) >= AUTH_BACKOFF_MS;
 }
 
-/** Secrets Manager に入れる設定。`{ "user", "password", "forwardTo" }` */
-export type RelayConfig = { user: string; password: string; forwardTo: string };
+/**
+ * Secrets Manager に入れる設定。`{ "user", "password", "forwardTo", "sub" }`。
+ * `sub` は転送の条件を読む利用者（設定画面で直した条件が、その利用者のデータに入る）。無ければ全部を転送する
+ */
+export type RelayConfig = { user: string; password: string; forwardTo: string; sub?: string };
 
 export function parseRelayConfig(text: string | undefined): RelayConfig | undefined {
   if (!text) return undefined;
@@ -69,7 +72,12 @@ export function parseRelayConfig(text: string | undefined): RelayConfig | undefi
       typeof value.forwardTo === 'string' &&
       /^[^@\s]+@[^@\s]+$/.test(value.forwardTo)
     ) {
-      return { user: value.user, password: value.password, forwardTo: value.forwardTo };
+      return {
+        user: value.user,
+        password: value.password,
+        forwardTo: value.forwardTo,
+        ...(typeof value.sub === 'string' && value.sub !== '' ? { sub: value.sub } : {}),
+      };
     }
   } catch {
     // 作ったばかりのシークレット（乱数）は JSON ではない。未設定として扱う

@@ -1,3 +1,4 @@
+import { MAX_FILTER_ENTRIES, MAX_FILTER_ENTRY_LENGTH, parseFilterLines, type MailRelayFilter } from '@kakeibo/core';
 import type { Json } from '../shared/http';
 
 /*
@@ -177,4 +178,25 @@ export function assertLimits(value: unknown): Record<string, number> {
     if (!isInteger(limit) || limit < 0) throw new BadRequest(`カテゴリ ${categoryId} の上限が 0 以上の整数ではありません`);
   }
   return value as Record<string, number>;
+}
+
+/**
+ * Yahoo!メールの中継の転送の条件。差出人と件名の言葉の、文字列のリスト 2 つ。
+ * 画面と同じ規則（core の parseFilterLines）でそろえ直してから保存する
+ */
+export function assertMailRelayFilter(value: unknown): MailRelayFilter {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new BadRequest('mailRelayFilter が要ります');
+  const filter = value as Json;
+  const lists = { senders: filter.senders, subjectWords: filter.subjectWords };
+  for (const [field, list] of Object.entries(lists)) {
+    if (!Array.isArray(list)) throw new BadRequest(`mailRelayFilter.${field} が配列ではありません`);
+    if (list.length > MAX_FILTER_ENTRIES) throw new BadRequest(`mailRelayFilter.${field} は ${MAX_FILTER_ENTRIES} 件までです`);
+    if (list.some((entry) => typeof entry !== 'string' || entry.length > MAX_FILTER_ENTRY_LENGTH)) {
+      throw new BadRequest(`mailRelayFilter.${field} は ${MAX_FILTER_ENTRY_LENGTH} 文字以内の文字列で並べてください`);
+    }
+  }
+  return {
+    senders: parseFilterLines((lists.senders as string[]).join('\n'), 'sender'),
+    subjectWords: parseFilterLines((lists.subjectWords as string[]).join('\n'), 'subject'),
+  };
 }

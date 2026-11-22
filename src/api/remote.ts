@@ -10,6 +10,7 @@ import {
   type RecurringPayment,
   type Transaction,
   type Verdict,
+  type MailRelayFilter,
 } from '@kakeibo/core';
 import { config } from '../config';
 import type { KakeiboApi, ReceiptDraft, SavedMapping, Snapshot, UploadTarget } from './types';
@@ -63,6 +64,7 @@ export const remoteApi: KakeiboApi = {
   putCategories: (categories: Category[]) => request<void>('PUT', '/categories', { categories }),
   putRules: (rules: CategoryRule[]) => request<void>('PUT', '/rules', { rules }),
   putRecurring: (recurring: RecurringPayment[]) => request<void>('PUT', '/recurring', { recurring }),
+  putMailRelayFilter: (mailRelayFilter: MailRelayFilter) => request<void>('PUT', '/mail-relay-filter', { mailRelayFilter }),
   putBudget: (budget: Budget) => request<void>('PUT', `/budgets/${budget.month}`, budget),
   putMapping: (mapping: SavedMapping) => request<void>('PUT', `/mappings/${encodeURIComponent(mapping.sourceId)}`, mapping),
   putReceipt: (receipt: Receipt) => request<void>('PUT', `/receipts/${encodeURIComponent(receipt.id)}`, receipt),

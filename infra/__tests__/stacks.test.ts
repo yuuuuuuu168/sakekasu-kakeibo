@@ -173,7 +173,7 @@ describe('ApiStack', () => {
     expect(dkim).toHaveLength(3);
   });
 
-  it('中継の関数は進み具合の行だけに触れ、パスワードを読めるのは中継の関数だけ', () => {
+  it('中継の関数は進み具合の行と条件の読み取りだけに触れ、パスワードを読めるのは中継の関数だけ', () => {
     const template = Template.fromStack(stacks().api);
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
     const statementsOf = (role: string) =>
@@ -190,6 +190,11 @@ describe('ApiStack', () => {
     expect(relay.flatMap((statement) => [statement.Action].flat())).toEqual(
       expect.arrayContaining(['ses:SendEmail', 'ses:SendRawEmail']),
     );
+    // 利用者のパーティションは、転送の条件を読む GetItem だけ
+    const userStatements = relay.filter((statement) => JSON.stringify(statement.Condition ?? {}).includes('USER#'));
+    expect(userStatements).toEqual([
+      expect.objectContaining({ Action: 'dynamodb:GetItem', Condition: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] } } }),
+    ]);
 
     const readers = policies.filter((policy) => JSON.stringify(policy.Properties.PolicyDocument).includes('MailRelayConfig'));
     expect(readers.map((policy) => JSON.stringify(policy.Properties.Roles))).toEqual([expect.stringContaining('MailRelayFunction')]);

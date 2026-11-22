@@ -1,4 +1,5 @@
 import { SEED_CATEGORIES, withLaterSeeds } from './categories';
+import type { MailRelayFilter } from './mail-filter';
 import type { ReportInput } from './report';
 import type { Budget, Category, CategoryRule, ColumnMapping, Receipt, RecurringPayment, SourceKind, Transaction } from './types';
 
@@ -26,6 +27,11 @@ export type Snapshot = {
   receipts: Receipt[];
   mappings: SavedMapping[];
   recurring: RecurringPayment[];
+  /**
+   * Yahoo!メールの中継が Muse へ転送するメールの条件（mail-filter.ts）。無い・空なら全部を転送する。
+   * 後から足した項目で、それより前の保存データには無い
+   */
+  mailRelayFilter?: MailRelayFilter;
 };
 
 export function emptySnapshot(): Snapshot {
