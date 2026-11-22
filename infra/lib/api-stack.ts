@@ -332,7 +332,7 @@ export class ApiStack extends cdk.Stack {
     const apiIntegration = new HttpLambdaIntegration('ApiIntegration', apiFunction);
 
     // より具体的な経路が優先されるので、カテゴリ判定だけ別の関数に向ける
-    this.httpApi.addRoutes({
+    const classifyRoutes = this.httpApi.addRoutes({
       path: '/classify',
       methods: [apigwv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration('ClassifyIntegration', classifyFunction),
@@ -343,7 +343,7 @@ export class ApiStack extends cdk.Stack {
      * /{proxy+} でも届くが、流量の上限（routeSettings）は RouteKey が一致するルートにしか効かないので
      * 明示のルートにしておく。結果を聞きに来る GET /receipts/analyze/{jobId} は /{proxy+} で受ける。
      */
-    this.httpApi.addRoutes({
+    const analyzeRoutes = this.httpApi.addRoutes({
       path: '/receipts/analyze',
       methods: [apigwv2.HttpMethod.POST],
       integration: apiIntegration,
@@ -365,7 +365,7 @@ export class ApiStack extends cdk.Stack {
      * 呼び手の確認は関数の中で、本文に掛けた HMAC-SHA256 の署名で行う（infra/lambda/mail-inbox/signature.ts）。
      * API Gateway の Lambda オーソライザーには本文が渡らないので、署名はオーソライザーでは確かめられない。
      */
-    this.httpApi.addRoutes({
+    const draftRoutes = this.httpApi.addRoutes({
       path: '/draft-entries',
       methods: [apigwv2.HttpMethod.POST],
       integration: new HttpLambdaIntegration('MailInboxIntegration', mailInbox.fn),
@@ -378,6 +378,15 @@ export class ApiStack extends cdk.Stack {
       'POST /receipts/analyze': { ThrottlingRateLimit: OCR_START_RATE_LIMIT, ThrottlingBurstLimit: OCR_START_BURST_LIMIT },
       'POST /draft-entries': { ThrottlingRateLimit: MAIL_INBOX_RATE_LIMIT, ThrottlingBurstLimit: MAIL_INBOX_BURST_LIMIT },
     };
+    /*
+     * ステージは routeSettings に挙げた経路ができてから更新する。テンプレートの上ではステージは経路を参照しないので、
+     * 依存が無いと cdkd は両方を同時に進め、経路より先にステージを更新して
+     * 「Unable to find Route by key POST /draft-entries within the provided RouteSettings」で落ちる
+     * （2026-11-22、POST /draft-entries を足したデプロイで実際に止まった）。経路を足すときは、ここにも足す
+     */
+    for (const route of [...classifyRoutes, ...analyzeRoutes, ...draftRoutes]) {
+      stage.addDependency(route.node.defaultChild as apigwv2.CfnRoute);
+    }
 
     /*
      * メソッドを並べて書くのは、OPTIONS をこのルートに含めないため。

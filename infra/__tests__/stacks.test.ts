@@ -116,6 +116,20 @@ describe('ApiStack', () => {
     ]);
   });
 
+  /*
+   * ステージは routeSettings に挙げた経路ができるのを待つ。依存が無いと cdkd が経路より先にステージを更新して落ちる
+   * （2026-11-22 のデプロイで POST /draft-entries が実際に落ちた）
+   */
+  it('ステージは、流量を絞る経路すべてに依存する', () => {
+    const template = Template.fromStack(stacks().api);
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    const [stage] = Object.values(template.findResources('AWS::ApiGatewayV2::Stage'));
+    const throttled = Object.keys(stage.Properties.RouteSettings).sort();
+    const dependedKeys = (stage.DependsOn as string[]).filter((id) => id in routes).map((id) => routes[id].Properties.RouteKey).sort();
+    expect(throttled).toEqual(['POST /classify', 'POST /draft-entries', 'POST /receipts/analyze']);
+    expect(dependedKeys).toEqual(throttled);
+  });
+
   it('下書き登録の経路は、署名を確かめる関数に向け、流量を絞る', () => {
     const template = Template.fromStack(stacks().api);
     template.hasResourceProperties('AWS::Lambda::Function', {
