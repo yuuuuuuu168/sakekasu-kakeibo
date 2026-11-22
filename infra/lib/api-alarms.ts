@@ -27,6 +27,8 @@ function logLineAlarm(
     description: string;
     /** 5 分に何回出たら鳴らすか。無ければ 1 回 */
     threshold?: number;
+    /** 何期間（5 分ずつ）続いたら鳴らすか。無ければ 1 */
+    evaluationPeriods?: number;
   },
 ): void {
   const filter = new logs.MetricFilter(scope, props.filterId, {
@@ -42,6 +44,7 @@ function logLineAlarm(
     description: props.description,
     metric: filter.metric({ period: FIVE_MINUTES, statistic: 'Sum' }),
     threshold: props.threshold ?? 1,
+    ...(props.evaluationPeriods ? { evaluationPeriods: props.evaluationPeriods } : {}),
   });
 }
 
@@ -64,6 +67,8 @@ export function addApiAlarms(
     reportLogGroup: logs.ILogGroup;
     ocrLogGroup: logs.ILogGroup;
     mailInboxLogGroup: logs.ILogGroup;
+    /** Yahoo!メールの中継の関数のロググループ。中継を作らないときは無い */
+    mailRelayLogGroup?: logs.ILogGroup;
     /** OCR が Claude API から Bedrock に読み直した回数を見るか（ID 連携があるときだけ） */
     watchFallback: boolean;
     /** 月次レポートを呼ぶ EventBridge のルール名（説明文と次元に使う。トークンにしないため文字列で渡す） */
@@ -179,6 +184,8 @@ export function addApiAlarms(
       '新しい鍵を発行して Muse の入力フォームから差し替え、古い鍵を一覧から消す（docs/operations.md の「下書き登録の鍵」）。',
   });
 
+  if (props.mailRelayLogGroup) addMailRelayAlarms(scope, alarms, prefix, props.mailRelayLogGroup);
+
   /*
    * 月次レポートの失敗は 2 通り拾う。
    * - 利用者ごとの失敗: 関数は握って先へ進み、正常終了する。ログの行を数える
@@ -213,6 +220,63 @@ export function addApiAlarms(
       statistic: 'Sum',
     }),
     threshold: 1,
+  });
+}
+
+/**
+ * Yahoo!メールの中継（mail-relay）のアラーム。どれもログの文言を数える（infra/lambda/mail-relay/index.ts と合わせる）。
+ * 関数は失敗を握って正常に終えるので、Errors に出るのはタイムアウトなど関数そのものが落ちたときだけ
+ */
+function addMailRelayAlarms(scope: cdk.Stack, alarms: SharedAlarms, prefix: string, logGroup: logs.ILogGroup): void {
+  const where = `CloudWatch Logs の /aws/lambda/${prefix}-mail-relay`;
+
+  /*
+   * IMAP の認証の失敗が 2 回続いた。関数は失敗が続く間、試さなかった回にも 1 行出すので、直るまで鳴り続ける。
+   * Yahoo! 側で「IMAP/POP/SMTP アクセス」が切られた、パスワードを変えた、のどちらかが多い
+   */
+  logLineAlarm(scope, alarms, {
+    filterId: 'MailRelayAuthFailingFilter',
+    alarmId: 'MailRelayAuthFailingAlarm',
+    logGroup,
+    literal: '[mail-relay] auth-failing',
+    name: `${prefix}-mail-relay-auth-failing`,
+    description:
+      'Yahoo!メールへの IMAP のログインが続けて失敗しています（新着が Muse に届いていない）。' +
+      `まず Yahoo!メールの設定で「IMAP/POP/SMTP アクセス」が許可になっているかと、${where} の「auth-failed」を見る。` +
+      'パスワードを変えたなら docs/operations.md の「Yahoo!メールの中継」でシークレットを入れ直す。' +
+      '3 回続くと、Yahoo! に止められないよう 1 時間に 1 回しか試さない。',
+  });
+
+  /*
+   * 認証以外の失敗（接続、SES の送信、本文の解析）。Yahoo! 側の一時的な不調で 1 回落ちるのはよくあるので、
+   * 3 期間（15 分）続いたら鳴らす。取りこぼしは無い（送れなかったメールは次の回で送り直す）
+   */
+  logLineAlarm(scope, alarms, {
+    filterId: 'MailRelayFailureFilter',
+    alarmId: 'MailRelayFailuresAlarm',
+    logGroup,
+    literal: '[mail-relay] failed',
+    name: `${prefix}-mail-relay-failures`,
+    evaluationPeriods: 3,
+    description:
+      'Yahoo!メールの取得か Muse への転送が 15 分続けて失敗しています（送れなかった分は直れば次の回で送る）。' +
+      `まず ${where} の「[mail-relay] failed」の「段階」と「種類」を見る。` +
+      'SES の MessageRejected なら、本番利用の申請（サンドボックスの解除）とドメインの認証を確かめる。',
+  });
+
+  /*
+   * 受信箱の UID が振り直された（UIDVALIDITY が変わった）。どれが新着か分からないので、その時点の最新から数え直している。
+   * 直前に届いたメールを送り損ねている可能性がある
+   */
+  logLineAlarm(scope, alarms, {
+    filterId: 'MailRelayUidResetFilter',
+    alarmId: 'MailRelayUidResetAlarm',
+    logGroup,
+    literal: '[mail-relay] uid-reset',
+    name: `${prefix}-mail-relay-uid-reset`,
+    description:
+      'Yahoo!メールの受信箱の番号（UIDVALIDITY）が変わったので、その時点の最新から数え直しました。' +
+      `まず ${where} の「基準を決めた」の行の時刻を見て、その前後に届いたメールを Yahoo!メールで確かめ、要るものは手で Muse に送る。`,
   });
 }
 

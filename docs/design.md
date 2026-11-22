@@ -67,6 +67,7 @@ DynamoDB のシングルテーブル。`pk` はユーザー固定、`sk` で種�
 | レポート | `USER#<sub>` | `REPORT#<YYYY-MM>` | 生成済みの月次レポート本体 |
 | 下書き登録の印 | `MAILINBOX#<sub>` | `ORDER#<sha256>` / `MESSAGE#<sha256>` | `receiptId`（[mail-inbox.md](mail-inbox.md) の「重複」） |
 | 下書き登録の 1 日の数 | `MAILINBOX#<sub>` | `DAY#<YYYY-MM-DD>` | `calls`、`expiresAt`（TTL で 3 日後に消える） |
+| Yahoo!メールの中継の進み具合 | `MAILRELAY#yahoo` | `STATE` | `uidValidity`、`lastUid`、`authFailures`、`lastAuthFailureAt` |
 
 Muse がメールから置いたレシートは `source: 'mail'` と元のメールの `messageId` を持つ。
 

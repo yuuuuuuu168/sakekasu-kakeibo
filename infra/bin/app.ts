@@ -161,6 +161,8 @@ function buildApplicationStacks(): void {
     sharedAuth,
     allowedOrigins,
     anthropicFederation,
+    // Yahoo!メールの中継の送り主のドメイン。家計簿のゾーンがあるときだけ作る
+    ...(hostedZoneId && zoneName ? { mailRelayZone: { hostedZoneId, zoneName } } : {}),
   });
 
   if (!certificateArn && domainName && hostedZoneId && zoneName) {

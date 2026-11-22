@@ -23,6 +23,7 @@ function stacks() {
     receiptBucket: data.receiptBucket,
     sharedAuth: { domain: 'auth.example.com', userPoolId: 'ap-northeast-1_TestPool1', clientId: 'testclientid0123456789' },
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
+    mailRelayZone: { hostedZoneId: 'Z0000000000000000TEST', zoneName: 'kakeibo.sakekasu-builder.com' },
     anthropicFederation: {
       ruleId: 'fdrl_test',
       organizationId: '00000000-0000-0000-0000-000000000000',
@@ -167,8 +168,14 @@ describe('共通基盤へ送るアラーム', () => {
     expect(alarm).toMatchObject({ Namespace: 'AWS/DynamoDB', MetricName: `${kind}ThrottleEvents`, Period: 300, Threshold: 1 });
   });
 
+  it('Yahoo!メールの中継: 認証の失敗は直るまで、その他の失敗は 15 分続いたら鳴らす', () => {
+    expect(byName(api, 'sakekasu-kakeibo-test-mail-relay-auth-failing')).toMatchObject({ Threshold: 1, EvaluationPeriods: 1 });
+    expect(byName(api, 'sakekasu-kakeibo-test-mail-relay-failures')).toMatchObject({ Threshold: 1, EvaluationPeriods: 3 });
+    expect(byName(api, 'sakekasu-kakeibo-test-mail-relay-uid-reset')).toMatchObject({ Threshold: 1 });
+  });
+
   it('アラームの数（足したら docs/operations.md の一覧も直す）', () => {
-    expect(alarmsOf(api)).toHaveLength(20);
+    expect(alarmsOf(api)).toHaveLength(25);
     expect(alarmsOf(data)).toHaveLength(2);
   });
 });

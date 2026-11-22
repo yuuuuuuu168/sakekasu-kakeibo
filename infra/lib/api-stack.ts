@@ -9,8 +9,10 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import type * as logs from 'aws-cdk-lib/aws-logs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as ses from 'aws-cdk-lib/aws-ses';
 import { OCR_JOB_PARTITION_PREFIX, OCR_JOB_STALE_MS } from '../lambda/shared/ocr-job';
-import { MAIL_INBOX_PARTITION_PREFIX, USER_PARTITION_PREFIX } from '../lambda/shared/user-partition';
+import { MAIL_INBOX_PARTITION_PREFIX, MAIL_RELAY_PARTITION_PREFIX, USER_PARTITION_PREFIX } from '../lambda/shared/user-partition';
 import {
   DEFAULT_ANTHROPIC_MODEL_OCR,
   IDENTITY_TOKEN_AUDIENCE,
@@ -101,6 +103,11 @@ export interface ApiStackProps extends cdk.StackProps {
   allowedOrigins: string[];
   /** OCR が Claude API に入るための ID 連携。無ければ OCR は Bedrock だけで読む */
   anthropicFederation?: AnthropicFederation;
+  /**
+   * Yahoo!メールを Muse Mail へコピーする中継（mail-relay）の送り主のドメイン。家計簿のゾーン（DNS スタック）を渡す。
+   * 無ければ中継を作らない（SES のドメイン認証に、ゾーンへ DKIM のレコードを書く必要があるため）
+   */
+  mailRelayZone?: { hostedZoneId: string; zoneName: string };
 }
 
 export class ApiStack extends cdk.Stack {
@@ -259,6 +266,7 @@ export class ApiStack extends cdk.Stack {
     typesafeApiKey.grantRead(classifyFunction);
 
     const mailInbox = this.addMailInbox(prefix, props, classifyFunction);
+    const mailRelay = props.mailRelayZone ? this.addMailRelay(prefix, props, props.mailRelayZone) : undefined;
 
     if (props.anthropicFederation) {
       this.addModelBench(prefix, props, props.anthropicFederation, typesafeApiKey);
@@ -402,8 +410,10 @@ export class ApiStack extends cdk.Stack {
         { key: 'classify', fn: classifyFunction, what: 'カテゴリ判定（Jev）' },
         { key: 'monthly-report', fn: reportFunction, what: '月次レポート' },
         { key: 'mail-inbox', fn: mailInbox.fn, what: '下書き登録（Muse からのメール）' },
+        ...(mailRelay ? [{ key: 'mail-relay', fn: mailRelay.fn, what: 'Yahoo!メールの取得と Muse への転送' }] : []),
       ],
       mailInboxLogGroup: mailInbox.logGroup,
+      ...(mailRelay ? { mailRelayLogGroup: mailRelay.logGroup } : {}),
       reportLogGroup,
       reportScheduleName,
       ocrLogGroup,
@@ -413,6 +423,7 @@ export class ApiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiUrl', { value: this.httpApi.apiEndpoint });
     // Muse に渡す下書き登録の URL
     new cdk.CfnOutput(this, 'MailInboxUrl', { value: `${this.httpApi.apiEndpoint}/draft-entries` });
+    if (mailRelay) new cdk.CfnOutput(this, 'MailRelayFrom', { value: mailRelay.from });
     new cdk.CfnOutput(this, 'MonthlyReportFunctionName', { value: reportFunction.functionName });
 
     /*
@@ -476,6 +487,71 @@ export class ApiStack extends cdk.Stack {
     );
 
     return { fn, logGroup };
+  }
+
+  /**
+   * Yahoo!メールの中継。5 分ごとに IMAP で受信箱を見に行き、新着を全件 Muse Mail へ SES でコピーする
+   * （infra/lambda/mail-relay）。Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないため、こちらから読みに行く。
+   *
+   * - 送り主は家計簿のドメイン（relay@<ゾーン>）。SES のドメイン認証（Easy DKIM）のレコードは、CDK が
+   *   家計簿のゾーンに書く。ゾーンは ID と名前から引くだけで、DNS スタックとは参照でつながない
+   * - 設定（Yahoo! JAPAN ID・パスワード・送り先）は Secrets Manager に人が入れる。入れるまで関数は何もしない。
+   *   パスワードは ID そのものの鍵なので、読めるのはこの関数だけにする
+   * - 同時実行は 1。5 分ごとの呼び出しが重なって、同じメールを 2 回送らないため。再試行も 0
+   *   （1 通ごとに進み具合を書くので、落ちても次の回が続きから送る）
+   * - テーブルは進み具合の 1 行（MAILRELAY#）だけ。利用者のデータには触らない
+   */
+  private addMailRelay(
+    prefix: string,
+    props: ApiStackProps,
+    zoneProps: { hostedZoneId: string; zoneName: string },
+  ): { fn: lambda.IFunction; logGroup: logs.ILogGroup; from: string } {
+    const zone = route53.PublicHostedZone.fromPublicHostedZoneAttributes(this, 'MailRelayZone', zoneProps);
+    const identity = new ses.EmailIdentity(this, 'MailRelayIdentity', {
+      identity: ses.Identity.publicHostedZone(zone),
+    });
+    const from = `relay@${zoneProps.zoneName}`;
+
+    const config = new secretsmanager.Secret(this, 'MailRelayConfig', {
+      secretName: `${prefix}-mail-relay-yahoo`,
+      description: 'Yahoo!メールの取得（IMAP）の ID・パスワードと、転送先の Muse Mail のアドレス。値は手で入れる',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    const logGroup = lambdaLogGroup(this, 'MailRelayLogs', `${prefix}-mail-relay`);
+    const { fn } = appFunction(this, 'MailRelayFunction', {
+      prefix,
+      key: 'mail-relay',
+      logGroup,
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(4),
+      reservedConcurrentExecutions: 1,
+      retryAttempts: 0,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        MAIL_RELAY_SECRET_ID: config.secretArn,
+        MAIL_RELAY_FROM: `Yahoo!メールの転送 <${from}>`,
+      },
+    });
+
+    config.grantRead(fn);
+    identity.grantSendEmail(fn);
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [props.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${MAIL_RELAY_PARTITION_PREFIX}*`] } },
+      }),
+    );
+
+    new events.Rule(this, 'MailRelaySchedule', {
+      ruleName: `${prefix}-mail-relay`,
+      description: 'Yahoo!メールの新着を Muse Mail へ転送する',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+      targets: [new targets.LambdaFunction(fn, { retryAttempts: 0 })],
+    });
+
+    return { fn, logGroup, from };
   }
 
   /**

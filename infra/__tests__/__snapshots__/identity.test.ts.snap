@@ -135,6 +135,85 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     "MailInboxThrottlesAlarmAA3047C0": {
       "AlarmName": "sakekasu-kakeibo-dev-mail-inbox-throttles",
     },
+    "MailRelayAuthFailingAlarm99E66538": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-relay-auth-failing",
+    },
+    "MailRelayAuthFailingFilter5A55B366": {
+      "LogGroupName": {
+        "Ref": "MailRelayLogs761086D5",
+      },
+    },
+    "MailRelayConfig91AE8207": {
+      "Name": "sakekasu-kakeibo-dev-mail-relay-yahoo",
+    },
+    "MailRelayErrorsAlarm5F6E5FAE": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-relay-errors",
+    },
+    "MailRelayFailureFilter2CA16C4D": {
+      "LogGroupName": {
+        "Ref": "MailRelayLogs761086D5",
+      },
+    },
+    "MailRelayFailuresAlarm5C2A1550": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-relay-failures",
+    },
+    "MailRelayFunctionDB638F7C": {
+      "FunctionName": "sakekasu-kakeibo-dev-mail-relay",
+    },
+    "MailRelayFunctionEventInvokeConfigBAA1B667": {
+      "FunctionName": {
+        "Ref": "MailRelayFunctionDB638F7C",
+      },
+    },
+    "MailRelayIdentityDkimDnsToken18D2AADA0": {
+      "Name": {
+        "Fn::GetAtt": [
+          "MailRelayIdentity51007509",
+          "DkimDNSTokenName1",
+        ],
+      },
+    },
+    "MailRelayIdentityDkimDnsToken2B3CF6174": {
+      "Name": {
+        "Fn::GetAtt": [
+          "MailRelayIdentity51007509",
+          "DkimDNSTokenName2",
+        ],
+      },
+    },
+    "MailRelayIdentityDkimDnsToken378A1E737": {
+      "Name": {
+        "Fn::GetAtt": [
+          "MailRelayIdentity51007509",
+          "DkimDNSTokenName3",
+        ],
+      },
+    },
+    "MailRelayLogs761086D5": {
+      "LogGroupName": "/aws/lambda/sakekasu-kakeibo-dev-mail-relay",
+    },
+    "MailRelaySchedule47ED211F": {
+      "Name": "sakekasu-kakeibo-dev-mail-relay",
+    },
+    "MailRelayScheduleAllowEventRulesakekasukakeibodevapiMailRelayFunction570B350A3576A036": {
+      "FunctionName": {
+        "Fn::GetAtt": [
+          "MailRelayFunctionDB638F7C",
+          "Arn",
+        ],
+      },
+    },
+    "MailRelayThrottlesAlarm5CBCE64D": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-relay-throttles",
+    },
+    "MailRelayUidResetAlarmA97D8DC8": {
+      "AlarmName": "sakekasu-kakeibo-dev-mail-relay-uid-reset",
+    },
+    "MailRelayUidResetFilter055C4856": {
+      "LogGroupName": {
+        "Ref": "MailRelayLogs761086D5",
+      },
+    },
     "ModelBenchFunction8F19D965": {
       "FunctionName": "sakekasu-kakeibo-dev-model-bench",
     },
@@ -278,6 +357,26 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     "MailInboxKeys1B8DB9A0": "AWS::SecretsManager::Secret",
     "MailInboxLogsDE5C568A": "AWS::Logs::LogGroup",
     "MailInboxThrottlesAlarmAA3047C0": "AWS::CloudWatch::Alarm",
+    "MailRelayAuthFailingAlarm99E66538": "AWS::CloudWatch::Alarm",
+    "MailRelayAuthFailingFilter5A55B366": "AWS::Logs::MetricFilter",
+    "MailRelayConfig91AE8207": "AWS::SecretsManager::Secret",
+    "MailRelayErrorsAlarm5F6E5FAE": "AWS::CloudWatch::Alarm",
+    "MailRelayFailureFilter2CA16C4D": "AWS::Logs::MetricFilter",
+    "MailRelayFailuresAlarm5C2A1550": "AWS::CloudWatch::Alarm",
+    "MailRelayFunctionDB638F7C": "AWS::Lambda::Function",
+    "MailRelayFunctionEventInvokeConfigBAA1B667": "AWS::Lambda::EventInvokeConfig",
+    "MailRelayFunctionServiceRoleBE5DE191": "AWS::IAM::Role",
+    "MailRelayFunctionServiceRoleDefaultPolicy83FAA149": "AWS::IAM::Policy",
+    "MailRelayIdentity51007509": "AWS::SES::EmailIdentity",
+    "MailRelayIdentityDkimDnsToken18D2AADA0": "AWS::Route53::RecordSet",
+    "MailRelayIdentityDkimDnsToken2B3CF6174": "AWS::Route53::RecordSet",
+    "MailRelayIdentityDkimDnsToken378A1E737": "AWS::Route53::RecordSet",
+    "MailRelayLogs761086D5": "AWS::Logs::LogGroup",
+    "MailRelaySchedule47ED211F": "AWS::Events::Rule",
+    "MailRelayScheduleAllowEventRulesakekasukakeibodevapiMailRelayFunction570B350A3576A036": "AWS::Lambda::Permission",
+    "MailRelayThrottlesAlarm5CBCE64D": "AWS::CloudWatch::Alarm",
+    "MailRelayUidResetAlarmA97D8DC8": "AWS::CloudWatch::Alarm",
+    "MailRelayUidResetFilter055C4856": "AWS::Logs::MetricFilter",
     "ModelBenchFunction8F19D965": "AWS::Lambda::Function",
     "ModelBenchFunctionEventInvokeConfig48F4B62F": "AWS::Lambda::EventInvokeConfig",
     "ModelBenchFunctionRole81616D8D": "AWS::IAM::Role",
@@ -325,6 +424,14 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
       "UpdateReplacePolicy": "Delete",
     },
     "MailInboxLogsDE5C568A": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MailRelayConfig91AE8207": {
+      "DeletionPolicy": "Delete",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MailRelayLogs761086D5": {
       "DeletionPolicy": "Delete",
       "UpdateReplacePolicy": "Delete",
     },
@@ -435,6 +542,49 @@ exports[`作り直しになる部分（本番と同じ合成） > sakekasu-kakei
     },
     "MailInboxFunctionServiceRole42B97254": {
       "cdkdName": "sakekasu-kakeibo-dev-api-MailInboxFunctionServiceRole42B97254",
+      "properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "PermissionsBoundary": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition",
+              },
+              ":iam::123456789012:policy/sakekasu-kakeibo-role-boundary",
+            ],
+          ],
+        },
+      },
+    },
+    "MailRelayFunctionServiceRoleBE5DE191": {
+      "cdkdName": "sakekasu-kakeibo-dev-api-MailRelayFunctionServiceRoleBE5DE191",
       "properties": {
         "AssumeRolePolicyDocument": {
           "Statement": [

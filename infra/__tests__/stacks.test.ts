@@ -47,6 +47,7 @@ function stacks({ federation = true, benchRuleId }: { federation?: boolean; benc
     receiptBucket: data.receiptBucket,
     sharedAuth,
     allowedOrigins: ['https://kakeibo.sakekasu-builder.com'],
+    mailRelayZone: { hostedZoneId: 'Z0000000000000000TEST', zoneName: 'kakeibo.sakekasu-builder.com' },
     ...(federation ? { anthropicFederation: { ...anthropicFederation, ...(benchRuleId ? { benchRuleId } : {}) } } : {}),
   });
   const site = new SiteStack(app, 'test-site', {
@@ -133,6 +134,53 @@ describe('ApiStack', () => {
    * 下書き登録の関数が触れるのは、利用者のパーティション（レシート）と重複の印のパーティションだけ。
    * 消す権限は持たせない（鍵でできるのはレシートを 1 枚足すことだけ）。
    */
+  /*
+   * Yahoo!メールの中継。5 分ごとに 1 本だけ走らせ（重なると同じメールを 2 回送る）、再試行しない。
+   * 送り主のドメインの認証（DKIM）のレコードは家計簿のゾーンに書く。
+   */
+  it('Yahoo!メールの中継を 5 分ごとに 1 本だけ走らせ、家計簿のドメインで SES の認証をする', () => {
+    const template = Template.fromStack(stacks().api);
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'sakekasu-kakeibo-test-mail-relay',
+      ReservedConcurrentExecutions: 1,
+      Environment: { Variables: Match.objectLike({ MAIL_RELAY_FROM: 'Yahoo!メールの転送 <relay@kakeibo.sakekasu-builder.com>' }) },
+    });
+    template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', { MaximumRetryAttempts: 0 });
+    template.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'sakekasu-kakeibo-test-mail-relay',
+      ScheduleExpression: 'rate(5 minutes)',
+      Targets: [Match.objectLike({ RetryPolicy: { MaximumRetryAttempts: 0 } })],
+    });
+    template.hasResourceProperties('AWS::SES::EmailIdentity', { EmailIdentity: 'kakeibo.sakekasu-builder.com' });
+    // Easy DKIM の CNAME 3 つ
+    const dkim = Object.values(template.findResources('AWS::Route53::RecordSet')).filter(
+      (record) => record.Properties.Type === 'CNAME' && record.Properties.HostedZoneId === 'Z0000000000000000TEST',
+    );
+    expect(dkim).toHaveLength(3);
+  });
+
+  it('中継の関数は進み具合の行だけに触れ、パスワードを読めるのは中継の関数だけ', () => {
+    const template = Template.fromStack(stacks().api);
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const statementsOf = (role: string) =>
+      policies
+        .filter((policy) => JSON.stringify(policy.Properties.Roles).includes(role))
+        .flatMap((policy) => policy.Properties.PolicyDocument.Statement as Record<string, unknown>[]);
+
+    const relay = statementsOf('MailRelayFunction');
+    const table = relay.find((statement) => [statement.Action].flat().includes('dynamodb:PutItem'));
+    expect(table).toMatchObject({
+      Action: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+      Condition: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['MAILRELAY#*'] } },
+    });
+    expect(relay.flatMap((statement) => [statement.Action].flat())).toEqual(
+      expect.arrayContaining(['ses:SendEmail', 'ses:SendRawEmail']),
+    );
+
+    const readers = policies.filter((policy) => JSON.stringify(policy.Properties.PolicyDocument).includes('MailRelayConfig'));
+    expect(readers.map((policy) => JSON.stringify(policy.Properties.Roles))).toEqual([expect.stringContaining('MailRelayFunction')]);
+  });
+
   it('下書き登録の関数はテーブルを 2 つのパーティションに絞り、消す権限を持たない', () => {
     const template = Template.fromStack(stacks().api);
     const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
@@ -307,6 +355,7 @@ describe('ApiStack', () => {
     const secrets = Object.values(template.findResources('AWS::SecretsManager::Secret'));
     expect(secrets.map((secret) => secret.Properties.Name).sort()).toEqual([
       'sakekasu-kakeibo-test-mail-inbox-keys',
+      'sakekasu-kakeibo-test-mail-relay-yahoo',
       'sakekasu-kakeibo-test-typesafe-api-key',
     ]);
     for (const secret of secrets) expect(secret.Properties.SecretString).toBeUndefined();
@@ -393,8 +442,8 @@ describe('ApiStack', () => {
   it('カスタムリソースを作らない（ロググループは明示して作る）', () => {
     const template = Template.fromStack(stacks().api);
     expect(Object.keys(template.findResources('Custom::LogRetention'))).toHaveLength(0);
-    // api / ocr-receipt / classify / monthly-report / model-bench / mail-inbox
-    template.resourceCountIs('AWS::Logs::LogGroup', 6);
+    // api / ocr-receipt / classify / monthly-report / model-bench / mail-inbox / mail-relay
+    template.resourceCountIs('AWS::Logs::LogGroup', 7);
   });
 
   /*

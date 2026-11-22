@@ -6,7 +6,8 @@
 
 ## 流れ
 
-1. Yahoo メールに届いたメールを、全件 Muse に転送する
+1. 家計簿の中継（`infra/lambda/mail-relay/`）が 5 分ごとに Yahoo!メールを IMAP で見に行き、新着を全件 Muse Mail へコピーする
+   （Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないため。手順は [operations.md](operations.md) の「Yahoo!メールの中継（Muse）」）
 2. Muse が領収書のメールを選び、店名・品目・金額・注文番号を抜き出して利用者に知らせる
 3. 利用者が「登録する」と答えたら、Muse がこの API を呼ぶ
 4. 家計簿には **未紐付けのレシート**（`status: pending`、`source: mail`）として入る。明細はまだ作らない
@@ -15,6 +16,20 @@
 通販はクレジットカード払いに固定する前提で組んである。メールから明細を直接作ると、後から取り込む
 カードの明細と同じ支払いを二度数えるので、レシートとして置いてカードの明細を待つ。
 画面で開くと支払い方法はクレジットカードから始まる（現金のまま登録すると二重に数える）。
+
+## 中継したメールの形
+
+送り主は `relay@kakeibo.sakekasu-builder.com`、件名は `Fwd: <元の件名>`。本文の頭に次の行を書き、その後に元の本文が続く。
+添付は合計 10MB まで元のまま付け、超えたら外して、外したもののファイル名と大きさをこの欄に書く。
+
+```
+---------- 転送されたメッセージ ----------
+差出人: "Amazon.co.jp" <auto-confirm@amazon.co.jp>
+宛先: …@yahoo.co.jp
+日付: 2026-11-22 13:05（日本時間）
+件名: Amazon.co.jp ご注文の確認
+Message-ID: <…@…>
+```
 
 ## エンドポイント
 
@@ -53,7 +68,7 @@ X-Kakeibo-Signature: HEX( HMAC-SHA256(秘密の鍵, "<Timestamp>.<本文のバ�
 | `amount` | integer | 必須 | カードに請求される金額（ポイント・ギフト残高を引いた後）。1 以上 30,000 以下 |
 | `order_number` | string / null | 必須 | 注文番号。無ければ `null`。画面と同じ規則でそろえる（全角・ダッシュの揺れ、数字の無いものは無しと同じ） |
 | `source` | string | 必須 | `"mail"` 固定 |
-| `message_id` | string | 必須 | 元のメールの Message-ID（500 文字まで） |
+| `message_id` | string | 必須 | 元のメールの Message-ID（500 文字まで）。中継したメール自身の Message-ID ではなく、本文の頭の `Message-ID:` の行（ヘッダの `X-Original-Message-ID` と同じ）の値 |
 | `items` | array / null | 任意 | `{ "name": string, "amount": integer }` の配列。1〜50 行。送料・割引・ポイント利用も 1 行（割引は負の数）。合計は `amount` と一致させる |
 | `category` | any | 任意 | 受け取っても使わない |
 

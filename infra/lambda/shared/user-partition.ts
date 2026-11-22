@@ -16,3 +16,9 @@ export const isUserPartition = (pk: unknown): pk is string =>
  * 画面が読む保存データには混ぜない
  */
 export const MAIL_INBOX_PARTITION_PREFIX = 'MAILINBOX#';
+
+/**
+ * Yahoo!メールの取得（infra/lambda/mail-relay）の進み具合（最後に送った UID など）を置くパーティション。
+ * 利用者ごとではなく、取りに行くメールの口座ごとに 1 行（`MAILRELAY#yahoo`）
+ */
+export const MAIL_RELAY_PARTITION_PREFIX = 'MAILRELAY#';
