@@ -103,7 +103,7 @@ describe('DataStack', () => {
 describe('ApiStack', () => {
   /*
    * 例外は下書き登録（Muse から呼ぶ POST /draft-entries）だけ。Muse はブラウザでログインできないので、
-   * 関数の中で HMAC の署名を確かめる（infra/lambda/mail-inbox）。ほかの経路が外れたら落とす。
+   * 関数の中で専用の Bearer トークンを確かめる（infra/lambda/mail-inbox）。ほかの経路が外れたら落とす。
    */
   it('下書き登録の経路を除き、すべての経路に Cognito の認可を付ける', () => {
     const template = Template.fromStack(stacks().api);
@@ -130,7 +130,7 @@ describe('ApiStack', () => {
     expect(dependedKeys).toEqual(throttled);
   });
 
-  it('下書き登録の経路は、署名を確かめる関数に向け、流量を絞る', () => {
+  it('下書き登録の経路は、トークンを確かめる関数に向け、流量を絞る', () => {
     const template = Template.fromStack(stacks().api);
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'sakekasu-kakeibo-test-mail-inbox',

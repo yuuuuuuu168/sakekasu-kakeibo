@@ -362,8 +362,8 @@ export class ApiStack extends cdk.Stack {
      */
     /*
      * 下書き登録（Muse から呼ぶ）。この経路だけ JWT の検証を外す。Muse はブラウザでログインできないため。
-     * 呼び手の確認は関数の中で、本文に掛けた HMAC-SHA256 の署名で行う（infra/lambda/mail-inbox/signature.ts）。
-     * API Gateway の Lambda オーソライザーには本文が渡らないので、署名はオーソライザーでは確かめられない。
+     * 呼び手の確認は関数の中で、この経路専用の Bearer トークンで行う（infra/lambda/mail-inbox/token.ts）。
+     * Lambda オーソライザーに分けないのは、認証の失敗と結果を同じ 1 行のログとアラームで追えるようにするため。
      */
     const draftRoutes = this.httpApi.addRoutes({
       path: '/draft-entries',
@@ -385,7 +385,7 @@ export class ApiStack extends cdk.Stack {
      * （2026-11-22、POST /draft-entries を足したデプロイで実際に止まった）。経路を足すときは、ここにも足す
      */
     for (const route of [...classifyRoutes, ...analyzeRoutes, ...draftRoutes]) {
-      stage.addDependency(route.node.defaultChild as apigwv2.CfnRoute);
+      stage.addResourceDependency(route.node.defaultChild as apigwv2.CfnRoute);
     }
 
     /*
@@ -449,7 +449,7 @@ export class ApiStack extends cdk.Stack {
    * 下書き登録の関数と、その鍵の置き場所。経路（POST /draft-entries）は呼び出し側で足す。
    *
    * 鍵の値は CDK に書かない。入れ物だけ作り、発行した鍵を人が入れる（docs/operations.md の「下書き登録の鍵」）。
-   * 中身は `{ "keys": [{ id, secret, sub, expiresAt }] }`。消えても発行し直せるので、TypeSafe の鍵と同じく消す方は止めない。
+   * 中身は `{ "keys": [{ id, tokenHash, sub, expiresAt }] }`（トークンそのものは置かない）。消えても発行し直せるので、TypeSafe の鍵と同じく消す方は止めない。
    *
    * 権限は、この鍵の読み取り、classify の関数の呼び出し（品目のカテゴリ判定）、テーブルの読み書き。
    * テーブルは利用者のパーティション（レシートを置く）と、重複の印のパーティションだけに絞る。
@@ -462,7 +462,7 @@ export class ApiStack extends cdk.Stack {
   ): { fn: lambda.IFunction; logGroup: logs.ILogGroup } {
     const keys = new secretsmanager.Secret(this, 'MailInboxKeys', {
       secretName: `${prefix}-mail-inbox-keys`,
-      description: '下書き登録 API（Muse）の署名の鍵。値は手で入れる',
+      description: '下書き登録 API（Muse）のトークンのハッシュ。値は手で入れる',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
