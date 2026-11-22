@@ -190,10 +190,19 @@ describe('ApiStack', () => {
     expect(relay.flatMap((statement) => [statement.Action].flat())).toEqual(
       expect.arrayContaining(['ses:SendEmail', 'ses:SendRawEmail']),
     );
-    // 利用者のパーティションは、転送の条件を読む GetItem だけ
+    // 利用者のパーティションは、転送の条件の項目を読む GetItem だけ。行では絞れないので項目で絞り、
+    // 項目を指定しない読み取り（全部の項目が返る）は Null の条件で拒む
     const userStatements = relay.filter((statement) => JSON.stringify(statement.Condition ?? {}).includes('USER#'));
     expect(userStatements).toEqual([
-      expect.objectContaining({ Action: 'dynamodb:GetItem', Condition: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] } } }),
+      expect.objectContaining({
+        Action: 'dynamodb:GetItem',
+        Condition: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['USER#*'] },
+          'ForAllValues:StringEquals': { 'dynamodb:Attributes': ['pk', 'sk', 'mailRelayFilter'] },
+          StringEqualsIfExists: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+          Null: { 'dynamodb:Attributes': 'false' },
+        },
+      }),
     ]);
 
     const readers = policies.filter((policy) => JSON.stringify(policy.Properties.PolicyDocument).includes('MailRelayConfig'));

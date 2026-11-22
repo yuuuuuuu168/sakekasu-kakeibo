@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   fetchOneQueries: [] as unknown[],
   filter: undefined as Record<string, unknown> | undefined,
   filterKeys: [] as unknown[],
+  filterProjections: [] as unknown[],
 }));
 
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
@@ -45,6 +46,7 @@ vi.mock('@aws-sdk/lib-dynamodb', () => ({
       async send(command: { kind: string; input: { Item?: Record<string, unknown>; Key?: { pk: string; sk: string } } }) {
         if (command.kind === 'get' && command.input.Key?.sk === 'CONFIG#mailRelayFilter') {
           state.filterKeys.push(command.input.Key);
+          state.filterProjections.push((command.input as { ProjectionExpression?: string }).ProjectionExpression);
           return { Item: state.filter ? { mailRelayFilter: state.filter } : undefined };
         }
         if (command.kind === 'get') return { Item: state.stored };
@@ -124,6 +126,7 @@ beforeEach(() => {
   state.fetchOneQueries = [];
   state.filter = undefined;
   state.filterKeys = [];
+  state.filterProjections = [];
   for (const method of ['info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation(() => {});
 });
 
@@ -213,6 +216,8 @@ describe('mail-relay', () => {
     );
     await handler({});
     expect(state.filterKeys).toEqual([{ pk: 'USER#sub-1', sk: 'CONFIG#mailRelayFilter' }]);
+    // 権限は mailRelayFilter の項目しか読めない。項目を指定して読む
+    expect(state.filterProjections).toEqual(['mailRelayFilter']);
     expect(state.sent.map((raw) => /Subject: (.*)/.exec(raw.toString())?.[1])).toHaveLength(2);
     expect(state.fetchOneQueries).toHaveLength(2);
     // 送らなかった 13 も処理済みとして進む

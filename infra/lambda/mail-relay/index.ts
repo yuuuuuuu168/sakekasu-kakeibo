@@ -195,7 +195,14 @@ async function loadConfig(): Promise<RelayConfig | undefined> {
  */
 async function loadFilter(sub: string | undefined): Promise<MailRelayFilter> {
   if (!sub) return { senders: [], subjectWords: [] };
-  const found = await documents.send(new GetCommand({ TableName: TABLE_NAME, Key: { pk: userPk(sub), sk: SK.mailRelayFilter } }));
+  // 読む項目を指定する。中継の権限は mailRelayFilter の項目しか読めず、指定の無い読み取りは拒まれる（api-stack.ts）
+  const found = await documents.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { pk: userPk(sub), sk: SK.mailRelayFilter },
+      ProjectionExpression: 'mailRelayFilter',
+    }),
+  );
   return mailRelayFilterOf(found.Item?.mailRelayFilter);
 }
 
