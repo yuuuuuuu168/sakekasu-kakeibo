@@ -502,7 +502,7 @@ export class ApiStack extends cdk.Stack {
   }
 
   /**
-   * Yahoo!メールの中継。5 分ごとに IMAP で受信箱を見に行き、新着を全件 Muse Mail へ SES でコピーする
+   * Yahoo!メールの中継。5 分ごとに IMAP で受信箱と個人フォルダを見に行き、新着を Muse Mail へ SES でコピーする
    * （infra/lambda/mail-relay）。Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないため、こちらから読みに行く。
    *
    * - 送り主は家計簿のドメイン（relay@<ゾーン>）。SES のドメイン認証（Easy DKIM）のレコードは、CDK が

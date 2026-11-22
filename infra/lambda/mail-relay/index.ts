@@ -10,12 +10,28 @@ import { requireEnv } from '../shared/env';
 import { SK, mailRelayFilterOf } from '../shared/snapshot-items';
 import { MAIL_RELAY_PARTITION_PREFIX, userPk } from '../shared/user-partition';
 import { MAX_SOURCE_BYTES, buildForward, buildOversizeNotice, type ForwardTarget, type OriginalHeaders } from './forward';
-import { AUTH_ALERT_AFTER, parseRelayConfig, pickUids, planRun, shouldTryLogin, type RelayConfig, type RelayState } from './plan';
+import {
+  AUTH_ALERT_AFTER,
+  MAX_PER_RUN,
+  isTooOld,
+  isWatchedFolder,
+  orderFolders,
+  parseRelayConfig,
+  pickUids,
+  planRun,
+  shouldTryLogin,
+  stateFromItem,
+  type RelayConfig,
+  type RelayState,
+} from './plan';
 
 /*
- * Yahoo!メールを IMAP で 5 分ごとに見に行き、新しく届いたメールを全件、Muse Mail へ SES でコピーする。
+ * Yahoo!メールを IMAP で 5 分ごとに見に行き、新しく届いたメールを Muse Mail へ SES でコピーする。
  * Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないので、こちらで読みに行く。
- * 受信箱は読み取り専用で開く（既読にしない、動かさない、消さない）。
+ * 見るのは受信箱と個人フォルダ（迷惑メール・ゴミ箱・送信済み・下書きは外す。plan.ts の isWatchedFolder）で、
+ * Yahoo! の振り分けで直接フォルダに入るメールも拾う。フォルダごとに最後に送った UID を覚える。
+ * どのフォルダも読み取り専用で開く（既読にしない、動かさない、消さない）。
+ * 届いてから 1 日より古いメールは送らない（手で別のフォルダへ移した古いメールを、新着として送り直さないため）。
  *
  * 送るのは、設定画面で決めた条件（差出人か件名のどちらかに当たる）のメールだけ。条件が空なら全部を送る。
  * 条件は宛名の情報（IMAP の ENVELOPE）だけで判定し、当たらないメールは本文を取りに行かない。
@@ -80,74 +96,107 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
   }
 
   let current: RelayState = { ...state, authFailures: 0, lastAuthFailureAt: undefined };
-  const summary = { 送った: 0, 条件に当たらず: 0, 大きすぎ: 0, 添付を外した: 0, 残り: 0 };
+  const save = async (next: RelayState) => {
+    current = next;
+    await saveState(current);
+  };
+  const summary = { フォルダ: 0, 送った: 0, 条件に当たらず: 0, 古いので送らず: 0, 大きすぎ: 0, 添付を外した: 0, 残り: 0 };
   try {
-    const lock = await client.getMailboxLock('INBOX', { readOnly: true });
-    try {
-      const mailbox = client.mailbox as MailboxObject;
-      const plan = planRun(current, { uidValidity: String(mailbox.uidValidity), uidNext: mailbox.uidNext });
-      if (plan.kind === 'baseline') {
-        current = { ...current, uidValidity: String(mailbox.uidValidity), lastUid: plan.lastUid };
-        await saveState(current);
-        // UIDVALIDITY が変わったときは取りこぼしがありうる。アラーム（mail-relay-uid-reset）がこの文言を数え、人に知らせる
-        if (plan.reason !== '初回') console.warn('[mail-relay] uid-reset');
-        console.info('[mail-relay]', JSON.stringify({ 結果: '基準を決めた', 理由: plan.reason, UID: plan.lastUid }));
-        return;
-      }
+    const paths = orderFolders(
+      (await client.list()).filter((folder) => isWatchedFolder(folder)).map((folder) => folder.path),
+    );
+    // 消したフォルダの進み具合は落とす（同じ名前で作り直したら、初めて見るフォルダとして数え直す）
+    const folders = Object.fromEntries(Object.entries(current.folders).filter(([path]) => paths.includes(path)));
+    if (Object.keys(folders).length !== Object.keys(current.folders).length) await save({ ...current, folders });
 
-      const listed: { uid: number; size: number; envelope: OriginalHeaders; fromAddresses: string[] }[] = [];
-      for await (const message of client.fetch(`${plan.afterUid + 1}:*`, { uid: true, size: true, envelope: true }, { uid: true })) {
-        listed.push({
-          uid: message.uid,
-          size: message.size ?? 0,
-          envelope: envelopeHeaders(message.envelope),
-          fromAddresses: (message.envelope?.from ?? []).map((address) => address.address ?? '').filter((address) => address !== ''),
-        });
-      }
-      const filter = await loadFilter(config.sub);
-      const uids = pickUids(
-        listed.map((message) => message.uid),
-        plan.afterUid,
-      );
-      summary.残り = listed.filter((message) => message.uid > plan.afterUid).length - uids.length;
+    const filter = await loadFilter(config.sub);
+    const target: ForwardTarget = { from: FROM_ADDRESS, to: config.forwardTo };
+    const outOfTime = () => context !== undefined && context.getRemainingTimeInMillis() < STOP_MARGIN_MS;
 
-      const target: ForwardTarget = { from: FROM_ADDRESS, to: config.forwardTo };
-      for (const uid of uids) {
-        if (context && context.getRemainingTimeInMillis() < STOP_MARGIN_MS) {
-          summary.残り += uids.length - uids.indexOf(uid);
-          break;
-        }
-        const meta = listed.find((message) => message.uid === uid)!;
-        if (decideRelay(filter, { fromAddresses: meta.fromAddresses, subject: meta.envelope.subject }) === 'none') {
-          // 送らないメールも処理済みとして進める。後から条件を広げても、過去のメールは遡って送らない
-          current = { ...current, lastUid: uid };
-          await saveState(current);
-          summary.条件に当たらず += 1;
+    for (const path of paths) {
+      if (outOfTime()) break;
+      summary.フォルダ += 1;
+      const lock = await client.getMailboxLock(path, { readOnly: true });
+      try {
+        const mailbox = client.mailbox as MailboxObject;
+        const uidValidity = String(mailbox.uidValidity);
+        const plan = planRun(current.folders[path], { uidValidity, uidNext: mailbox.uidNext });
+        if (plan.kind === 'baseline') {
+          await save({ ...current, folders: { ...current.folders, [path]: { uidValidity, lastUid: plan.lastUid } } });
+          // UIDVALIDITY が変わったときは取りこぼしがありうる。アラーム（mail-relay-uid-reset）がこの文言を数え、人に知らせる
+          if (plan.reason !== '初回') console.warn('[mail-relay] uid-reset');
+          // フォルダの名前は出す（どのフォルダを見始めたかが分かるように）。件名・差出人は出さない
+          console.info('[mail-relay]', JSON.stringify({ 結果: '基準を決めた', フォルダ: path, 理由: plan.reason, UID: plan.lastUid }));
           continue;
         }
-        let raw: Buffer;
-        if (meta.size > MAX_SOURCE_BYTES) {
-          raw = await buildOversizeNotice(meta.envelope, meta.size, target);
-          summary.大きすぎ += 1;
-        } else {
-          const fetched = await client.fetchOne(String(uid), { source: true }, { uid: true });
-          if (!fetched || !fetched.source) throw new Error(`UID ${uid} の本文を取れなかった`);
-          const built = await buildForward(await simpleParser(fetched.source), target);
-          raw = built.raw;
-          if (built.dropped.length > 0) summary.添付を外した += 1;
+
+        const listed: { uid: number; size: number; internalDate?: Date | string; envelope: OriginalHeaders; fromAddresses: string[] }[] = [];
+        for await (const message of client.fetch(
+          `${plan.afterUid + 1}:*`,
+          { uid: true, size: true, envelope: true, internalDate: true },
+          { uid: true },
+        )) {
+          listed.push({
+            uid: message.uid,
+            size: message.size ?? 0,
+            internalDate: message.internalDate,
+            envelope: envelopeHeaders(message.envelope),
+            fromAddresses: (message.envelope?.from ?? []).map((address) => address.address ?? '').filter((address) => address !== ''),
+          });
         }
-        await ses.send(new SendEmailCommand({ Content: { Raw: { Data: raw } } }));
-        // 1 通ごとに進める。途中で落ちても、送った分を次の回で送り直さない
-        current = { ...current, lastUid: uid };
-        await saveState(current);
-        summary.送った += 1;
-        console.info('[mail-relay] sent', JSON.stringify({ UID: uid, 大きさ: meta.size }));
+        const pending = listed.filter((message) => message.uid > plan.afterUid).length;
+        // 1 回の上限（MAX_PER_RUN）はフォルダをまたいで数える。処理した数は送った・送らなかったの合計
+        const handled = () => summary.送った + summary.条件に当たらず + summary.古いので送らず;
+        const uids = pickUids(
+          listed.map((message) => message.uid),
+          plan.afterUid,
+          MAX_PER_RUN - handled(),
+        );
+        summary.残り += pending - uids.length;
+
+        for (const [index, uid] of uids.entries()) {
+          if (outOfTime()) {
+            summary.残り += uids.length - index;
+            break;
+          }
+          const meta = listed.find((message) => message.uid === uid)!;
+          const advance = () => save({ ...current, folders: { ...current.folders, [path]: { uidValidity, lastUid: uid } } });
+
+          // 送らないメールも処理済みとして進める。後から条件を広げても、過去のメールは遡って送らない
+          if (isTooOld(meta.internalDate, now)) {
+            await advance();
+            summary.古いので送らず += 1;
+            continue;
+          }
+          if (decideRelay(filter, { fromAddresses: meta.fromAddresses, subject: meta.envelope.subject }) === 'none') {
+            await advance();
+            summary.条件に当たらず += 1;
+            continue;
+          }
+
+          let raw: Buffer;
+          if (meta.size > MAX_SOURCE_BYTES) {
+            raw = await buildOversizeNotice(meta.envelope, meta.size, target);
+            summary.大きすぎ += 1;
+          } else {
+            const fetched = await client.fetchOne(String(uid), { source: true }, { uid: true });
+            if (!fetched || !fetched.source) throw new Error(`UID ${uid} の本文を取れなかった`);
+            const built = await buildForward(await simpleParser(fetched.source), target);
+            raw = built.raw;
+            if (built.dropped.length > 0) summary.添付を外した += 1;
+          }
+          await ses.send(new SendEmailCommand({ Content: { Raw: { Data: raw } } }));
+          // 1 通ごとに進める。途中で落ちても、送った分を次の回で送り直さない
+          await advance();
+          summary.送った += 1;
+          console.info('[mail-relay] sent', JSON.stringify({ フォルダ: path, UID: uid, 大きさ: meta.size }));
+        }
+      } finally {
+        lock.release();
       }
-    } finally {
-      lock.release();
     }
     if (state.authFailures > 0) await saveState(current);
-    console.info('[mail-relay]', JSON.stringify({ 結果: '完了', ...summary, 最後のUID: current.lastUid }));
+    console.info('[mail-relay]', JSON.stringify({ 結果: '完了', ...summary }));
   } catch (cause) {
     if (state.authFailures > 0) await saveState(current).catch(() => undefined);
     fail('取得・送信', cause);
@@ -208,16 +257,16 @@ async function loadFilter(sub: string | undefined): Promise<MailRelayFilter> {
 
 async function loadState(): Promise<RelayState> {
   const found = await documents.send(new GetCommand({ TableName: TABLE_NAME, Key: STATE_KEY }));
-  const item = found.Item as Partial<RelayState> | undefined;
-  return { ...item, authFailures: typeof item?.authFailures === 'number' ? item.authFailures : 0 };
+  return stateFromItem(found.Item);
 }
 
+/** 行は丸ごと書き換える。受信箱しか見ていなかった頃の uidValidity / lastUid は、ここで行から消える */
 async function saveState(state: RelayState): Promise<void> {
-  const { uidValidity, lastUid, authFailures, lastAuthFailureAt } = state;
+  const { folders, authFailures, lastAuthFailureAt } = state;
   await documents.send(
     new PutCommand({
       TableName: TABLE_NAME,
-      Item: { ...STATE_KEY, uidValidity, lastUid, authFailures, lastAuthFailureAt, updatedAt: new Date().toISOString() },
+      Item: { ...STATE_KEY, folders, authFailures, lastAuthFailureAt, updatedAt: new Date().toISOString() },
     }),
   );
 }
