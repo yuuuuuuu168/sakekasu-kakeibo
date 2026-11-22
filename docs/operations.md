@@ -327,6 +327,99 @@ fields @timestamp, @message
 | stats count() as n, avg(input) as avgInput, avg(output) as avgOutput by provider
 ```
 
+### 6.6 下書き登録の鍵（Muse）
+
+通販のメールから下書きを置く API（[mail-inbox.md](mail-inbox.md)）の署名の鍵。使わないなら入れなくてよい
+（入れ物は CDK が乱数で作るので、そのままでは全部の呼び出しが 401 になる）。
+鍵の値は Secrets Manager の `sakekasu-kakeibo-<env>-mail-inbox-keys` に、`{ "keys": [...] }` の形で入れる。
+1 件は `{ "id", "secret", "sub", "expiresAt" }` で、`sub` は下書きを入れる利用者（上の「共通ログインへの切り替え」の
+コマンドで調べる）。値の読み書きは管理者のプロファイルで行う（読み取り専用の `verify` では読めない）。
+
+発行する（初回と、90 日ごとの差し替え）。
+
+```sh
+cd infra
+# 初回は current.json を作らず、--current を外す
+aws secretsmanager get-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --query SecretString --output text > current.json
+npx tsx scripts/mail-inbox-key.ts issue --sub <sub> --current current.json > next.json
+aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --secret-string file://next.json
+rm current.json next.json
+```
+
+標準エラーに出た「鍵の ID」と「秘密の鍵」を、Muse の安全な入力フォームに入れる。チャットには貼らない。
+差し替えの間は新旧の鍵が両方効く。Muse が新しい鍵で呼べたのを CloudWatch Logs の `[mail-inbox]` の行
+（`鍵` の欄）で確かめてから、古い鍵を失効させる。期限の切れた鍵は、次に発行したときに一覧から落ちる。
+
+失効させる（漏れた疑いがあるとき）。
+
+```sh
+aws secretsmanager get-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --query SecretString --output text > current.json
+npx tsx scripts/mail-inbox-key.ts revoke --id <鍵の ID> --current current.json > next.json
+aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbox-keys \
+  --secret-string file://next.json
+rm current.json next.json
+```
+
+関数は呼ばれるたびに鍵を読み直すので、入れた直後から効く（TypeSafe の鍵と違い、関数を入れ替えなくてよい）。
+
+Muse に渡す URL は API のスタックの出力 `MailInboxUrl`。
+
+### 6.7 Yahoo!メールの中継（Muse）
+
+Yahoo!メールを 5 分ごとに IMAP で見に行き、新着を全件 Muse Mail へコピーする（`infra/lambda/mail-relay/`）。
+Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないので、こちらから読みに行く。
+受信箱は読み取り専用で開くので、既読にも移動にもならない。見るのは受信箱だけで、迷惑メールのフォルダや
+Yahoo! のフィルターで別のフォルダへ振り分けたメールは送らない。
+
+送り主は `relay@kakeibo.sakekasu-builder.com`（スタックの出力 `MailRelayFrom`）。元の差出人の名前では送らず、
+本文の頭に元の差出人・宛先・日付・件名・Message-ID を書き、本文と添付（合計 10MB まで。超えたら外して、
+外したもののファイル名と大きさを本文に書く）を載せる。30MB を超えるメールは中身を取りに行かず、宛名の情報だけを送る。
+
+初回に止まった位置から数えるので、入れる前に届いていたメールは送らない。止まっていた間に届いた分は、
+次の回から 1 回 50 通ずつ追いつく。メールの中身は保存せず、ログにも件名・差出人・本文は出さない。
+
+入れる順番。シークレットを最後にすると、準備が揃うまで関数は何もしない（`未設定` の行だけ出る）。
+
+1. **SES の本番利用を申請する**（初回だけ。アカウントで 1 回）。作ったばかりの SES は「サンドボックス」で、
+   認証したアドレスにしか送れない。コンソールの Amazon SES → アカウントダッシュボード →
+   「本番アクセスをリクエスト」から、用途（自分宛てのメールの転送、1 日数十通）を書いて出す。審査は 1 日ほど。
+   ほかのアプリと同じアカウントなので、もう出してあれば要らない。状態は次で見られる
+
+   ```sh
+   aws sesv2 get-account --region ap-northeast-1 --profile verify --query '{production:ProductionAccessEnabled,sending:SendingEnabled}'
+   ```
+
+2. **ドメインの認証が済んでいるか確かめる**。DKIM のレコードはデプロイで家計簿のゾーンに入るので、待つだけでよい
+
+   ```sh
+   aws sesv2 get-email-identity --email-identity kakeibo.sakekasu-builder.com --region ap-northeast-1 --profile verify \
+     --query '{verified:VerifiedForSendingStatus,dkim:DkimAttributes.Status}'
+   ```
+
+3. **Yahoo!メールで IMAP を許可する**。ブラウザの Yahoo!メール → 設定 → 「IMAP/POP/SMTP アクセス」を
+   「Yahoo! JAPAN 公式サービス以外からのアクセスも有効にする」にする。Yahoo! JAPAN ID をパスワード無しの
+   ログインにしていると IMAP に入れないので、パスワードを使える状態にしておく
+
+4. **シークレットに入れる**（管理者のプロファイルで。値はチャットやリポジトリに貼らない）
+
+   ```sh
+   aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-relay-yahoo \
+     --secret-string '{"user":"<Yahoo! JAPAN ID>","password":"<パスワード>","forwardTo":"<Muse Mail のアドレス>"}'
+   ```
+
+   打ったコマンドはシェルの履歴に残るので、入れた後に履歴から消すか、コンソールの「シークレットの値を取得」→
+   「編集」から入れる。5 分以内の次の回で `基準を決めた` の行が出れば動いている
+
+パスワードを変えたら、4 をやり直す。止めたいときは、シークレットの値を `{}` にする（次の回から `未設定` になる）。
+Yahoo! JAPAN ID には二段階の確認とログイン通知を入れておくと、パスワードが漏れたときに気づける。
+
+アラームは `mail-relay-auth-failing`（IMAP のログインが 2 回続けて失敗）、`mail-relay-failures`（取得か送信が
+15 分続けて失敗）、`mail-relay-uid-reset`（受信箱の番号が振り直された）。認証の失敗が 3 回続くと、
+Yahoo! に止められないよう 1 時間に 1 回しか試さない。
+
 ### 7. フロントを置く
 
 ふだんは deploy ワークフローが行う。手で置くときは次のとおり。ログインの値（共通ログイン）は
@@ -829,11 +922,18 @@ SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolli
 | `sakekasu-kakeibo-<env>-ocr-receipt-errors` | api | OCR の Lambda の Errors |
 | `sakekasu-kakeibo-<env>-classify-errors` | api | カテゴリ判定の Lambda の Errors |
 | `sakekasu-kakeibo-<env>-monthly-report-errors` | api | 月次レポートの Lambda の Errors |
-| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report}-throttles` | api | 上の 4 本の Throttles（4 個） |
+| `sakekasu-kakeibo-<env>-mail-inbox-errors` | api | 下書き登録（Muse）の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-mail-relay-errors` | api | Yahoo!メールの中継の Lambda の Errors |
+| `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify,monthly-report,mail-inbox,mail-relay}-throttles` | api | 上の 6 本の Throttles（6 個） |
 | `sakekasu-kakeibo-<env>-api-5xx` | api | HTTP API の `5xx`（次元 `ApiId`） |
 | `sakekasu-kakeibo-<env>-ocr-receipt-failures` | api | OCR のログの `[ocr] failed`（メトリクスフィルタで数える） |
 | `sakekasu-kakeibo-<env>-ocr-receipt-fallbacks` | api | OCR のログの `[ocr] fallback`（Claude API で失敗し Bedrock で読み直した回数。ID 連携があるときだけ作る） |
 | `sakekasu-kakeibo-<env>-monthly-report-failures` | api | 月次レポートのログの `[monthly-report] failed`（メトリクスフィルタで数える） |
+| `sakekasu-kakeibo-<env>-mail-inbox-auth-failures` | api | 下書き登録のログの `[mail-inbox] auth-failed`。5 分に 3 回で鳴る |
+| `sakekasu-kakeibo-<env>-mail-inbox-key-expiring` | api | 下書き登録のログの `[mail-inbox] key-expiring`（鍵の期限が 14 日を切った） |
+| `sakekasu-kakeibo-<env>-mail-relay-auth-failing` | api | 中継のログの `[mail-relay] auth-failing`（IMAP のログインが 2 回続けて失敗。直るまで鳴り続ける） |
+| `sakekasu-kakeibo-<env>-mail-relay-failures` | api | 中継のログの `[mail-relay] failed`。3 期間（15 分）続いたら鳴る |
+| `sakekasu-kakeibo-<env>-mail-relay-uid-reset` | api | 中継のログの `[mail-relay] uid-reset`（受信箱の UIDVALIDITY が変わり、数え直した） |
 | `sakekasu-kakeibo-<env>-monthly-report-invocation-failures` | api | EventBridge の `FailedInvocations`（ルール `sakekasu-kakeibo-<env>-monthly-report`） |
 | `sakekasu-kakeibo-<env>-{api,ocr-receipt,classify}-slo-availability` | api | 下の SLO の達成率（`AWS/ApplicationSignals` の `AttainmentRate`、次元 `SloName`）が 1 時間平均で 90 を割った（3 個） |
 | `sakekasu-kakeibo-<env>-dynamodb-read-throttles` | data | テーブルの `ReadThrottleEvents` |
@@ -856,6 +956,13 @@ SLO のものだけは `MISSING`（直前の状態を保つ）。30 日の rolli
   `api-stack.ts` のフィルタも合わせる
 - 月 1 回の呼び出しが「来なかった」ことは見ていない。月に 1 点しか出ない指標を欠損で鳴らすと、
   残りの期間ずっと鳴り続けるため
+- `mail-inbox-auth-failures` は、鍵の期限切れ・失効のまま Muse が呼び続けたとき、鍵の総当たり、
+  シークレットが読めないとき（全部 401 になる）に鳴る。ログの「理由」で見分ける。`mail-inbox-key-expiring` は
+  Muse が呼ぶたびに鳴り、呼ばれない日は鳴らない。どちらも「下書き登録の鍵（Muse）」の手順で直す。
+  ログの文言（`infra/lambda/mail-inbox/index.ts`）を変えるときは、`api-alarms.ts` のフィルタも合わせる
+- 中継（mail-relay）は失敗を握って正常に終えるので、`mail-relay-errors` が鳴るのはタイムアウトなどだけ。
+  送れなかったメールは次の回で同じものから送り直すので、`mail-relay-failures` が鳴っても取りこぼしは無い。
+  SES の `MessageRejected` なら、本番利用の申請とドメインの認証を見る（「Yahoo!メールの中継」の節）
 - DynamoDB はオンデマンドなので容量の設定は無いが、急な増加では弾かれる。`ThrottledRequests` は
   操作ごとの次元しか持たないので、テーブル単位の Read/WriteThrottleEvents を見ている
 

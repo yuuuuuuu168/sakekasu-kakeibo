@@ -28,6 +28,8 @@ inclusion: always
 | 7 | カテゴリごとの月の上限と着地見込み | ✅ 実装済み |
 | 8 | 月末の叱りレポート（5 段階） | ✅ 実装済み |
 | 9 | 定期的な支払いの登録と、支払日の明細づくり・着地見込み・残り回数への反映 | ✅ 実装済み |
+| 10 | 通販のメールからレシートの下書きを置く API（Muse から HMAC の署名で呼ぶ。docs/mail-inbox.md） | ✅ 実装済み |
+| 11 | Yahoo!メールを IMAP で 5 分ごとに読み、新着を Muse Mail へ SES でコピーする中継 | ✅ 実装済み |
 
 ## 技術スタック
 
@@ -70,7 +72,7 @@ src/
   components/ui/   # 共通コンポーネント
 infra/
   lib/             # CDK スタック（auth / data / api / site / cert）
-  lambda/          # Lambda 関数（api, ocr-receipt, classify, monthly-report, model-bench）
+  lambda/          # Lambda 関数（api, ocr-receipt, classify, monthly-report, model-bench, mail-inbox, mail-relay）
 docs/              # 要件・設計・運用
 ```
 
