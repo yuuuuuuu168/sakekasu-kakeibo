@@ -119,7 +119,7 @@ HTTP API の経路は次のとおり。`POST /draft-entries` を除き、すべ�
 | `POST /classify` | 品目名や店舗名のカテゴリを判定して返す（別の Lambda） |
 | `PUT /receipts/{id}` `DELETE /receipts/{id}` | レシートを保存・削除する |
 | `GET /reports/{month}` | 作っておいた月次レポートを返す |
-| `POST /draft-entries` | 通販のメールからレシートの下書きを 1 件置く（Muse から呼ぶ。JWT ではなく HMAC の署名。別の Lambda）。[mail-inbox.md](mail-inbox.md) |
+| `POST /draft-entries` | 通販のメールからレシートの下書きを 1 件置く（Muse から呼ぶ。JWT ではなくこの経路専用の Bearer トークン。別の Lambda）。[mail-inbox.md](mail-inbox.md) |
 
 レシートの読み取りを非同期にしているのは、API Gateway（HTTP API）の統合タイムアウトが 30 秒で、
 引き上げられないため。1 枚の読み取りは 2〜13 秒（2026-10 の実測）だが、長いレシートを複数枚で読む、

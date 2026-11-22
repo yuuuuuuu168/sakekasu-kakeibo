@@ -1,9 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import type { Receipt } from '@kakeibo/core';
-import { sign, type InboxKey } from '../signature';
+import { hashToken, type InboxKey } from '../token';
 
-const key: InboxKey = { id: 'muse-1', secret: 'k'.repeat(64), sub: 'sub-1', expiresAt: '2099-01-01T00:00:00Z' };
+const token = 'kkb_handler-test-token-0123456789';
+const key: InboxKey = { id: 'muse-1', tokenHash: hashToken(token), sub: 'sub-1', expiresAt: '2099-01-01T00:00:00Z' };
 
 const state = vi.hoisted(() => ({
   secret: '' as string | undefined,
@@ -64,17 +65,16 @@ const draft = {
   message_id: '<abc@mail.example>',
 };
 
-function event(body: unknown, overrides: { secret?: string; timestamp?: string; keyId?: string } = {}): APIGatewayProxyEventV2 {
+function event(body: unknown, overrides: { token?: string | null } = {}): APIGatewayProxyEventV2 {
   const text = typeof body === 'string' ? body : JSON.stringify(body);
-  const timestamp = overrides.timestamp ?? String(Math.floor(Date.now() / 1000));
+  const presented = overrides.token === undefined ? token : overrides.token;
   return {
     body: text,
     isBase64Encoded: false,
     headers: {
       'content-type': 'application/json',
-      'x-kakeibo-key-id': overrides.keyId ?? key.id,
-      'x-kakeibo-timestamp': timestamp,
-      'x-kakeibo-signature': sign(overrides.secret ?? key.secret, timestamp, Buffer.from(text, 'utf-8')),
+      // API Gateway（HTTP API）はヘッダの名前を小文字にして渡す
+      ...(presented === null ? {} : { authorization: `Bearer ${presented}` }),
     },
   } as unknown as APIGatewayProxyEventV2;
 }
@@ -109,8 +109,8 @@ describe('POST /draft-entries', () => {
     expect(bodyOf(result).id).toBe('r-first');
   });
 
-  it('署名が違えば 401 で、理由は返さない', async () => {
-    const result = await handler(event(draft, { secret: 'x'.repeat(64) }));
+  it('トークンが違えば 401 で、理由は返さない', async () => {
+    const result = await handler(event(draft, { token: 'kkb_wrong' }));
     expect(result.statusCode).toBe(401);
     expect(bodyOf(result)).toEqual({ error: 'unauthorized', message: '認証に失敗しました' });
     expect(console.warn).toHaveBeenCalledWith('[mail-inbox] auth-failed');
@@ -121,8 +121,12 @@ describe('POST /draft-entries', () => {
     expect((await handler(event(draft))).statusCode).toBe(401);
   });
 
+  it('Authorization ヘッダが無ければ 401', async () => {
+    expect((await handler(event(draft, { token: null }))).statusCode).toBe(401);
+  });
+
   it('認証に失敗したら本文が壊れていても 401 で、検査には進まない', async () => {
-    expect((await handler(event('not json', { keyId: 'unknown' }))).statusCode).toBe(401);
+    expect((await handler(event('not json', { token: 'kkb_wrong' }))).statusCode).toBe(401);
   });
 
   it('1 日の上限を超えたら 429', async () => {
@@ -153,12 +157,18 @@ describe('POST /draft-entries', () => {
     expect(console.warn).toHaveBeenCalledWith('[mail-inbox] key-expiring', expect.stringContaining('muse-1'));
   });
 
-  it('ログの 1 行に結果・id・店名・品目名・金額を出し、鍵の秘密と署名は出さない', async () => {
+  it('ログの 1 行に結果・id・鍵の名前・店名・品目名・金額を出し、トークンは出さない', async () => {
     await handler(event(draft));
     const line = vi.mocked(console.info).mock.calls.find((call) => call[0] === '[mail-inbox]')?.[1] as string;
     const logged = JSON.parse(line);
-    expect(logged).toMatchObject({ 結果: '作成', 状態: 201, 店: 'Amazon', 金額: 1398, 品目: ['モノンズのアイマスク 1398'] });
+    expect(logged).toMatchObject({ 結果: '作成', 状態: 201, 鍵: 'muse-1', 店: 'Amazon', 金額: 1398, 品目: ['モノンズのアイマスク 1398'] });
     expect(logged.id).toMatch(/^r-/);
-    expect(line).not.toContain(key.secret);
+    expect(line).not.toContain(token);
+  });
+
+  it('認証に失敗したときも、送られたトークンをログに出さない', async () => {
+    await handler(event(draft, { token: 'kkb_leaked-guess-value' }));
+    const all = [...vi.mocked(console.info).mock.calls, ...vi.mocked(console.warn).mock.calls].flat().join('\n');
+    expect(all).not.toContain('kkb_leaked-guess-value');
   });
 });

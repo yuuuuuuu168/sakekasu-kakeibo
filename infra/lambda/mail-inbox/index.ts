@@ -5,7 +5,7 @@ import { requireEnv } from '../shared/env';
 import { json } from '../shared/http';
 import { parseMailDraft, receiptFromDraft, findExisting } from './draft';
 import { judgeItems } from './judge';
-import { KEY_EXPIRY_WARNING_DAYS, daysLeft, parseKeys, verifyRequest, type InboxKey } from './signature';
+import { KEY_EXPIRY_WARNING_DAYS, daysLeft, parseKeys, verifyBearer, type InboxKey } from './token';
 import { countCall, createReceipt, findMarkedReceiptId, loadContext } from './store';
 
 /*
@@ -13,7 +13,7 @@ import { countCall, createReceipt, findMarkedReceiptId, loadContext } from './st
  * 取り決めは docs/mail-inbox.md にある。
  *
  * この経路だけは共通のユーザープールの JWT を通らない（Muse はブラウザでログインできない）。
- * 代わりに、鍵を共有した HMAC-SHA256 の署名で呼び手を確かめる（signature.ts）。
+ * 代わりに、この経路専用の Bearer トークンで呼び手を確かめる（token.ts）。
  * この鍵でできるのはレシートを 1 枚足すことだけで、読み出しも更新も削除もできない。
  *
  * 順番は 認証 → 1 日の件数 → 本文の検査 → 既存の判定 → カテゴリ判定 → 保存。
@@ -44,7 +44,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     }
   })();
 
-  // 1 回の呼び出しにつき 1 行。鍵と署名は出さない。店名・品目名・金額は出す（利用者が出してよいと決めた）
+  // 1 回の呼び出しにつき 1 行。トークンは出さない（鍵の名前だけ）。店名・品目名・金額は出す（利用者が出してよいと決めた）
   console.info(
     '[mail-inbox]',
     JSON.stringify({
@@ -65,23 +65,15 @@ async function accept(
   const body = Buffer.from(event.body ?? '', event.isBase64Encoded ? 'base64' : 'utf-8');
   const headers = event.headers ?? {};
 
-  // --- 認証 ---
-  const keyId = headers['x-kakeibo-key-id'];
-  if (keyId) log.鍵 = keyId.slice(0, 64);
-  const auth = verifyRequest({
-    keyId,
-    timestamp: headers['x-kakeibo-timestamp'],
-    signature: headers['x-kakeibo-signature'],
-    body,
-    keys: await loadKeys(),
-    now,
-  });
+  // --- 認証 ---（ヘッダの値そのものはログに出さない）
+  const auth = verifyBearer(headers.authorization, await loadKeys(), now);
   if (!auth.ok) {
     log.理由 = auth.reason;
     // アラーム（mail-inbox-auth-failures）はこの文言を数える。infra/lib/api-alarms.ts と合わせる
     console.warn('[mail-inbox] auth-failed');
     return { outcome: '認証失敗', response: json(401, { error: 'unauthorized', message: '認証に失敗しました' }) };
   }
+  log.鍵 = auth.key.id;
   warnIfExpiring(auth.key, now);
   const sub = auth.key.sub;
 

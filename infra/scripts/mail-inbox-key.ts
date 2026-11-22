@@ -4,25 +4,30 @@
  *   npx tsx scripts/mail-inbox-key.ts issue  --sub <sub> [--current current.json] [--days 90] > next.json
  *   npx tsx scripts/mail-inbox-key.ts revoke --id <鍵の ID> --current current.json > next.json
  *
- * 標準出力には、シークレットにそのまま入れる JSON（`{ "keys": [...] }`）だけを出す。
- * 発行した鍵の ID と秘密の値は標準エラーに出す（Muse の入力フォームに入れる分）。
+ * 標準出力には、シークレットにそのまま入れる JSON（`{ "keys": [...] }`）だけを出す。シークレットにはトークンの
+ * ハッシュしか入らない。トークンそのものは標準エラーに 1 回だけ出す（Muse の入力フォームに入れる分。ここで控えないと二度と出せない）。
  * `--current` には今のシークレットの値を渡す。期限の切れた鍵はここで一覧から落とす。
  *
  * AWS には触らない。読み書きは人が aws secretsmanager で行う（読み取り専用の verify プロファイルでは読めない）。
  */
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { parseKeys, type InboxKey } from '../lambda/mail-inbox/signature';
+import { TOKEN_PREFIX, hashToken, parseKeys, type InboxKey } from '../lambda/mail-inbox/token';
 
 export const DEFAULT_KEY_DAYS = 90;
 
-export function issueKey(sub: string, now: Date, days = DEFAULT_KEY_DAYS): InboxKey {
+/** 鍵を 1 つ作る。`token` は Muse に渡す値で、`key` はシークレットに入れる値（トークンのハッシュだけを持つ） */
+export function issueKey(sub: string, now: Date, days = DEFAULT_KEY_DAYS): { key: InboxKey; token: string } {
   const stamp = now.toISOString().slice(0, 10).replaceAll('-', '');
+  const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
   return {
-    id: `muse-${stamp}-${randomBytes(2).toString('hex')}`,
-    secret: randomBytes(32).toString('hex'),
-    sub,
-    expiresAt: new Date(now.getTime() + days * 86_400_000).toISOString(),
+    token,
+    key: {
+      id: `muse-${stamp}-${randomBytes(2).toString('hex')}`,
+      tokenHash: hashToken(token),
+      sub,
+      expiresAt: new Date(now.getTime() + days * 86_400_000).toISOString(),
+    },
   };
 }
 
@@ -47,14 +52,14 @@ function main(args: string[]): void {
     if (!sub) throw new Error('--sub に共通のユーザープールの sub を渡してください');
     const days = Number(option(args, 'days') ?? DEFAULT_KEY_DAYS);
     if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error('--days は 1〜365 の整数です');
-    const key = issueKey(sub, now, days);
+    const { key, token } = issueKey(sub, now, days);
     process.stdout.write(`${JSON.stringify({ keys: [...keepUsable(current, now), key] })}\n`);
     process.stderr.write(
       [
-        'Muse の入力フォームに入れる値（チャットには貼らない）:',
-        `  鍵の ID:   ${key.id}`,
-        `  秘密の鍵: ${key.secret}`,
-        `  期限:     ${key.expiresAt}`,
+        'Muse の入力フォームに入れるトークン（チャットには貼らない。ここでしか出ない）:',
+        `  ${token}`,
+        `鍵の名前: ${key.id}（ログに出るのはこちら）`,
+        `期限:     ${key.expiresAt}`,
         '',
       ].join('\n'),
     );

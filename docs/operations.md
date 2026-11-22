@@ -329,10 +329,10 @@ fields @timestamp, @message
 
 ### 6.6 下書き登録の鍵（Muse）
 
-通販のメールから下書きを置く API（[mail-inbox.md](mail-inbox.md)）の署名の鍵。使わないなら入れなくてよい
+通販のメールから下書きを置く API（[mail-inbox.md](mail-inbox.md)）の Bearer トークン。使わないなら入れなくてよい
 （入れ物は CDK が乱数で作るので、そのままでは全部の呼び出しが 401 になる）。
 鍵の値は Secrets Manager の `sakekasu-kakeibo-<env>-mail-inbox-keys` に、`{ "keys": [...] }` の形で入れる。
-1 件は `{ "id", "secret", "sub", "expiresAt" }` で、`sub` は下書きを入れる利用者（上の「共通ログインへの切り替え」の
+1 件は `{ "id", "tokenHash", "sub", "expiresAt" }` で、シークレットにはトークンのハッシュしか入らない。`sub` は下書きを入れる利用者（上の「共通ログインへの切り替え」の
 コマンドで調べる）。値の読み書きは管理者のプロファイルで行う（読み取り専用の `verify` では読めない）。
 
 発行する（初回と、90 日ごとの差し替え）。
@@ -348,7 +348,8 @@ aws secretsmanager put-secret-value --secret-id sakekasu-kakeibo-<env>-mail-inbo
 rm current.json next.json
 ```
 
-標準エラーに出た「鍵の ID」と「秘密の鍵」を、Muse の安全な入力フォームに入れる。チャットには貼らない。
+標準エラーに出たトークン（`kkb_` で始まる）を、Muse の安全な入力フォームに入れる。チャットには貼らない。
+トークンはこのときにしか出ない（シークレットにはハッシュしか残らない）。入れ損ねたら発行し直す。
 差し替えの間は新旧の鍵が両方効く。Muse が新しい鍵で呼べたのを CloudWatch Logs の `[mail-inbox]` の行
 （`鍵` の欄）で確かめてから、古い鍵を失効させる。期限の切れた鍵は、次に発行したときに一覧から落ちる。
 
