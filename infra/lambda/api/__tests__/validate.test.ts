@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_RECEIPT_ITEMS, assertLimits, assertMapping, assertReceipt } from '../validate';
+import { MAX_FILTER_ENTRIES, MAX_FILTER_ENTRY_LENGTH } from '@kakeibo/core';
+import { BadRequest, MAX_RECEIPT_ITEMS, assertLimits, assertMailRelayFilter, assertMapping, assertReceipt } from '../validate';
 
 const RECEIPT = {
   id: 'r1',
@@ -101,5 +102,25 @@ describe('assertLimits', () => {
     ['文字列', { food: '3000' }],
   ])('%s なら 400', (_label, value) => {
     expect(() => assertLimits(value)).toThrow();
+  });
+});
+
+describe('assertMailRelayFilter', () => {
+  it('差出人と件名の言葉をそろえ直して返す', () => {
+    expect(
+      assertMailRelayFilter({ senders: [' @Amazon.co.jp ', 'amazon.co.jp', ''], subjectWords: ['注文', 'ＲＥＣＥＩＰＴ'] }),
+    ).toEqual({ senders: ['amazon.co.jp'], subjectWords: ['注文', 'receipt'] });
+  });
+
+  it('空のリストは全部を転送する条件として受け付ける', () => {
+    expect(assertMailRelayFilter({ senders: [], subjectWords: [] })).toEqual({ senders: [], subjectWords: [] });
+  });
+
+  it('形の違うものと、多すぎるもの・長すぎるものを弾く', () => {
+    expect(() => assertMailRelayFilter(undefined)).toThrow(BadRequest);
+    expect(() => assertMailRelayFilter({ senders: 'amazon.co.jp', subjectWords: [] })).toThrow(BadRequest);
+    expect(() => assertMailRelayFilter({ senders: [1], subjectWords: [] })).toThrow(BadRequest);
+    expect(() => assertMailRelayFilter({ senders: [], subjectWords: Array(MAX_FILTER_ENTRIES + 1).fill('a') })).toThrow(BadRequest);
+    expect(() => assertMailRelayFilter({ senders: ['a'.repeat(MAX_FILTER_ENTRY_LENGTH + 1)], subjectWords: [] })).toThrow(BadRequest);
   });
 });

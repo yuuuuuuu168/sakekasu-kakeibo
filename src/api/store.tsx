@@ -17,6 +17,7 @@ import {
   type Receipt,
   type RecurringPayment,
   type Transaction,
+  type MailRelayFilter,
 } from '@kakeibo/core';
 import { errorMessage } from '../lib/errors';
 import { todayIso } from '../lib/month';
@@ -36,6 +37,7 @@ type Store = {
   saveCategories: (categories: Category[]) => Promise<void>;
   saveRules: (rules: CategoryRule[]) => Promise<void>;
   saveRecurring: (recurring: RecurringPayment[]) => Promise<void>;
+  saveMailRelayFilter: (filter: MailRelayFilter) => Promise<void>;
   saveBudget: (budget: Budget) => Promise<void>;
   saveMapping: (mapping: SavedMapping) => Promise<void>;
   saveReceipt: (receipt: Receipt) => Promise<void>;
@@ -143,6 +145,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         commit(
           () => api.putRecurring(recurring),
           (current) => ({ ...current, recurring }),
+        ),
+      saveMailRelayFilter: (mailRelayFilter) =>
+        commit(
+          () => api.putMailRelayFilter(mailRelayFilter),
+          (current) => ({ ...current, mailRelayFilter }),
         ),
       saveBudget: (budget) =>
         commit(

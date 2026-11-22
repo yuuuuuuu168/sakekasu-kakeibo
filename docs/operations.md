@@ -414,7 +414,25 @@ Yahoo! のフィルターで別のフォルダへ振り分けたメールは送�
    打ったコマンドはシェルの履歴に残るので、入れた後に履歴から消すか、コンソールの「シークレットの値を取得」→
    「編集」から入れる。5 分以内の次の回で `基準を決めた` の行が出れば動いている
 
-パスワードを変えたら、4 をやり直す。止めたいときは、シークレットの値を `{}` にする（次の回から `未設定` になる）。
+5. **転送の条件を効かせる**（初回だけ）。設定画面の「メールの転送」で決めた条件は、利用者のデータに入る。
+   中継がそれを読めるよう、シークレットに `sub`（6.6 と同じ利用者の sub）を足す。パスワードを打ち直さずに済むよう、
+   今の値に足して入れ直す。`sub` が無いあいだは、条件に関わらず全部を転送する
+
+   ```sh
+   aws secretsmanager get-secret-value --profile sakekasu-builder --secret-id sakekasu-kakeibo-dev-mail-relay-yahoo \
+     --query SecretString --output text \
+     | SUB='<sub>' node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const c=JSON.parse(s);c.sub=process.env.SUB;process.stdout.write(JSON.stringify(c))})' \
+     > relay.json
+   aws secretsmanager put-secret-value --profile sakekasu-builder --secret-id sakekasu-kakeibo-dev-mail-relay-yahoo \
+     --secret-string file://relay.json && rm relay.json
+   ```
+
+転送の条件は、設定画面の「メールの転送」で直す。差出人（ドメインかアドレス）か件名の言葉のどちらかに当たったメールだけを
+送り、両方空なら全部を送る（規則は `packages/core/src/mail-filter.ts`）。当たらないメールは本文を取りに行かず、
+処理済みとして進むので、後から条件を広げても過去のメールは遡って送らない。直した条件は次の回（5 分以内）から効く。
+ログの `[mail-relay]` の行の `条件に当たらず` が、送らなかった数。
+
+パスワードを変えたら、4 をやり直す（`sub` も入れ直す）。止めたいときは、シークレットの値を `{}` にする（次の回から `未設定` になる）。
 Yahoo! JAPAN ID には二段階の確認とログイン通知を入れておくと、パスワードが漏れたときに気づける。
 
 アラームは `mail-relay-auth-failing`（IMAP のログインが 2 回続けて失敗）、`mail-relay-failures`（取得か送信が

@@ -5,8 +5,10 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dyn
 import type { Context } from 'aws-lambda';
 import { ImapFlow, type MailboxObject, type MessageEnvelopeObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import { decideRelay, type MailRelayFilter } from '@kakeibo/core';
 import { requireEnv } from '../shared/env';
-import { MAIL_RELAY_PARTITION_PREFIX } from '../shared/user-partition';
+import { SK, mailRelayFilterOf } from '../shared/snapshot-items';
+import { MAIL_RELAY_PARTITION_PREFIX, userPk } from '../shared/user-partition';
 import { MAX_SOURCE_BYTES, buildForward, buildOversizeNotice, type ForwardTarget, type OriginalHeaders } from './forward';
 import { AUTH_ALERT_AFTER, parseRelayConfig, pickUids, planRun, shouldTryLogin, type RelayConfig, type RelayState } from './plan';
 
@@ -14,6 +16,9 @@ import { AUTH_ALERT_AFTER, parseRelayConfig, pickUids, planRun, shouldTryLogin, 
  * Yahoo!メールを IMAP で 5 分ごとに見に行き、新しく届いたメールを全件、Muse Mail へ SES でコピーする。
  * Yahoo! の自動転送は転送したメールを Yahoo! 側に残さないので、こちらで読みに行く。
  * 受信箱は読み取り専用で開く（既読にしない、動かさない、消さない）。
+ *
+ * 送るのは、設定画面で決めた条件（差出人か件名のどちらかに当たる）のメールだけ。条件が空なら全部を送る。
+ * 条件は宛名の情報（IMAP の ENVELOPE）だけで判定し、当たらないメールは本文を取りに行かない。
  *
  * メールの中身は保存しない。ログにも件名・差出人・本文は出さず、UID・大きさ・添付の数・結果だけを出す。
  * 設定（Yahoo! JAPAN ID とパスワード、送り先）は Secrets Manager にあり、入っていなければ何もしない。
@@ -75,7 +80,7 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
   }
 
   let current: RelayState = { ...state, authFailures: 0, lastAuthFailureAt: undefined };
-  const summary = { 送った: 0, 大きすぎ: 0, 添付を外した: 0, 残り: 0 };
+  const summary = { 送った: 0, 条件に当たらず: 0, 大きすぎ: 0, 添付を外した: 0, 残り: 0 };
   try {
     const lock = await client.getMailboxLock('INBOX', { readOnly: true });
     try {
@@ -90,10 +95,16 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
         return;
       }
 
-      const listed: { uid: number; size: number; envelope: OriginalHeaders }[] = [];
+      const listed: { uid: number; size: number; envelope: OriginalHeaders; fromAddresses: string[] }[] = [];
       for await (const message of client.fetch(`${plan.afterUid + 1}:*`, { uid: true, size: true, envelope: true }, { uid: true })) {
-        listed.push({ uid: message.uid, size: message.size ?? 0, envelope: envelopeHeaders(message.envelope) });
+        listed.push({
+          uid: message.uid,
+          size: message.size ?? 0,
+          envelope: envelopeHeaders(message.envelope),
+          fromAddresses: (message.envelope?.from ?? []).map((address) => address.address ?? '').filter((address) => address !== ''),
+        });
       }
+      const filter = await loadFilter(config.sub);
       const uids = pickUids(
         listed.map((message) => message.uid),
         plan.afterUid,
@@ -107,6 +118,13 @@ export async function handler(_event: unknown, context?: Pick<Context, 'getRemai
           break;
         }
         const meta = listed.find((message) => message.uid === uid)!;
+        if (decideRelay(filter, { fromAddresses: meta.fromAddresses, subject: meta.envelope.subject }) === 'none') {
+          // 送らないメールも処理済みとして進める。後から条件を広げても、過去のメールは遡って送らない
+          current = { ...current, lastUid: uid };
+          await saveState(current);
+          summary.条件に当たらず += 1;
+          continue;
+        }
         let raw: Buffer;
         if (meta.size > MAX_SOURCE_BYTES) {
           raw = await buildOversizeNotice(meta.envelope, meta.size, target);
@@ -169,6 +187,23 @@ async function loadConfig(): Promise<RelayConfig | undefined> {
     fail('設定の読み込み', cause);
     return undefined;
   }
+}
+
+/**
+ * 設定画面で決めた転送の条件。利用者の sub がシークレットに無い、または条件の行がまだ無ければ空（全部を送る）。
+ * 回ごとに読み直すので、画面で直した条件は次の回（5 分以内）から効く
+ */
+async function loadFilter(sub: string | undefined): Promise<MailRelayFilter> {
+  if (!sub) return { senders: [], subjectWords: [] };
+  // 読む項目を指定する。中継の権限は mailRelayFilter の項目しか読めず、指定の無い読み取りは拒まれる（api-stack.ts）
+  const found = await documents.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { pk: userPk(sub), sk: SK.mailRelayFilter },
+      ProjectionExpression: 'mailRelayFilter',
+    }),
+  );
+  return mailRelayFilterOf(found.Item?.mailRelayFilter);
 }
 
 async function loadState(): Promise<RelayState> {

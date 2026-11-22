@@ -13,6 +13,9 @@ const state = vi.hoisted(() => ({
   messages: [] as { uid: number; source: string }[],
   lockOptions: [] as unknown[],
   fetchOneQueries: [] as unknown[],
+  filter: undefined as Record<string, unknown> | undefined,
+  filterKeys: [] as unknown[],
+  filterProjections: [] as unknown[],
 }));
 
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
@@ -40,7 +43,12 @@ vi.mock('@aws-sdk/client-sesv2', () => ({
 vi.mock('@aws-sdk/lib-dynamodb', () => ({
   DynamoDBDocumentClient: {
     from: () => ({
-      async send(command: { kind: string; input: { Item?: Record<string, unknown> } }) {
+      async send(command: { kind: string; input: { Item?: Record<string, unknown>; Key?: { pk: string; sk: string } } }) {
+        if (command.kind === 'get' && command.input.Key?.sk === 'CONFIG#mailRelayFilter') {
+          state.filterKeys.push(command.input.Key);
+          state.filterProjections.push((command.input as { ProjectionExpression?: string }).ProjectionExpression);
+          return { Item: state.filter ? { mailRelayFilter: state.filter } : undefined };
+        }
         if (command.kind === 'get') return { Item: state.stored };
         state.stored = command.input.Item;
         state.saved.push(command.input.Item!);
@@ -76,7 +84,11 @@ vi.mock('imapflow', () => ({
       const matched = state.messages.filter((message) => message.uid >= from);
       // `N:*` は該当が無くても最後の 1 通を返す（IMAP の決まり）
       const list = matched.length > 0 ? matched : state.messages.slice(-1);
-      for (const message of list) yield { uid: message.uid, size: message.source.length, envelope: {} };
+      for (const message of list) {
+        const from = /From: (.*)/.exec(message.source)?.[1] ?? '';
+        const subject = /Subject: (.*)/.exec(message.source)?.[1] ?? '';
+        yield { uid: message.uid, size: message.source.length, envelope: { from: [{ address: from }], subject } };
+      }
     }
     async fetchOne(uid: string, query: unknown) {
       state.fetchOneQueries.push(query);
@@ -96,9 +108,9 @@ beforeAll(async () => {
   ({ handler } = await import('../index'));
 });
 
-const mail = (uid: number): Message => ({
+const mail = (uid: number, from = `shop${uid}@example.com`, subject = `order ${uid}`): Message => ({
   uid,
-  source: [`From: shop${uid}@example.com`, 'To: me@yahoo.co.jp', `Subject: order ${uid}`, `Message-ID: <m${uid}@example.com>`, '', `body ${uid}`, ''].join('\r\n'),
+  source: [`From: ${from}`, 'To: me@yahoo.co.jp', `Subject: ${subject}`, `Message-ID: <m${uid}@example.com>`, '', `body ${uid}`, ''].join('\r\n'),
 });
 
 beforeEach(() => {
@@ -112,6 +124,9 @@ beforeEach(() => {
   state.messages = [mail(10), mail(11)];
   state.lockOptions = [];
   state.fetchOneQueries = [];
+  state.filter = undefined;
+  state.filterKeys = [];
+  state.filterProjections = [];
   for (const method of ['info', 'warn', 'error'] as const) vi.spyOn(console, method).mockImplementation(() => {});
 });
 
@@ -188,6 +203,35 @@ describe('mail-relay', () => {
     state.authFails = false;
     await handler({});
     expect(state.stored).toMatchObject({ authFailures: 0 });
+  });
+
+  it('条件があれば、差出人か件名のどちらかに当たったメールだけを送り、当たらないものは本文を取りに行かずに進める', async () => {
+    state.secret = JSON.stringify({ user: 'me', password: 'pw', forwardTo: 'muse@example.com', sub: 'sub-1' });
+    state.filter = { senders: ['amazon.co.jp'], subjectWords: ['領収'] };
+    state.stored = { uidValidity: '7', lastUid: 11, authFailures: 0 };
+    state.messages.push(
+      mail(12, 'auto-confirm@amazon.co.jp', 'ご注文の確認'),
+      mail(13, 'friend@example.com', '週末の予定'),
+      mail(14, 'shop@unknown.example', '領収書の送付'),
+    );
+    await handler({});
+    expect(state.filterKeys).toEqual([{ pk: 'USER#sub-1', sk: 'CONFIG#mailRelayFilter' }]);
+    // 権限は mailRelayFilter の項目しか読めない。項目を指定して読む
+    expect(state.filterProjections).toEqual(['mailRelayFilter']);
+    expect(state.sent.map((raw) => /Subject: (.*)/.exec(raw.toString())?.[1])).toHaveLength(2);
+    expect(state.fetchOneQueries).toHaveLength(2);
+    // 送らなかった 13 も処理済みとして進む
+    expect(state.saved.map((item) => item.lastUid)).toEqual([12, 13, 14]);
+    expect(logged('info')).toContain('"条件に当たらず":1');
+  });
+
+  it('シークレットに sub が無ければ、条件を読まずに全部を送る', async () => {
+    state.stored = { uidValidity: '7', lastUid: 11, authFailures: 0 };
+    state.filter = { senders: ['amazon.co.jp'], subjectWords: [] };
+    state.messages.push(mail(12, 'friend@example.com', 'hello'));
+    await handler({});
+    expect(state.filterKeys).toHaveLength(0);
+    expect(state.sent).toHaveLength(1);
   });
 
   it('ログに件名・差出人・本文を出さない', async () => {

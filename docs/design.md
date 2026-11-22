@@ -62,6 +62,7 @@ DynamoDB のシングルテーブル。`pk` はユーザー固定、`sk` で種�
 | カテゴリ | `USER#<sub>` | `CONFIG#categories` | `categories`（配列。`parentId` で 2 段まで） |
 | ルール | `USER#<sub>` | `CONFIG#rules` | `rules`（配列） |
 | 定期支払い | `USER#<sub>` | `CONFIG#recurring` | `recurring`（配列） |
+| メールの転送の条件 | `USER#<sub>` | `CONFIG#mailRelayFilter` | `mailRelayFilter`（`senders` と `subjectWords`。Yahoo!メールの中継も読む） |
 | 予算 | `USER#<sub>` | `BUDGET#<YYYY-MM>` | `limits`（カテゴリ ID → 上限額） |
 | 列マッピング | `USER#<sub>` | `MAPPING#<sourceId>` | `mapping`, `label`, `source` |
 | レポート | `USER#<sub>` | `REPORT#<YYYY-MM>` | 生成済みの月次レポート本体 |
@@ -111,6 +112,7 @@ HTTP API の経路は次のとおり。`POST /draft-entries` を除き、すべ�
 | `PUT /transactions/{id}` | 明細 1 件を書き換える |
 | `DELETE /transactions/{id}` | 明細 1 件を消す |
 | `PUT /categories` `PUT /rules` `PUT /recurring` | 一覧を丸ごと保存する |
+| `PUT /mail-relay-filter` | Yahoo!メールの中継が Muse へ転送するメールの条件を保存する |
 | `PUT /budgets/{month}` | その月の上限を保存する |
 | `PUT /mappings/{sourceId}` | CSV の列の対応を保存する |
 | `POST /uploads` | レシート画像の署名付き URL を返す |

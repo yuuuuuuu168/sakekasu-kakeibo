@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 vi.mock('../../categories/CategoriesPage', () => ({ CategoriesPage: () => <p>カテゴリの中身</p> }));
 vi.mock('../../recurring/RecurringPayments', () => ({ RecurringPayments: () => <p>定期の中身</p> }));
 vi.mock('../../rules/LearnedRules', () => ({ LearnedRules: () => <p>ルールの中身</p> }));
+vi.mock('../../mail-relay/MailRelayFilterSettings', () => ({ MailRelayFilterSettings: () => <p>転送の中身</p> }));
 
 const { SettingsPage } = await import('../SettingsPage');
 
@@ -46,8 +47,10 @@ describe('設定画面の開閉', () => {
     expect(screen.getByText('カテゴリの中身')).toBeVisible();
     expect(screen.getByText('定期の中身')).toBeVisible();
     expect(screen.getByText('ルールの中身')).toBeVisible();
+    expect(screen.getByText('転送の中身')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'すべて閉じる' }));
     expect(screen.getByText('ルールの中身')).not.toBeVisible();
+    expect(screen.getByText('転送の中身')).not.toBeVisible();
   });
 });

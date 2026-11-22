@@ -6,7 +6,16 @@ import { describeRequest } from './log';
 import { createUpload, getOcrJob, startOcrJob } from './ocr';
 import { matchRoute, type Route } from './routes';
 import { getReport, loadSnapshot, put, putTransactionRows, remove } from './store';
-import { BadRequest, assertLimits, assertMapping, assertMonth, assertReceipt, assertTransaction, decodeSegment } from './validate';
+import {
+  BadRequest,
+  assertLimits,
+  assertMailRelayFilter,
+  assertMapping,
+  assertMonth,
+  assertReceipt,
+  assertTransaction,
+  decodeSegment,
+} from './validate';
 
 /*
  * 画面から呼ばれる API。認証（共通のユーザープールの JWT）は API Gateway が済ませ、ここは sub だけを見る。
@@ -43,6 +52,15 @@ const ROUTES: Route<Handler>[] = [
   { method: 'PUT', path: '/categories', handle: ({ sub, body }) => putConfig(sub, SK.categories, 'categories', body) },
   { method: 'PUT', path: '/rules', handle: ({ sub, body }) => putConfig(sub, SK.rules, 'rules', body) },
   { method: 'PUT', path: '/recurring', handle: ({ sub, body }) => putConfig(sub, SK.recurring, 'recurring', body) },
+  {
+    // Yahoo!メールの中継が Muse へ転送するメールの条件。中継の Lambda が同じ行（SK.mailRelayFilter）を読む
+    method: 'PUT',
+    path: '/mail-relay-filter',
+    handle: async ({ sub, body }) => {
+      await put(sub, SK.mailRelayFilter, { mailRelayFilter: assertMailRelayFilter(body.mailRelayFilter) });
+      return noContent();
+    },
+  },
 
   {
     method: 'PUT',

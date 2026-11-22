@@ -28,6 +28,19 @@ describe('snapshotFromItems', () => {
 
   it('レポートの行は保存データではないので拾わない', () => {
     const snapshot = snapshotFromItems([{ pk: 'USER#u1', sk: SK.report('2026-09'), report: {} }]);
-    expect(Object.values(snapshot).every((list) => list.length === 0)).toBe(true);
+    expect(Object.values(snapshot).every((list) => Array.isArray(list) && list.length === 0)).toBe(true);
+  });
+
+  it('転送の条件の行を拾い、崩れた形は空（全部を転送）にする', () => {
+    const saved = snapshotFromItems([
+      { pk: 'USER#u1', sk: SK.mailRelayFilter, mailRelayFilter: { senders: ['amazon.co.jp', 3], subjectWords: ['注文'] } },
+    ]);
+    expect(saved.mailRelayFilter).toEqual({ senders: ['amazon.co.jp'], subjectWords: ['注文'] });
+    expect(snapshotFromItems([{ pk: 'USER#u1', sk: SK.mailRelayFilter, mailRelayFilter: 'broken' }]).mailRelayFilter).toEqual({
+      senders: [],
+      subjectWords: [],
+    });
+    // 行が無ければ項目ごと無い（画面は空として扱う）
+    expect(snapshotFromItems([]).mailRelayFilter).toBeUndefined();
   });
 });

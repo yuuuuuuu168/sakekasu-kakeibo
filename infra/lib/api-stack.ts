@@ -63,6 +63,9 @@ const ANTHROPIC_MODEL_OCR = DEFAULT_ANTHROPIC_MODEL_OCR;
  */
 const TYPESAFE_MODEL_ID = 'jev-latest';
 
+/** 中継が利用者のパーティションから読める項目。キー 2 つと転送の条件だけ（addMailRelay） */
+export const MAIL_RELAY_READABLE_ATTRIBUTES = ['pk', 'sk', 'mailRelayFilter'];
+
 /** カテゴリ判定の経路に掛ける流量の上限（毎秒の回数と瞬間の回数）。理由は経路を足すところにある */
 export const CLASSIFY_RATE_LIMIT = 1;
 export const CLASSIFY_BURST_LIMIT = 5;
@@ -508,7 +511,7 @@ export class ApiStack extends cdk.Stack {
    *   パスワードは ID そのものの鍵なので、読めるのはこの関数だけにする
    * - 同時実行は 1。5 分ごとの呼び出しが重なって、同じメールを 2 回送らないため。再試行も 0
    *   （1 通ごとに進み具合を書くので、落ちても次の回が続きから送る）
-   * - テーブルは進み具合の 1 行（MAILRELAY#）だけ。利用者のデータには触らない
+   * - テーブルは進み具合の 1 行（MAILRELAY#）の読み書きと、利用者の転送の条件の行の読み取りだけ
    */
   private addMailRelay(
     prefix: string,
@@ -550,6 +553,26 @@ export class ApiStack extends cdk.Stack {
         actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
         resources: [props.table.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${MAIL_RELAY_PARTITION_PREFIX}*`] } },
+      }),
+    );
+    /*
+     * 設定画面で決めた転送の条件（利用者のパーティションの CONFIG#mailRelayFilter）を読むだけ。書き込みは持たせない。
+     *
+     * DynamoDB の権限は行（sk）では絞れないので、読める「項目」を絞る。キー（pk / sk）と mailRelayFilter の
+     * 項目しか読めないので、同じパーティションの明細やレシートの行を読もうとしても中身は返らない。
+     * 読む項目を指定しない GetItem は全部の項目を返す（項目の制限が効かない）ので、Null の条件で拒む。
+     * 中継は ProjectionExpression で mailRelayFilter を指定して読む（infra/lambda/mail-relay/index.ts の loadFilter）
+     */
+    fn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [props.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${USER_PARTITION_PREFIX}*`] },
+          'ForAllValues:StringEquals': { 'dynamodb:Attributes': MAIL_RELAY_READABLE_ATTRIBUTES },
+          StringEqualsIfExists: { 'dynamodb:Select': 'SPECIFIC_ATTRIBUTES' },
+          Null: { 'dynamodb:Attributes': 'false' },
+        },
       }),
     );
 

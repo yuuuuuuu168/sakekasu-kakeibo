@@ -18,6 +18,7 @@ import {
   type RecurringPayment,
   type Transaction,
   type Verdict,
+  type MailRelayFilter,
 } from '@kakeibo/core';
 import { ApiUnavailable, type KakeiboApi, type ReceiptDraft, type SavedMapping, type Snapshot, type UploadTarget } from './types';
 
@@ -75,6 +76,10 @@ export const localApi: KakeiboApi = {
 
   async putRecurring(recurring: RecurringPayment[]): Promise<void> {
     update((snapshot) => ({ ...snapshot, recurring }));
+  },
+
+  async putMailRelayFilter(mailRelayFilter: MailRelayFilter): Promise<void> {
+    update((snapshot) => ({ ...snapshot, mailRelayFilter }));
   },
 
   async putBudget(budget: Budget): Promise<void> {
