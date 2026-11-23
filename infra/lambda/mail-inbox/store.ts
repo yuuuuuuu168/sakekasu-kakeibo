@@ -101,11 +101,13 @@ export async function loadContext(sub: string): Promise<{ receipts: Receipt[]; c
 
 /**
  * レシートと重複の印をまとめて書く。印がもうあれば（同じ注文のメールがほぼ同時に届いた）、
- * 何も書かずに先に置かれた下書きの ID を返す
+ * 何も書かずに先に置かれた下書きの ID を返す。
+ * replaces を渡すと、その id（消したレシート）を指している印だけは新しい id で書き換える（登録し直し）
  */
 export async function createReceipt(
   sub: string,
   receipt: Receipt,
+  replaces?: string,
 ): Promise<{ created: true } | { created: false; existingId: string | undefined }> {
   const markers = [
     ...(receipt.orderNumber ? [markerSk.order(receipt.orderNumber)] : []),
@@ -126,7 +128,13 @@ export async function createReceipt(
             Put: {
               TableName: TABLE_NAME,
               Item: { pk: inboxPk(sub), sk, receiptId: receipt.id },
-              ConditionExpression: 'attribute_not_exists(pk)',
+              ...(replaces
+                ? {
+                    // 同じメールの登録し直しが同時に 2 回来ても、印を書き換えられるのは先の 1 回だけ
+                    ConditionExpression: 'attribute_not_exists(pk) OR receiptId = :replaces',
+                    ExpressionAttributeValues: { ':replaces': replaces },
+                  }
+                : { ConditionExpression: 'attribute_not_exists(pk)' }),
             },
           })),
         ],
@@ -148,7 +156,15 @@ async function findMarker(sub: string, markers: string[]): Promise<string | unde
   return undefined;
 }
 
-/** 印だけを先に引く。レシートの行を人が消していても、印が残っていれば既存として返す */
-export async function findMarkedReceiptId(sub: string, orderNumber: string | undefined, messageId: string): Promise<string | undefined> {
-  return findMarker(sub, [...(orderNumber ? [markerSk.order(orderNumber)] : []), markerSk.message(messageId)]);
+/** 印だけを先に引く。レシートの行を人が消していても、印は残っている */
+export async function findMarkedReceiptIds(
+  sub: string,
+  orderNumber: string | undefined,
+  messageId: string,
+): Promise<{ order: string | undefined; message: string | undefined }> {
+  const [order, message] = await Promise.all([
+    orderNumber ? findMarker(sub, [markerSk.order(orderNumber)]) : undefined,
+    findMarker(sub, [markerSk.message(messageId)]),
+  ]);
+  return { order, message };
 }

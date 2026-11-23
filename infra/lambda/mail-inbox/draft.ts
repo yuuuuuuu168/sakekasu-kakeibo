@@ -174,14 +174,52 @@ export function receiptFromDraft(draft: MailDraft, id: string, now: Date): Recei
 /**
  * もうあるレシートを探す。注文番号が同じもの（画面で写しから先に登録した注文も含む）か、
  * 同じメールから置いたもの。消した（discarded）レシートも「ある」と数える。
- * 人が要らないと決めた注文を、発送のお知らせでもう一度置き直さないため
+ * 人が要らないと決めた注文を、発送のお知らせでもう一度置き直さないため。
+ * ただし、このメール自身から置いて消したレシートは数えない（同じメールの登録し直しは通す）
  */
 export function findExisting(receipts: Receipt[], draft: MailDraft): Receipt | undefined {
   return receipts.find(
     (receipt) =>
-      (draft.orderNumber !== undefined &&
+      !retiredBySameMail(receipt, draft) &&
+      ((draft.orderNumber !== undefined &&
         receipt.orderNumber !== undefined &&
         normalizeOrderNumber(receipt.orderNumber) === draft.orderNumber) ||
-      (receipt.messageId !== undefined && receipt.messageId === draft.messageId),
+        (receipt.messageId !== undefined && receipt.messageId === draft.messageId)),
   );
+}
+
+function retiredBySameMail(receipt: Receipt, draft: MailDraft): boolean {
+  return receipt.status === 'discarded' && receipt.messageId === draft.messageId;
+}
+
+/** 重複の印が指しているレシートの id。注文番号の印と Message-ID の印 */
+export type MarkedIds = { order: string | undefined; message: string | undefined };
+
+export type Resolution =
+  | { kind: 'existing'; id: string }
+  /** 新しく置く。replaces があれば、その id を指している印を新しい id で書き換える */
+  | { kind: 'new'; replaces: string | undefined };
+
+/**
+ * 既存の判定。レシートの行と重複の印の両方を見る。
+ *
+ * - 生きているレシートに当たれば、それを返す（送り直しは同じ id になる）
+ * - このメールの印が、もう無い（消した）レシートを指していれば、登録し直しとして新しく置く。
+ *   Muse は利用者が「登録する」と答えたときだけ呼ぶので、同じメールが再び来るのは人が置き直したいとき
+ * - 別のメールの印（注文番号の印だけ）が残っていれば、レシートを消した後でも既存として返す。
+ *   人が消した注文を、後から届いた発送のお知らせで置き直さないため
+ */
+export function resolveExisting(receipts: Receipt[], draft: MailDraft, marked: MarkedIds): Resolution {
+  const found = findExisting(receipts, draft);
+  if (found) return { kind: 'existing', id: found.id };
+
+  const alive = (id: string) => receipts.some((receipt) => receipt.id === id && !retiredBySameMail(receipt, draft));
+  if (marked.message !== undefined) {
+    if (alive(marked.message)) return { kind: 'existing', id: marked.message };
+    // 注文番号の印が別のレシートを指していれば、そちらが先にある
+    if (marked.order !== undefined && marked.order !== marked.message) return { kind: 'existing', id: marked.order };
+    return { kind: 'new', replaces: marked.message };
+  }
+  if (marked.order !== undefined) return { kind: 'existing', id: marked.order };
+  return { kind: 'new', replaces: undefined };
 }

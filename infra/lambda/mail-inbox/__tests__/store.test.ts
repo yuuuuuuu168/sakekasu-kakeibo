@@ -100,6 +100,27 @@ describe('createReceipt', () => {
   });
 });
 
+describe('createReceipt（登録し直し）', () => {
+  it('消したレシートを指している印だけを書き換えられる条件で入れる', async () => {
+    await store.createReceipt('sub-1', receipt, 'r-gone');
+    const puts = (state.sent[0].input.TransactItems as { Put: Record<string, unknown> }[]).map((entry) => entry.Put);
+    expect(puts[0].ConditionExpression).toBe('attribute_not_exists(pk)');
+    for (const put of puts.slice(1)) {
+      expect(put.ConditionExpression).toBe('attribute_not_exists(pk) OR receiptId = :replaces');
+      expect(put.ExpressionAttributeValues).toEqual({ ':replaces': 'r-gone' });
+    }
+  });
+});
+
+describe('findMarkedReceiptIds', () => {
+  it('注文番号の印と Message-ID の印を別々に返す', async () => {
+    state.items[store.markerSk.order('250-1')] = { receiptId: 'r-a' };
+    state.items[store.markerSk.message('<m@x>')] = { receiptId: 'r-b' };
+    expect(await store.findMarkedReceiptIds('sub-1', '250-1', '<m@x>')).toEqual({ order: 'r-a', message: 'r-b' });
+    expect(await store.findMarkedReceiptIds('sub-1', undefined, '<m@y>')).toEqual({ order: undefined, message: undefined });
+  });
+});
+
 it('印の sk は注文番号・Message-ID の長さに関わらず揃う', () => {
   expect(store.markerSk.message('<'.repeat(2000))).toMatch(/^MESSAGE#[0-9a-f]{64}$/);
 });

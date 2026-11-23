@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Receipt } from '@kakeibo/core';
-import { MAIL_MAX_AMOUNT, MAIL_MAX_ITEMS, findExisting, parseMailDraft, receiptFromDraft, type MailDraft } from '../draft';
+import { MAIL_MAX_AMOUNT, MAIL_MAX_ITEMS, findExisting, parseMailDraft, resolveExisting, receiptFromDraft, type MailDraft } from '../draft';
 
 const base = {
   date: '2026-11-22',
@@ -156,5 +156,46 @@ describe('findExisting', () => {
 
   it('注文番号が無いときは Message-ID だけで見る', () => {
     expect(findExisting([receipt({ orderNumber: '250-1' })], { ...draft, orderNumber: undefined })).toBeUndefined();
+  });
+});
+
+describe('resolveExisting', () => {
+  const none = { order: undefined, message: undefined };
+  const receipt = (overrides: Partial<Receipt>): Receipt => ({
+    id: 'r-x',
+    storeName: 'Amazon',
+    date: '2026-11-20',
+    total: 900,
+    items: [],
+    status: 'pending',
+    ...overrides,
+  });
+
+  it('印も行も無ければ新しく置く', () => {
+    expect(resolveExisting([], draft, none)).toEqual({ kind: 'new', replaces: undefined });
+  });
+
+  it('同じメールの印が消したレシートを指していれば、登録し直しにする', () => {
+    expect(resolveExisting([], draft, { order: 'r-gone', message: 'r-gone' })).toEqual({ kind: 'new', replaces: 'r-gone' });
+  });
+
+  it('同じメールから置いて discarded にしたレシートも、登録し直しにする', () => {
+    const discarded = receipt({ id: 'r-gone', status: 'discarded', orderNumber: '250-1', messageId: draft.messageId });
+    expect(resolveExisting([discarded], draft, { order: 'r-gone', message: 'r-gone' })).toEqual({ kind: 'new', replaces: 'r-gone' });
+  });
+
+  it('別のメールから置いたレシートは、消していても既存のまま（発送のお知らせで置き直さない）', () => {
+    expect(resolveExisting([], draft, { order: 'r-gone', message: undefined })).toEqual({ kind: 'existing', id: 'r-gone' });
+    const discarded = receipt({ id: 'r-d', status: 'discarded', orderNumber: '250-1', messageId: '<other@example>' });
+    expect(resolveExisting([discarded], draft, none)).toEqual({ kind: 'existing', id: 'r-d' });
+  });
+
+  it('同じメールの印が消したレシートでも、注文番号の印が別のレシートを指していればそちらを返す', () => {
+    expect(resolveExisting([], draft, { order: 'r-other', message: 'r-gone' })).toEqual({ kind: 'existing', id: 'r-other' });
+  });
+
+  it('生きているレシートがあれば、送り直しは同じ id', () => {
+    const live = receipt({ id: 'r-live', messageId: draft.messageId });
+    expect(resolveExisting([live], draft, { order: 'r-live', message: 'r-live' })).toEqual({ kind: 'existing', id: 'r-live' });
   });
 });

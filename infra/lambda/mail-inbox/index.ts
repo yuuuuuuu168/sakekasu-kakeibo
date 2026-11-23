@@ -3,10 +3,10 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { requireEnv } from '../shared/env';
 import { json } from '../shared/http';
-import { parseMailDraft, receiptFromDraft, findExisting } from './draft';
+import { parseMailDraft, receiptFromDraft, resolveExisting } from './draft';
 import { judgeItems } from './judge';
 import { KEY_EXPIRY_WARNING_DAYS, daysLeft, parseKeys, verifyBearer, type InboxKey } from './token';
-import { countCall, createReceipt, findMarkedReceiptId, loadContext } from './store';
+import { countCall, createReceipt, findMarkedReceiptIds, loadContext } from './store';
 
 /*
  * 下書き登録 API（POST /draft-entries）。通販のメールを読んだ Muse が、レシートの下書きを 1 件置く。
@@ -105,11 +105,14 @@ async function accept(
 
   // --- 既存の判定 ---
   const context = await loadContext(sub);
-  const existingId = findExisting(context.receipts, draft)?.id ?? (await findMarkedReceiptId(sub, draft.orderNumber, draft.messageId));
-  if (existingId) {
-    log.id = existingId;
-    return { outcome: '既存', response: json(200, { id: existingId, status: 'draft' }) };
+  const marked = await findMarkedReceiptIds(sub, draft.orderNumber, draft.messageId);
+  const resolution = resolveExisting(context.receipts, draft, marked);
+  if (resolution.kind === 'existing') {
+    log.id = resolution.id;
+    return { outcome: '既存', response: json(200, { id: resolution.id, status: 'draft' }) };
   }
+  // 同じメールから置いて消した下書きの、登録し直し
+  if (resolution.replaces) log.置き直し = resolution.replaces;
 
   // --- 組み立てと保存 ---
   const id = `r-${now.getTime().toString(36)}${randomBytes(3).toString('hex')}`;
@@ -117,7 +120,7 @@ async function accept(
   receipt.items = await judgeItems(receipt.items, receipt.storeName, context.categories, context.rules, sub);
   log.カテゴリ = receipt.items.map((item) => item.categoryId);
 
-  const saved = await createReceipt(sub, receipt);
+  const saved = await createReceipt(sub, receipt, resolution.replaces);
   if (!saved.created) {
     // 同じ注文の別のメールが、ほぼ同時に先に通った
     log.id = saved.existingId;

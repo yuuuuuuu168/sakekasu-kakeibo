@@ -10,7 +10,8 @@ const state = vi.hoisted(() => ({
   secret: '' as string | undefined,
   allowCall: true,
   receipts: [] as Receipt[],
-  marked: undefined as string | undefined,
+  marked: { order: undefined, message: undefined } as { order: string | undefined; message: string | undefined },
+  replaces: [] as (string | undefined)[],
   created: [] as Receipt[],
   race: undefined as string | undefined,
 }));
@@ -27,8 +28,9 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
 vi.mock('../store', () => ({
   countCall: async () => state.allowCall,
   loadContext: async () => ({ receipts: state.receipts, categories: [], rules: [] }),
-  findMarkedReceiptId: async () => state.marked,
-  createReceipt: async (_sub: string, receipt: Receipt) => {
+  findMarkedReceiptIds: async () => state.marked,
+  createReceipt: async (_sub: string, receipt: Receipt, replaces?: string) => {
+    state.replaces.push(replaces);
     if (state.race) return { created: false, existingId: state.race };
     state.created.push(receipt);
     return { created: true };
@@ -48,7 +50,8 @@ beforeEach(() => {
   state.secret = JSON.stringify({ keys: [key] });
   state.allowCall = true;
   state.receipts = [];
-  state.marked = undefined;
+  state.marked = { order: undefined, message: undefined };
+  state.replaces = [];
   state.created = [];
   state.race = undefined;
   vi.spyOn(console, 'info').mockImplementation(() => {});
@@ -97,9 +100,27 @@ describe('POST /draft-entries', () => {
     expect(state.created).toHaveLength(0);
   });
 
-  it('レシートが消えていても、重複の印が残っていれば既存として返す', async () => {
-    state.marked = 'r-gone';
+  it('別のメールで置いた下書きを消していても、注文番号の印が残っていれば既存として返す', async () => {
+    state.marked = { order: 'r-gone', message: undefined };
     expect(bodyOf(await handler(event(draft)))).toEqual({ id: 'r-gone', status: 'draft' });
+    expect(state.created).toHaveLength(0);
+  });
+
+  it('同じメールから置いた下書きを消していれば、登録し直しとして 201 で新しく置き、印を書き換える', async () => {
+    state.marked = { order: 'r-gone', message: 'r-gone' };
+    const result = await handler(event({ ...draft, title: '直した内容' }));
+    expect(result.statusCode).toBe(201);
+    expect(bodyOf(result).id).not.toBe('r-gone');
+    expect(state.created[0]).toMatchObject({ id: bodyOf(result).id, items: [{ name: '直した内容' }] });
+    expect(state.replaces).toEqual(['r-gone']);
+  });
+
+  it('同じメールの下書きが残っていれば、送り直しは 200 で同じ id', async () => {
+    state.marked = { order: 'r-live', message: 'r-live' };
+    state.receipts = [{ id: 'r-live', storeName: 'Amazon', date: '2026-11-22', total: 1398, items: [], status: 'pending' }];
+    const result = await handler(event(draft));
+    expect(result.statusCode).toBe(200);
+    expect(bodyOf(result).id).toBe('r-live');
   });
 
   it('同じ注文の別のメールが先に通ったら、そちらの id を 200 で返す', async () => {
