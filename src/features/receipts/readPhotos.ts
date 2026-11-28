@@ -77,7 +77,7 @@ export async function readPhotos(
       currency: result.currency ?? 'JPY',
       ...(result.currency === 'USD' ? { exchangeRate: latestUsdRate(context.receipts) } : {}),
       ...imageFields(keys),
-      paidWith: result.paymentMethod ?? 'cash',
+      paidWith: result.paymentMethod ?? 'credit',
       ...(result.orderNumber ? { orderNumber: result.orderNumber } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
     };

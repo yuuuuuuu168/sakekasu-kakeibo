@@ -12,9 +12,11 @@ export const SOURCE_LABELS: Record<SourceKind, string> = {
 
 /**
  * レシートからそのまま明細を作るときに選べる支払い方法。並びは画面の選択肢の順。
- * 「不明」は古いレシートで払い方を覚えていないとき用。支出としては数える。
+ * クレジットカードを先頭にしているのは、初期値（draft.ts の emptyDraft など）に合わせて
+ * 選択時に先頭から始まるようにするため。「不明」は古いレシートで払い方を覚えていないとき用。
+ * 支出としては数える。
  */
-export const RECEIPT_PAYMENT_METHODS: readonly SourceKind[] = ['cash', 'paypay', 'credit', 'suica', 'unknown'];
+export const RECEIPT_PAYMENT_METHODS: readonly SourceKind[] = ['credit', 'paypay', 'suica', 'cash', 'unknown'];
 
 /** OCR に聞く支払い方法。印字から決められるものだけで、「不明」は人が選ぶ */
 const READABLE_PAYMENT_METHODS: readonly SourceKind[] = ['cash', 'paypay', 'credit', 'suica'];

@@ -36,19 +36,19 @@ describe('ReceiptsPage', () => {
     fireEvent.change(screen.getByLabelText('店名'), { target: { value: 'タリーズコーヒー' } });
     fireEvent.change(screen.getByLabelText('合計'), { target: { value: '820' } });
 
-    // レシートに支払いの印字が無ければ現金から始まる
-    const method = screen.getByLabelText('支払い方法');
+    // レシートに支払いの印字が無ければクレジットカードから始まる。利用明細を取り込める支払い方法なので、
+    // 注意書きがラベルの中に続き、ラベルの文字列は完全一致しなくなる
+    const method = screen.getByLabelText(/^支払い方法/);
     expect([...within(method).getAllByRole('option')].map((option) => option.textContent)).toEqual([
-      '現金',
-      'PayPay',
       'クレジットカード',
+      'PayPay',
       'Suica',
+      '現金',
       '不明',
     ]);
-    expect(screen.getByRole('button', { name: '現金払いとして登録' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'クレジットカード払いとして登録' })).toBeInTheDocument();
 
-    // 利用明細を取り込める支払い方法では、二重に数えないよう注意を出す
-    fireEvent.change(method, { target: { value: 'credit' } });
+    // 利用明細を取り込める支払い方法（デフォルトのクレジットカードもそう）では、二重に数えないよう注意を出す
     expect(screen.getByText(/両方だと二重に数えます/)).toBeInTheDocument();
 
     fireEvent.change(method, { target: { value: 'unknown' } });
@@ -86,12 +86,12 @@ describe('ReceiptsPage', () => {
 
     // レートを消すと円に直せないので、明細にはできない
     fireEvent.change(screen.getByLabelText(/^1 ドルの円/), { target: { value: '' } });
-    expect(screen.getByRole('button', { name: '現金払いとして登録' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'クレジットカード払いとして登録' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/^1 ドルの円/), { target: { value: '155' } });
-    fireEvent.click(screen.getByRole('button', { name: '現金払いとして登録' }));
+    fireEvent.click(screen.getByRole('button', { name: 'クレジットカード払いとして登録' }));
 
-    expect(await screen.findByText('現金払いとして明細に足しました。')).toBeInTheDocument();
+    expect(await screen.findByText('クレジットカード払いとして明細に足しました。')).toBeInTheDocument();
     // 保存済みの一覧にはドルのまま出す
     expect(screen.getByText('$12.34')).toBeInTheDocument();
   });

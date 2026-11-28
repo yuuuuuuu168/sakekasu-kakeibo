@@ -139,7 +139,7 @@ describe('レシートの組み立て', () => {
       messageId: '<m@x>',
       storeName: 'Amazon.co.jp',
     });
-    expect(draftFromReceipt({ ...mail, source: undefined }).paidWith).toBe('cash');
+    expect(draftFromReceipt({ ...mail, source: undefined }).paidWith).toBe('credit');
   });
 
   it('保存済みのレシートは、そのまま下書きに戻せる', () => {

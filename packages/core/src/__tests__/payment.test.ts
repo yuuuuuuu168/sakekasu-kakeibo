@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { RECEIPT_PAYMENT_METHODS, SOURCE_LABELS, hasImportableStatement, toPaymentMethod } from '../payment';
 
 describe('支払い方法', () => {
-  it('レシートから選べるのは現金・PayPay・クレジットカード・Suica・不明', () => {
+  it('レシートから選べるのはクレジットカード・PayPay・Suica・現金・不明', () => {
     expect(RECEIPT_PAYMENT_METHODS.map((method) => SOURCE_LABELS[method])).toEqual([
-      '現金',
-      'PayPay',
       'クレジットカード',
+      'PayPay',
       'Suica',
+      '現金',
       '不明',
     ]);
   });
@@ -23,6 +23,6 @@ describe('支払い方法', () => {
   });
 
   it('利用明細を取り込めるのはカードと PayPay だけ', () => {
-    expect(RECEIPT_PAYMENT_METHODS.filter(hasImportableStatement)).toEqual(['paypay', 'credit']);
+    expect(RECEIPT_PAYMENT_METHODS.filter(hasImportableStatement)).toEqual(['credit', 'paypay']);
   });
 });
