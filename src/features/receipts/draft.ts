@@ -33,7 +33,7 @@ export type Draft = {
   imageKey?: string;
   /** 分けて撮ったときの全部の写真。1 枚なら持たない */
   imageKeys?: string[];
-  /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければ現金 */
+  /** 明細を作って登録するときの支払い方法。OCR が支払いの印字から読めたらそれ、無ければクレジットカード */
   paidWith: SourceKind;
   /** ネット通販の注文番号。OCR が読めたもの、または人が入れたもの。空なら持たない */
   orderNumber?: string;
@@ -64,7 +64,7 @@ export function newDraftId(): string {
 }
 
 export function emptyDraft(): Draft {
-  return { id: newDraftId(), storeName: '', date: todayIso(), total: 0, items: [], currency: 'JPY', paidWith: 'cash' };
+  return { id: newDraftId(), storeName: '', date: todayIso(), total: 0, items: [], currency: 'JPY', paidWith: 'credit' };
 }
 
 /** 保存済みのレシートを直すときの下書き。読み取り結果と同じ欄に載せる */
@@ -79,8 +79,8 @@ export function draftFromReceipt(receipt: Receipt): Draft {
     ...(receipt.exchangeRate !== undefined ? { exchangeRate: receipt.exchangeRate } : {}),
     ...(receipt.imageKey ? { imageKey: receipt.imageKey } : {}),
     ...(receipt.imageKeys ? { imageKeys: receipt.imageKeys } : {}),
-    // メールから来たもの（Muse）は通販のカード払いが前提。現金のまま登録すると、カードの明細と二重に数える
-    paidWith: receipt.paidWith ?? (receipt.source === 'mail' ? 'credit' : 'cash'),
+    // 払い方が無ければクレジットカードから始める。メール（Muse）由来はもともとカード払いが前提
+    paidWith: receipt.paidWith ?? 'credit',
     ...(receipt.orderNumber ? { orderNumber: receipt.orderNumber } : {}),
   };
 }

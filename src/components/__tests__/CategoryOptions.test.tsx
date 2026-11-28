@@ -35,10 +35,10 @@ describe('CategoryOptions', () => {
     expect([...select.options].some((option) => option.value === 'food')).toBe(true);
   });
 
-  it('小カテゴリの無い値引き・振替・未分類は括らずに出す', () => {
+  it('小カテゴリの無い値引き・振替・未分類は括らずに出す。未分類は選択時に下から始まらないよう先頭に出す', () => {
     const select = renderSelect();
     const loose = [...select.children].filter((child) => child.tagName === 'OPTION') as HTMLOptionElement[];
-    expect(loose.map((option) => option.value)).toEqual([DISCOUNT_ID, TRANSFER_ID, UNCATEGORIZED_ID]);
+    expect(loose.map((option) => option.value)).toEqual([UNCATEGORIZED_ID, DISCOUNT_ID, TRANSFER_ID]);
   });
 
   it('外したカテゴリは出さない', () => {
